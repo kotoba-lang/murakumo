@@ -1,0 +1,224 @@
+(ns cron-work-binding (:export [main]))
+(defn- s2-m32 [x :i64] :i64 (bit-and x 4294967295))
+(defn- s2-rotr [x :i64 n :i64] :i64
+  (s2-m32 (bit-or (u64-shift-right x n) (i64-shift-left x (- 32 n)))))
+(defn- s2-k [] :vector-i64
+  [1116352408 1899447441 3049323471 3921009573 961987163 1508970993 2453635748 2870763221
+   3624381080 310598401 607225278 1426881987 1925078388 2162078206 2614888103 3248222580
+   3835390401 4022224774 264347078 604807628 770255983 1249150122 1555081692 1996064986
+   2554220882 2821834349 2952996808 3210313671 3336571891 3584528711 113926993 338241895
+   666307205 773529912 1294757372 1396182291 1695183700 1986661051 2177026350 2456956037
+   2730485921 2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344
+   430227734 506948616 659060556 883997877 958139571 1322822218 1537002063 1747873779
+   1955562222 2024104815 2227730452 2361852424 2428436474 2756734187 3204031479 3329325298])
+(defn- s2-iv [words :i64] :vector-i64
+  (if (= words 7)
+    [3238371032 914150663 812702999 4144912697 4290775857 1750603025 1694076839 3204075428]
+    [1779033703 3144134277 1013904242 2773480762 1359893119 2600822924 528734635 1541459225]))
+(defn- s2-total [n :i64] :i64 (* (quot (+ n 72) 64) 64))
+(defn- s2-byte [data :vector-i64 i :i64 total :i64] :i64
+  (let [n (vector-count data)]
+    (cond (< i n) (vector-at data i)
+          (= i n) 128
+          (< i (- total 8)) 0
+          :else (bit-and (u64-shift-right (* n 8) (* (- (- total 1) i) 8)) 255))))
+(defn- s2-work [state :vector-i64] :vector-i64
+  (loop [i 0 out (vector-alloc 80)]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (vector-at state i))))))
+(defn- s2-load [w :vector-i64 data :vector-i64 start :i64 total :i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 16) out
+      (let [p (+ start (* i 4))
+            x (bit-or (bit-or (i64-shift-left (s2-byte data p total) 24)
+                              (i64-shift-left (s2-byte data (+ p 1) total) 16))
+                      (bit-or (i64-shift-left (s2-byte data (+ p 2) total) 8)
+                              (s2-byte data (+ p 3) total)))]
+        (recur (+ i 1) (vector-assoc! out (+ 16 i) x))))))
+(defn- s2-expand [w :vector-i64] :vector-i64
+  (loop [t 16 out w]
+    (if (= t 64) out
+      (let [w15 (vector-at out (+ 16 (- t 15)))
+            w2 (vector-at out (+ 16 (- t 2)))
+            s0 (bit-xor (bit-xor (s2-rotr w15 7) (s2-rotr w15 18)) (u64-shift-right w15 3))
+            s1 (bit-xor (bit-xor (s2-rotr w2 17) (s2-rotr w2 19)) (u64-shift-right w2 10))
+            x (s2-m32 (+ (+ (vector-at out (+ 16 (- t 16))) s0) (+ (vector-at out (+ 16 (- t 7))) s1)))]
+        (recur (+ t 1) (vector-assoc! out (+ 16 t) x))))))
+(defn- s2-begin [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out (+ 8 i) (vector-at out i))))))
+(defn- s2-rounds [w :vector-i64 k :vector-i64] :vector-i64
+  (loop [t 0 out w]
+    (if (= t 64) out
+      (let [a (vector-at out 8) b (vector-at out 9) c (vector-at out 10) d (vector-at out 11)
+            e (vector-at out 12) f (vector-at out 13) g (vector-at out 14) h (vector-at out 15)
+            big1 (bit-xor (bit-xor (s2-rotr e 6) (s2-rotr e 11)) (s2-rotr e 25))
+            ch (bit-xor (bit-and e f) (bit-and (s2-m32 (bit-not e)) g))
+            t1 (s2-m32 (+ (+ h big1) (+ ch (+ (vector-at k t) (vector-at out (+ 16 t))))))
+            big0 (bit-xor (bit-xor (s2-rotr a 2) (s2-rotr a 13)) (s2-rotr a 22))
+            maj (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c))
+            t2 (s2-m32 (+ big0 maj))
+            next (-> out (vector-assoc! 15 g) (vector-assoc! 14 f) (vector-assoc! 13 e)
+                         (vector-assoc! 12 (s2-m32 (+ d t1))) (vector-assoc! 11 c) (vector-assoc! 10 b)
+                         (vector-assoc! 9 a) (vector-assoc! 8 (s2-m32 (+ t1 t2))))]
+        (recur (+ t 1) next)))))
+(defn- s2-add [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (s2-m32 (+ (vector-at out i) (vector-at out (+ 8 i)))))))))
+(defn- s2-out [w :vector-i64 words :i64] :vector-i64
+  (loop [i 0 out (vector-alloc (* words 4))]
+    (if (= i (* words 4)) out
+      (recur (+ i 1) (vector-assoc! out i (bit-and (u64-shift-right (vector-at w (quot i 4)) (* (- 3 (rem i 4)) 8)) 255))))))
+(defn- s2-digest [words :i64 data :vector-i64] :vector-i64
+  (let [total (s2-total (vector-count data)) k (s2-k)]
+    (loop [start 0 w (s2-work (s2-iv words))]
+      (if (>= start total) (s2-out w words)
+        (recur (+ start 64) (s2-add (s2-rounds (s2-begin (s2-expand (s2-load w data start total))) k)))))))
+(defn sha256 [data :vector-i64] :vector-i64 (s2-digest 8 data))
+(defn- s2-nibble [v :i64] :string
+  (case v 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7"
+          8 "8" 9 "9" 10 "a" 11 "b" 12 "c" 13 "d" 14 "e" "f"))
+(defn hex [bytes :vector-i64] :string
+  (loop [i 0 out ""]
+    (if (= i (vector-count bytes)) out
+      (let [b (vector-at bytes i)]
+        (recur (+ i 1) (string-concat out (string-concat (s2-nibble (quot b 16)) (s2-nibble (rem b 16)))))))))
+(defn sha256-hex [data :vector-i64] :string (hex (sha256 data)))
+(defn- jr-at [b :vector-i64 i :i64] :i64 (if (and (>= i 0) (< i (vector-count b))) (vector-at b i) -1))
+(defn- jr-ws? [c :i64] :bool (or (= c 32) (= c 9) (= c 10) (= c 13)))
+(defn- jr-skip [b :vector-i64 i :i64] :i64 (loop [j i] (if (jr-ws? (jr-at b j)) (recur (+ j 1)) j)))
+(defn- jr-digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+(defn- jr-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- jr-hex [c :i64] :i64
+  (cond (jr-digit? c) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        (and (>= c 65) (<= c 70)) (- c 55)
+        :else -1))
+(defn- jr-hex4 [b :vector-i64 k :i64] :i64
+  (let [a (jr-hex (jr-at b k)) c (jr-hex (jr-at b (+ k 1))) d (jr-hex (jr-at b (+ k 2))) e (jr-hex (jr-at b (+ k 3)))]
+    (if (or (< a 0) (< c 0) (< d 0) (< e 0)) -1 (+ (* a 4096) (+ (* c 256) (+ (* d 16) e))))))
+(defn- jr-skip-string [b :vector-i64 i :i64] :i64
+  (loop [j (+ i 1)] (let [c (vector-at b j)] (cond (= c 34) (+ j 1) (= c 92) (recur (+ j 2)) :else (recur (+ j 1))))))
+(defn- jr-skip-value [b :vector-i64 i :i64] :i64
+  (let [c (vector-at b i)]
+    (cond (= c 34) (jr-skip-string b i)
+          (or (= c 123) (= c 91))
+          (loop [j (+ i 1) d 1]
+            (let [x (vector-at b j)]
+              (cond (= x 34) (recur (jr-skip-string b j) d)
+                    (or (= x 123) (= x 91)) (recur (+ j 1) (+ d 1))
+                    (or (= x 125) (= x 93)) (if (= d 1) (+ j 1) (recur (+ j 1) (- d 1)))
+                    :else (recur (+ j 1) d))))
+          :else (loop [j i] (let [x (jr-at b j)] (if (or (< x 0) (= x 44) (= x 125) (= x 93) (jr-ws? x)) j (recur (+ j 1))))))))
+(defn json-kind [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (cond (= c 123) 1 (= c 91) 2 (= c 34) 3 (or (= c 45) (jr-digit? c)) 4
+          (= c 116) 5 (= c 102) 6 (= c 110) 7 :else 0)))
+(defn json-member [b :vector-i64 obj :i64 key :string] :i64
+  (if (not (= (jr-at b obj) 123)) -1
+    (let [k (jr-bytes key)]
+      (loop [j (jr-skip b (+ obj 1))]
+        (if (not (= (jr-at b j) 34)) -1
+          (let [e (jr-skip-string b j)
+                v (jr-skip b (+ (jr-skip b e) 1))
+                same (and (= (- (- e j) 2) (vector-count k))
+                          (loop [m 0] (if (= m (vector-count k)) true (if (= (vector-at b (+ (+ j 1) m)) (vector-at k m)) (recur (+ m 1)) false))))]
+            (if same v
+              (let [n (jr-skip b (jr-skip-value b v))]
+                (if (= (jr-at b n) 44) (recur (jr-skip b (+ n 1))) -1)))))))))
+(defn- jr-unescape [d :i64] :i64
+  (cond (= d 98) 8 (= d 102) 12 (= d 110) 10 (= d 114) 13 (= d 116) 9 :else d))
+(defn- jr-put-utf8 [out :vector-i64 n :i64 cp :i64] :i64
+  (cond (< cp 128) (let [z (vector-assoc! out n cp)] (+ n 1))
+        (< cp 2048) (let [z (vector-assoc! out n (+ 192 (quot cp 64))) y (vector-assoc! out (+ n 1) (+ 128 (rem cp 64)))] (+ n 2))
+        (< cp 65536) (let [z (vector-assoc! out n (+ 224 (quot cp 4096))) y (vector-assoc! out (+ n 1) (+ 128 (rem (quot cp 64) 64)))
+                           x (vector-assoc! out (+ n 2) (+ 128 (rem cp 64)))] (+ n 3))
+        :else (let [z (vector-assoc! out n (+ 240 (quot cp 262144))) y (vector-assoc! out (+ n 1) (+ 128 (rem (quot cp 4096) 64)))
+                    x (vector-assoc! out (+ n 2) (+ 128 (rem (quot cp 64) 64))) w (vector-assoc! out (+ n 3) (+ 128 (rem cp 64)))] (+ n 4))))
+(defn json-string-bytes [b :vector-i64 i :i64] :vector-i64
+  (let [e (jr-skip-string b i) out (vector-alloc (- e i))
+        n (loop [j (+ i 1) n 0]
+            (if (>= j (- e 1)) n
+              (let [c (vector-at b j)]
+                (if (= c 92)
+                  (let [d (vector-at b (+ j 1))]
+                    (if (= d 117)
+                      (let [u (jr-hex4 b (+ j 2))
+                            pair (and (>= u 55296) (<= u 56319))
+                            cp (if pair (+ 65536 (+ (* (- u 55296) 1024) (- (jr-hex4 b (+ j 8)) 56320))) u)]
+                        (recur (+ j (if pair 12 6)) (jr-put-utf8 out n cp)))
+                      (let [z (vector-assoc! out n (jr-unescape d))] (recur (+ j 2) (+ n 1)))))
+                  (let [z (vector-assoc! out n c)] (recur (+ j 1) (+ n 1)))))))]
+    (loop [k 0 r (vector-alloc n)] (if (= k n) r (recur (+ k 1) (vector-assoc! r k (vector-at out k)))))))
+(defn json-string [b :vector-i64 i :i64] :string (string-from-utf8 (bytes-from-vector-i64 (json-string-bytes b i))))
+(defn hex-value [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        :else -1))
+(defn hex-from? [s :string i :i64 n :i64] :bool
+  (cond (>= i n) true
+        (< (hex-value (string-code-point-at s i)) 0) false
+        :else (recur s (inc i) n)))
+(defn same-from? [s :string p :string i :i64] :bool
+  (cond (>= i (string-length p)) true
+        (= (string-code-point-at s i) (string-code-point-at p i)) (recur s p (inc i))
+        :else false))
+(defn digest-problem [d :string] :string
+  (let [n (string-length d)]
+    (cond (and (>= n 7) (same-from? d "sha256:" 0))
+            (if (= n 71) (if (hex-from? d 7 71) "oci/ok" "oci/bad-digest") "oci/bad-digest")
+          (> (string-index-of d ":") 0) "itonami/unsupported-digest"
+          :else "oci/bad-digest")))
+(defn b32-char [v :i64] :string (string-substring "abcdefghijklmnopqrstuvwxyz234567" v (inc v)))
+(defn cid-byte [d :string codec :i64 i :i64] :i64
+  (cond (= i 0) 1
+        (= i 1) codec
+        (= i 2) 18
+        (= i 3) 32
+        :else (let [k (+ 7 (* 2 (- i 4)))]
+                (+ (* 16 (hex-value (string-code-point-at d k))) (hex-value (string-code-point-at d (inc k)))))))
+(defn b32-from [d :string codec :i64 i :i64 acc :i64 nbits :i64 out :string] :string
+  (cond (>= nbits 5)
+          (let [m (- nbits 5) v (bit-and (u64-shift-right acc m) 31)]
+            (recur d codec i (bit-and acc (dec (i64-shift-left 1 m))) m (string-concat out (b32-char v))))
+        (< i 36)
+          (recur d codec (inc i) (bit-or (i64-shift-left acc 8) (cid-byte d codec i)) (+ nbits 8) out)
+        (> nbits 0) (string-concat out (b32-char (bit-and (i64-shift-left acc (- 5 nbits)) 31)))
+        :else out))
+(defn digest-cid [d :string codec :i64] :string
+  (cond (not (= (digest-problem d) "oci/ok")) ""
+        (= codec 85) (b32-from d codec 0 0 0 "b")
+        (= codec 113) (b32-from d codec 0 0 0 "b")
+        :else ""))
+(defn cp [s :string i :i64] :i64 (string-code-point-at s i))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-cid [b :vector-i64] :string (digest-cid (str "sha256:" (sha256-hex b)) 85))
+(defn- cp-str [b :vector-i64 o :i64 k :string] :string
+  (let [v (json-member b o k)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+(defn- gt-str [b :vector-i64 key :string] :string
+  (let [i (json-member b 0 key)]
+    (if (and (>= i 0) (= (json-kind b i) 3)) (json-string b i) "")))
+(defn- br-work-bound? [cfg :vector-i64 runtime :vector-i64 definition :vector-i64 source :vector-i64] :bool
+  ;; Only this resident path reads and verifies the pinned work-order bytes
+  ;; before including them in the model request. The accountability path
+  ;; does neither, even if a caller supplies an unrelated workDigest field.
+  (and true
+       true
+       (= (gt-str definition "profile") (cp-str cfg 0 "profile"))
+       (= (gt-str definition "policy") (cp-str cfg 0 "policy"))
+       (= (gt-str definition "rail") "murakumo")
+       (> (vector-count source) 0) (<= (vector-count source) 8192)
+       (= (cp-cid source) (gt-str definition "input"))
+       (= (str "sha256:" (sha256-hex source)) (cp-str runtime 0 "workDigest"))))
+
+(defn main [] :i64
+ (let [source (cp-bytes "source work") digest (str "sha256:" (sha256-hex source)) cid (cp-cid source)
+       cfg (cp-bytes "{\"policy\":\"policy\",\"profile\":\"awai-growth-steward\"}")
+       runtime (cp-bytes (str "{\"profile\":\"awai-growth-steward\",\"workDigest\":\"" digest "\"}"))
+       definition (cp-bytes (str "{\"input\":\"" cid "\",\"policy\":\"policy\",\"profile\":\"awai-growth-steward\",\"rail\":\"murakumo\"}"))
+       badcfg (cp-bytes "{\"policy\":\"policy\",\"profile\":\"accountability-steward\"}")
+       badruntime (cp-bytes (str "{\"profile\":\"accountability-steward\",\"workDigest\":\"" digest "\"}"))
+       baddef (cp-bytes (str "{\"input\":\"" cid "\",\"policy\":\"policy\",\"profile\":\"accountability-steward\",\"rail\":\"murakumo\"}"))]
+  (if (and (br-work-bound? cfg runtime definition source)
+           (not (br-work-bound? badcfg badruntime baddef source))
+           (not (br-work-bound? cfg badruntime definition source))
+           (not (br-work-bound? cfg runtime definition (cp-bytes "different work")))) 0 1)))
