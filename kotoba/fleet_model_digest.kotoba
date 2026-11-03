@@ -10,7 +10,9 @@
   (let [n (string-length meta)]
     (and (>= n 2) (= (string-substring meta (- n 2) n) " 0"))))
 (defn- md-decimal [s :string] :i64
-  (let [n (string-length s) limit 68719476736]
+  ;; The current diagnostic Darwin E provider admits starting offsets below
+  ;; 16 GiB. A larger file needs a separately qualified provider profile.
+  (let [n (string-length s) limit 17179869184]
     (if (or (= n 0) (> n 11) (and (> n 1) (= (string-substring s 0 1) "0"))) -1
       (loop [i 0 value 0]
         (if (= i n) value
@@ -74,8 +76,14 @@
   (let [path (md-arg 0) wanted (md-arg 1) size (md-decimal (md-arg 2))
         valid (and (md-path? path) (= (digest-problem wanted) "oci/ok") (>= size 0) (= (md-arg 3) ""))]
     (if (not valid) (let [x (md-out "model/input-refused")] 2)
-      (let [meta (typed-cap-call 35 :string :string (ol-frame "F" path ""))
-            measured (ol-size meta 68719476736)]
+      ;; O reports the no-follow file type; the diagnostic Darwin F provider
+      ;; traps on directories rather than returning metadata. This preflight
+      ;; is meaningful only under the host's exclusive-path contract.
+      (let [entry (typed-cap-call 35 :string :string (ol-frame "O" path ""))
+            entry-size (ol-size entry 17179869184)]
+        (if (or (not (md-regular? entry)) (not (= entry-size size))) (let [x (md-out "model/size-unknown")] 1)
+        (let [meta (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+              measured (ol-size meta 17179869184)]
         (if (or (not (md-regular? meta)) (not (= measured size))) (let [x (md-out "model/size-unknown")] 1)
           (let [work (s2-work (s2-iv 8)) ok (md-stream path size work)
                 after (typed-cap-call 35 :string :string (ol-frame "F" path ""))
@@ -85,4 +93,4 @@
                              (not (= digest wanted)) "model/digest-mismatch"
                              :else "model/digest-observed")
                 x (md-out result)]
-            (if (= result "model/digest-observed") 0 1)))))))
+            (if (= result "model/digest-observed") 0 1)))))))))

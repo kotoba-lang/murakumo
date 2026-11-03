@@ -1,5 +1,8 @@
 # Streaming model digest candidate
 
+This is the initial diagnostic; the later [metadata preflight](../awai151-model-metadata-20261103/README.md)
+supersedes its 64 GiB size limit with 16 GiB and addresses the directory trap.
+
 The Bonsai MTP main weight file previously observed on three minis is about
 8.6 GB, beyond the existing 4 MiB OCI cell-layer whole-read profile. The new
 `fleet_model_digest.kotoba` is a separate bounded streaming SHA-256 observer:
