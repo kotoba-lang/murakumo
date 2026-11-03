@@ -288,8 +288,11 @@
   ;;
   ;; Thresholds are read from this namespace rather than passed in, so two
   ;; callers cannot compare the same two workloads under different policies.
+  ;; challenger-demand must come from demand-score for the same queue sample:
+  ;; its nonnegative weighted-completions term cannot make it smaller than
+  ;; challenger-queued. Inconsistent samples are not eviction authority.
   (cond (or (< holder-demand 0) (< challenger-demand 0) (< challenger-queued 0)
-            (< idle-count 0) (< loss-streak 0)) 5
+            (< challenger-demand challenger-queued) (< idle-count 0) (< loss-streak 0)) 5
         (< challenger-demand 1) (if (idle? holder-demand idle-count (idle-samples-default)) 1 3)
         (starved? challenger-queued loss-streak) 4
         (idle? holder-demand idle-count (idle-samples-default)) 1
