@@ -1,0 +1,26 @@
+{
+  "kind": "awai.macos-cli-parent-death-observation/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "host": "local Apple Silicon Mac, not a remote Mac mini",
+  "cli": {
+    "sourceCommit": "ebdd3f59c5cdfe8d5862816886fe47c702372bdf",
+    "sha256": "6e7dc223795919581cdfc9128344948dfaddec58e9573bef9632923538f33a2a",
+    "descriptorCompilerSha256": "920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6",
+    "descriptorPackagerSha256": "e95284408f091c8979ef74ece57116a4df2250e61e42074da5dc95ca30264142"
+  },
+  "fixture": {
+    "source": "awai152-macos-parent-death-fixture.kotoba",
+    "sourceSha256": "e2e573f5a2c98413abcf9b4d8274b9e4c90a11784c252993dda80dc77b6d0928",
+    "observer": "awai152-macos-parent-death-observer.py",
+    "observerSha256": "da4cc278c85470ea221b79a6f4b4ba598c6b218791e18b3be3282fb1f0a2afeb",
+    "observerPaths": "Task-specific local CLI and temporary source paths; adapt paths before rerunning."
+  },
+  "observed": {
+    "workload": "Amu CLI run of a bounded test guest with a long arithmetic loop",
+    "cliExit": -9,
+    "guestAliveAfterCliSigkill": true,
+    "sampleDelaySeconds": 0.2,
+    "cleanup": "Observer killed the identified test guest; a subsequent process listing showed no matching test guest."
+  },
+  "scope": "The observer identified the CLI's direct child with argv containing amu-program, SIGKILLed the CLI, then checked that same PID was non-zombie and still had that argv after 0.2 seconds. Earlier short-loop and argv-path attempts did not observe the guest; a separate unobserved run reached the CLI's 5-second timeout. This single local Mac observation does not test a lock, actual workload, grandchild, latest runtime, remote Mac mini, or governor. It does not establish how long the guest would otherwise survive. Python was used only as a one-off test observer."
+}

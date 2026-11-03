@@ -1,6 +1,6 @@
 ;; Append the public git_checkpoint_test fixtures before this native gate.
 (ns murakumo.profile-resident-test
-  (:export [test-profile-resident]))
+  (:export [test-profile-resident test-profile-archive-ack]))
 
 (defn- rtt-cfg [did :string] :vector-i64
   (cp-bytes (str "{\"authorA\":\"" did "\",\"authorB\":\"" did "\",\"environment\":\"" (cpt-cid)
@@ -25,3 +25,17 @@
                 (= (rt-post-problem cfg head lease lease 200001) "resident/retention-expired-proposal-retained")) 32 0)
        (if (and (= (rt-post-problem cfg head lease other 100000) "resident/lease-lost")
                 (= (rt-post-problem cfg head lease (vector-alloc 0) 100000) "resident/lease-lost")) 64 0))))
+
+;; Supply a fresh path in a private native FS scope. This tests the real file
+;; boundary; callers own the acknowledgement directory and its writer.
+(defn test-profile-archive-ack [path :string] :bool
+  (let [root (cpt-cid) tree "0123456789abcdef0123456789abcdef01234567" now (rt-now)
+        prefix (str "{\"checkpoint\":\"" root "\",\"kind\":\"itonami.github-archive-ack/1\",\"tree\":\"" tree "\",\"until\":")
+        good (cp-bytes (str prefix (+ now 600000) "}"))]
+    (and (rt-archive-ack? "" root) (not (rt-archive-ack? path root))
+         (cp-write path good) (rt-archive-ack? path root)
+         (not (rt-archive-ack? path "bafkreidifferent"))
+         (cp-write path (cp-bytes (str prefix now "}"))) (not (rt-archive-ack? path root))
+         (cp-write path (cp-bytes (str prefix (+ now 3600000) "}"))) (not (rt-archive-ack? path root))
+         (cp-write path (cp-bytes (str prefix (+ now 600000) ",\"untrusted\":1}")))
+         (not (rt-archive-ack? path root)))))
