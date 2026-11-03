@@ -147,6 +147,35 @@
                :else false)
          (= (cp-fs "M" (cp-parent-dir path) "") "1"))))
 
+;; Recover a fully written but unpublished state only when the exact request,
+;; durable dispatch marker, finished response, saved output and candidate
+;; state all agree. The caller holds the private task's single-writer lock.
+;; Never dispatch again here. Unknown filesystem or sync outcomes remain for
+;; host reconciliation and must not be treated as a completed turn.
+(defn- pr-reconcile-pending [repo :string runtime :vector-i64 next :i64 task :string state :vector-i64
+                            body :vector-i64 unit :string request :string marker :string response :string] :string
+  (let [tmp (str repo "/state.json.tmp") outdir (str repo "/outputs")
+        output (str outdir "/" next ".json") statepath (str repo "/state.json")
+        ready (and (= (pr-unit-state unit) "exited")
+                   (= (cp-fs "D" tmp "") "1") (= (cp-fs "D" request "") "1")
+                   (= (cp-fs "D" marker "") "1") (= (cp-fs "D" response "") "1")
+                   (= (cp-fs "D" output "") "1")
+                   (= (cp-cid (cp-read request)) (cp-cid body))
+                   (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n"))]
+    (if (not ready) "profile/state-publication-unknown"
+      (let [raw (cp-read response) completed (and (not (= (pr-answer raw) ""))
+                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime raw)))
+            answer (if completed (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw) (vector-alloc 0))
+            cid (cp-cid answer) expected (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
+            valid (and completed (pr-replicable? answer) (= (cp-cid (cp-read output)) cid)
+                       (= (cp-cid (cp-read tmp)) (cp-cid expected))
+                       (= (cp-cid (cp-read statepath)) (cp-cid state)))
+            durable (and valid (= (cp-fs "M" output "") "1") (= (cp-fs "M" outdir "") "1")
+                         (= (cp-fs "M" tmp "") "1") (= (cp-fs "M" repo "") "1"))
+            renamed (and durable (= (cp-fs "L" tmp statepath) "1"))
+            synced (and renamed (= (cp-fs "M" repo "") "1"))]
+        (if synced (str "profile/step-completed " next " " cid) "profile/state-publication-unknown")))))
+
 (defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
     (let [state (pr-unit-code unit)]
@@ -209,10 +238,6 @@
           (not (or (pr-runtime? runtime meta role) (pr-growth-runtime? runtime meta role work context))) "profile/runtime-refused"
           (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
-          ;; An interrupted prior publication leaves a durable candidate whose
-          ;; outcome is unknown. Never dispatch inference or overwrite it on a
-          ;; retry; the private host must reconcile it under the same lock.
-          (not (cp-absent? (str repo "/state.json.tmp"))) "profile/state-publication-unknown"
           :else
           (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
                 prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
@@ -247,16 +272,21 @@
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
                     request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
+                    pending-status (cp-fs "D" (str repo "/state.json.tmp") "")
                     known (and (or (= request-status "0") (= request-status "1"))
                                (or (= marker-status "0") (= marker-status "1"))
                                (or (= response-status "0") (= response-status "1")))
                     present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
-                    decision (if known (pr-run-decision (pr-unit-state unit) present matches (= marker-status "1") (= response-status "1")) "profile/submission-unknown")
+                    decision (if (and known (= pending-status "0"))
+                               (pr-run-decision (pr-unit-state unit) present matches (= marker-status "1") (= response-status "1")) "profile/submission-unknown")
                     submitted (cond (= decision "profile/reuse-unit") true
                                     (= decision "profile/new-unit")
                                     (and (pr-prepare-submit request marker body-bytes)
                                          (pr-submit unit request response seconds runtime))
                                     :else false)]
+                (if (= pending-status "1")
+                  (pr-reconcile-pending repo runtime next task state body-bytes unit request marker response)
+                (if (not (= pending-status "0")) "profile/state-publication-unknown"
                 (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
                   (let [raw (cp-read response)
                         answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
@@ -271,7 +301,7 @@
                         rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs "M" repo "") "0")]
                     (if (not usable) "profile/response-not-replicable"
-                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))
+                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
   (if (= (cp-str runtime 0 "profile") "awai-growth-steward")
