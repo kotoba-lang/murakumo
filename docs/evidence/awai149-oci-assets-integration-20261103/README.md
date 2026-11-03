@@ -1,5 +1,8 @@
 # OCI model verification and assets staging
 
+This records the assets-only integration. The later [full staging candidate](../awai149-oci-full-stage-20261103/README.md)
+also copies and hashes the base and MTP weights in the same stage.
+
 `model-artifact-stage-main` combines the experimental model OCI reader and
 restricted USTAR staging. The host pins the manifest and all three layer
 digests/sizes and provides a fresh private stage outside the OCI layout. The
