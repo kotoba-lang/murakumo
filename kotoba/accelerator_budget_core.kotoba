@@ -49,11 +49,10 @@
 ;;    unreadable case is decided, so no later argument can disagree with it.
 ;;
 ;; 2. **Two classes, asymmetric.** A resident is a serving head and is not
-;;    evictable, so opportunistic claims do not stand in its way. An
-;;    opportunistic claim is batch work and must fit in what is left after
-;;    everything. A third class is deliberately impossible (`class-known?`
-;;    refuses it): each added priority turns "who wins" back into a runtime
-;;    accident, which is the state this replaces.
+;;    evictable by opportunistic work. Every immediate allocation must fit
+;;    alongside all observed holders, including opportunistic or unknown ones.
+;;    Eviction eligibility is not evidence of release. A separate controller
+;;    may arrange release and then remeasure before asking for admission again.
 ;;
 ;; Host keeps: reading /sys/class/drm/*/device/mem_info_*, folding
 ;; /proc/<pid>/fdinfo drm-total-vram, and acting on the verdict.
@@ -139,7 +138,9 @@
         (< request 1) 6
         (< (committed-bytes resident opportunistic) 0) 7
         (over-aperture? request usable) 2
-        (= klass 0) (if (or (> resident usable) (> request (- usable resident))) 3 0)
+        (and (= klass 0) (or (> resident usable) (> request (- usable resident)))) 3
+        (and (= klass 0) (> opportunistic (- (- usable resident) request))) 3
+        (= klass 0) 0
         (would-evict-resident? klass request usable resident) 4
         ;; request and resident fit; compare against the remaining amount
         ;; before subtracting opportunistic, avoiding signed addition overflow.
@@ -156,8 +157,7 @@
   (if (or (< usable 0) (not (class-known? klass))
           (< (committed-bytes resident opportunistic) 0) (> resident usable)) 0
     (let [room (- usable resident)]
-      (if (= klass 0) room
-        (if (>= opportunistic room) 0 (- room opportunistic))))))
+      (if (>= opportunistic room) 0 (- room opportunistic)))))
 
 (defn code-name [code :i64] :string
   (if (= code 0) "admitted"
