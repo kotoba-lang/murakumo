@@ -1,0 +1,40 @@
+{
+  "kind": "awai.job-lease-binding/1",
+  "date": "2026-11-03",
+  "scope": "Disposable ARM64 Linux VM, 1 CPU / 2 GiB. Source-closure fixtures use the actual job-node binding, actual JSON and signed Ed25519 receipt; run and verify fixtures substitute quorum, input files and cell execution.",
+  "source_sha256": "37455c152c909de325e4545c07aafa53c97f0db3f3616670476243d045f62c3d",
+  "compiler_sha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "fixtures": {
+    "lease-binding": [
+      "dcbefae577bf334dac867ea234741b04e55829be4dd0e6c63bff8142c9c2d9f5",
+      "672ca56cf2d89c3a40f51725a2a7be1d8a9ee683ce507ad54ffa88fa728b9b59"
+    ],
+    "lease-bypass": [
+      "5cb1903f26fd08864e550e253790c82fea78de87afd4babd064a22ba4a2f3321",
+      "0af309812052f9a251be77e358a1a46ddfcfba9f90947691a42e98ba30d346d1"
+    ],
+    "verify-binding": [
+      "3782e1124a6ab4e5a050baf37189453d595985adffabe368e71a314253cf1ce2",
+      "a3a2871c5b570af5ed119f4486f9408f428aaf5f36db880507c4a6494882e7f7"
+    ],
+    "verify-old": [
+      "70666d4db9671c97fafe44e163d0eaf0b816a7ee3a00676677c2df19787f6d2f",
+      "e610c524386d5161dc75f0e932763f1fcd72b0a30ae319272fbe0be9b8ffd241"
+    ],
+    "run-binding": [
+      "5e27bcc93e938245df380a823c782de24f05b8adec2c6dfeb0b0d4c4b15420c4",
+      "2148bef24f38c2594d104e6dbe0420b0ec8e45b44323a824f97cbd6dfb7accec"
+    ],
+    "run-old": [
+      "7a76eeadc507f8d0b5e17ab296cec4f1a94c98567ced07ada3ee61343ad1f442",
+      "47f4ca8a04cf976ede5aa66721a79742246468bd756814124055e364e1072a0c"
+    ]
+  },
+  "results": [
+    "valid signed receipt and matching lease confirmed",
+    "wrong lease class, wrong receipt node, wrong slot, invalid or missing expected job rejected",
+    "old verifier confirmed valid receipt under another job lease with same holder and epoch",
+    "wrong lease class blocked before stubbed cell execution; old run called cell"
+  ],
+  "limits": "Mock quorum and cell; no full distributed network, production signer, live lease freshness, fencing, output retrieval, guest success, Mac, or actual bot qualification. job/confirmed is an authentic receipt from holder, not proof exit=0 or output contents. Caller must independently pin expected job."
+}

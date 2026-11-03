@@ -29,7 +29,8 @@
 ;;           5. it signs the agent-step receipt with the lease epoch
 ;;              ("receipt <text>", "signature <b64url>").
 ;;   verify  job-node-main verify <voter ports> <trust node=did,...> <node
-;;           output file> <ballot t> [<fleet token file>]; the file is a node's run output, whose
+;;           output file> <ballot t> <fleet token file or empty> <expected job id>;
+;;           the file is a node's run output, whose
 ;;           "receipt" and "signature" lines are judged (wire 35)
 ;;           learns the chosen lease with lease-round (adopting whatever was
 ;;           chosen), maps its holder to a did through the trust, and judges
@@ -73,6 +74,27 @@
   (let [b (jn-bytes doc)]
     (if (not (json-valid? b)) -1
       (let [v (json-member b (jn-root b) key)] (if (and (>= v 0) (json-int-ok? b v)) (json-int b v) -1)))))
+
+;; A register is not intrinsically scoped to the job being checked. Bind its
+;; chosen value and the caller's expected job before execution or verification.
+(defn- jn-job-id? [s :string] :bool
+  (let [b (jn-bytes s)]
+    (and (= (vector-count b) 64)
+      (loop [i 0]
+        (if (= i 64) true
+          (let [c (vector-at b i)]
+            (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
+              (recur (+ i 1)) false)))))))
+
+(defn- jn-lease-bound? [chosen :string expected :string] :bool
+  (and (jn-job-id? expected) (= (jn-text chosen "class") expected)
+       (= (jn-num chosen "slot") 0) (> (jn-num chosen "epoch") 0)
+       (not (= (jn-text chosen "node") ""))))
+
+(defn- jn-receipt-bound? [chosen :string receipt :string expected :string] :bool
+  (and (jn-lease-bound? chosen expected)
+       (= (jn-text receipt "job") expected)
+       (= (jn-text receipt "node") (jn-text chosen "node"))))
 
 ;; the did a trust "node=did,node=did" gives a node, or ""
 (defn- jn-did-of [trust :string node :string] :string
@@ -127,24 +149,28 @@
                     holder (if (= chosen "") "" (jn-text chosen "node"))
                     epoch (if (= chosen "") 0 (jn-num chosen "epoch"))
                     b (jn-say (string-concat "lease " (if (= holder "") "none" holder)))]
+                (if (not (jn-lease-bound? chosen jid)) (let [x (jn-say "job/lease-binding-refused")] 1)
                 (if (and (not (= holder node)) (not rogue)) (let [x (jn-say (string-concat "held-by " holder))] 0)
                   (let [r (cell-execute index profile "container" layout state allowed itext)]
                     (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
                       (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field r 1)) jid node (jn-field r 2))
                             c (jn-say (string-concat "receipt " text))
                             d (jn-say (string-concat "signature " (sign-statement seed text)))]
-                        0))))))))))
+                        0)))))))))))
 
 (defn- jn-verify [] :i64
   (let [ports (jn-arg 1) trust (jn-arg 2)
         out (if (= (typed-cap-call 35 :string :string (string-concat (jn-arg 3) "EXISTS_SEP")) "1") (typed-cap-call 35 :string :string (jn-arg 3)) "")
         receipt (jn-line out "receipt ") sig (jn-line out "signature ") t (jn-int (jn-arg 4))
-        token (jn-token 5)
-        chosen (if (= token "-") "" (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token))
+        token (jn-token 5) expected (jn-arg 6)
+        chosen (if (or (= token "-") (not (jn-job-id? expected))) ""
+                 (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token))
         holder (if (= chosen "") "" (jn-text chosen "node"))
-        verdict (receipt-verdict (jn-did-of trust holder) (jn-num chosen "epoch")
+        verdict (if (jn-receipt-bound? chosen receipt expected)
+                  (receipt-verdict (jn-did-of trust holder) (jn-num chosen "epoch")
                                  (jn-num receipt "at") (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
                                  (jn-text receipt "job") (jn-text receipt "node") (jn-text receipt "output") sig)
+                  "job/lease-binding-refused")
         x (jn-say (str "holder " (if (= holder "") "none" holder) " verdict " verdict))]
     (if (= verdict "job/confirmed") 0 1)))
 

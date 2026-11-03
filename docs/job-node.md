@@ -1,5 +1,26 @@
 # One agent-step job on two nodes: run once, confirmed once
 
+## Current verification contract
+
+`job-node verify` now requires an independently derived 64-character lowercase
+job ID after the fleet-token-file argument. Pass an empty token argument if no
+token is used: `verify PORTS TRUST OUTPUT BALLOT "" EXPECTED_JOB_ID`. Before
+calling the cell, `run` refuses a chosen lease whose class is not its computed
+job ID or whose slot is not zero. `verify` requires that the expected ID,
+chosen lease class and signed receipt job match, and that the receipt node
+match the lease holder. A missing or malformed expected ID is refused before
+the quorum round. This intentionally changes the CLI contract: the historical
+commands and observations below predate the required argument and must be
+updated before reuse; derive the ID from trusted job inputs, not from the
+untrusted receipt.
+
+A confirmed receipt authenticates the signed fields against the chosen holder
+and epoch; it does not by itself establish a successful exit, retrieve or
+verify the output bytes, prove a current unexpired fence, or authorize effects.
+The [bounded fixtures](evidence/awai147-job-lease-binding-20261103.json) use a
+real signed receipt and JSON code but stub the quorum and cell; they reproduce
+the prior cross-job acceptance and do not qualify a distributed deployment.
+
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289). Three of
 its acceptance items are covered here:
 - one bot profile's turn runs on a node, and its output CID and receipt can
