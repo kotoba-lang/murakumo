@@ -3,7 +3,7 @@
 ;; The caller must authorize the node/address pair and supply trusted key paths;
 ;; the host must constrain process execution, output size, and execution time.
 (ns murakumo.fleet-ssh-observe
-  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-memory-swap observe-node fleet-ssh-observe-main]))
+  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-memory-swap observe-model-files observe-node fleet-ssh-observe-main fleet-model-observe-main]))
 
 (defn- ob-bytes [s :string] :vector-i64
   (vector-i64-from-bytes (string-to-utf8 s)))
@@ -49,7 +49,9 @@
 ;; The only permitted commands are selected by this component, never by a
 ;; remote response or checkpoint. An empty request means invalid input/mode.
 (defn observe-ssh-request [node :string ip :string identity :string known :string mode :string] :string
-  (let [cmd (cond (= mode "memory-swap") "/usr/sbin/sysctl -n hw.memsize vm.swapusage"
+  (let [base (str "/Users/" node "/.murakumo/awai147-mtplx-bonsai/")
+        cmd (cond (= mode "memory-swap") "/usr/sbin/sysctl -n hw.memsize vm.swapusage"
+                  (= mode "model-files") (str "/usr/bin/stat -f '%HT %z %N' " base "model.safetensors " base "mtp.safetensors")
                   (= mode "pressure") "/usr/bin/memory_pressure -Q"
                   (= mode "disk") "/bin/df -Pk /"
                   :else "") a (ob-a)]
@@ -116,6 +118,26 @@
              (= (string-index-of swap "total =") 0)
              (> (string-index-of swap "used =") 0) (> (string-index-of swap "free =") 0))
       (str "memory:\n" memory "\nswap:\n" swap) "")))
+;; Exact ordered paths and positive sizes; SSH exit 0 alone is insufficient.
+;; This is only metadata observation, never a digest or model authorization.
+(defn- ob-size-line? [line :string path :string] :bool
+  (let [prefix "Regular File " n (string-byte-length line)
+        content (if (= (string-index-of line prefix) 0) (string-substring line (string-byte-length prefix) n) "")
+        cut (string-index-of content " ") end (string-byte-length content)
+        size (if (and (> cut 0) (<= cut 15)) (string-substring content 0 cut) "")]
+    (and (> (string-length size) 0) (not (= (string-substring size 0 1) "0"))
+         (= (string-substring content (+ cut 1) end) path)
+         (loop [i 0] (if (= i (string-length size)) true
+           (let [c (string-code-point-at size i)]
+             (if (and (>= c 48) (<= c 57)) (recur (+ i 1)) false)))))))
+(defn observe-model-files [node :string raw :string] :string
+  (let [n (string-byte-length raw) first (string-index-of raw "\n")
+        tail (if (and (> first 0) (< (+ first 1) n)) (string-substring raw (+ first 1) n) "")
+        second (string-index-of tail "\n") base (str "/Users/" node "/.murakumo/awai147-mtplx-bonsai/")]
+    (if (and (ob-name? node) (ob-safe-output? raw) (> first 0) (> second 0)
+             (= second (- (string-byte-length tail) 1))
+             (ob-size-line? (string-substring raw 0 first) (str base "model.safetensors"))
+             (ob-size-line? (string-substring tail 0 second) (str base "mtp.safetensors"))) raw "")))
 ;; Three sequential fixed probes, with no partial result on any error. The caller is
 ;; responsible for concurrency limits and an independently bounded host.
 (defn- ob-collect [node :string ip :string identity :string known :string] :string
@@ -144,3 +166,15 @@
               (if (ob-ok? result) (str "observation/untrusted " node "\n" (ob-value result))
                 (str "observation/refused " (string-substring result 6 (string-byte-length result)) "\n")))]
     (if (ob-ok? result) 0 1)))
+
+;; Separate entry keeps model-file observation optional for fleet telemetry.
+(defn fleet-model-observe-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        extra (typed-cap-call 38 :string :string "4")
+        result (if (and (= extra "") (observe-inputs? node ip identity known))
+                 (ob-probe node ip identity known "model-files") "error\ninput-invalid")
+        output (if (ob-ok? result) (observe-model-files node (ob-value result)) "")
+        out (typed-cap-call 37 :string :string
+              (if (= output "") "model-observation/refused\n" (str "model-observation/untrusted " node "\n" output)))]
+    (if (= output "") 1 0)))
