@@ -1,5 +1,9 @@
 # Current controller source composition check
 
+**Superseded for future composition:** this source includes older lease core
+and group functions. Use the later [lease refresh](../awai150-lease-closure-refresh-20261103/README.md)
+as the current diagnostic input; neither source is a qualified runtime.
+
 The previously recorded source composition predates later changes to the
 controller dependencies. The attached test-only assembly refreshes its six
 Murakumo files at `fb1488f` and the four `cc-*` cursor functions used by the
