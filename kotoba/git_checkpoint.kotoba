@@ -95,8 +95,10 @@
 (defn- cp-load [store :string cid :string] :vector-i64
   (if (and (cp-raw? cid) (cp-exists? (str store "/" cid))) (cp-read (str store "/" cid)) (vector-alloc 0)))
 (defn- cp-block? [store :string cid :string] :bool
-  (and (cp-raw? cid) (cp-exists? (str store "/" cid))
-    (let [b (cp-read (str store "/" cid))] (and (<= (vector-count b) 131072) (= (cp-cid b) cid)))))
+  (let [path (str store "/" cid) size (if (cp-raw? cid) (cp-size path) -1)
+        b (if (and (>= size 0) (<= size 131072)) (cp-range path 0 size) (vector-alloc 0))]
+    (and (cp-raw? cid) (>= size 0) (<= size 131072) (= (vector-count b) size)
+         (= (cp-size path) size) (= (cp-cid b) cid))))
 (defn- cp-str [b :vector-i64 o :i64 k :string] :string
   (let [v (json-member b o k)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
 (defn- cp-num [b :vector-i64 o :i64 k :string] :i64
@@ -203,6 +205,19 @@
                                          (= (cp-fs "M" (cp-parent-dir p) "") "1"))))
             (recur (+ i 1)) false))))))
 (defn- cp-range [p :string off :i64 n :i64] :vector-i64 (cp-read-op p "E" (str off ":" n)))
+;; FS2 read failure and a legitimate empty file both yield an empty vector.
+;; Check regular-file size before and after the bounded read so failure to
+;; read a nonempty source cannot silently become an empty checkpoint block.
+;; Exclusive host ownership is still required across the separate calls.
+(defn- cp-capture-read [p :string] :vector-i64
+  (let [n (cp-size p)]
+    (if (and (>= n 0) (<= n 131072)) (cp-range p 0 n) (vector-alloc 0))))
+(defn- cp-capture-read-valid? [p :string b :vector-i64] :bool
+  (let [n (cp-size p)]
+    (and (>= n 0) (<= n 131072) (= n (vector-count b)))))
+(defn- cp-capture-block [store :string path :string] :string
+  (let [b (cp-capture-read path)]
+    (if (cp-capture-read-valid? path b) (cp-put store b) "")))
 (defn- cp-chunk-size [size :i64 i :i64] :i64
   (let [remaining (- size (* i 131072))] (if (< remaining 131072) remaining 131072)))
 
@@ -210,7 +225,11 @@
 ;; larger bundles refuse rather than publishing a partial checkpoint.
 (defn- cp-save-chunk [store :string path :string size :i64 i :i64 ids :vector-i64] :bool
   (arena-scope
-    (let [cid (cp-put store (cp-range path (* i 131072) (cp-chunk-size size i))) b (cp-bytes cid)]
+    (let [n (cp-chunk-size size i) before (cp-size path)
+          data (if (= before size) (cp-range path (* i 131072) n) (vector-alloc 0))
+          after (cp-size path)
+          cid (if (and (= before size) (= after size) (= (vector-count data) n)) (cp-put store data) "")
+          b (cp-bytes cid)]
       (and (= (vector-count b) 59)
         (loop [k 0] (if (= k 59) true
           (let [z (vector-assoc! ids (+ (* i 59) k) (vector-at b k))] (recur (+ k 1)))))))))
@@ -274,7 +293,7 @@
               kind (cp-meta-field st 3) bits (cp-meta-field st 0)
               mode (cond (and (= kind "0") (= bits "420")) "644"
                          (and (= kind "0") (= bits "493")) "755" :else "")
-              cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-put store (cp-read (str repo "/" path))) "")]
+              cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-capture-block store (str repo "/" path)) "")]
           (if (= cid "") "" (recur (+ i 1) path (str out (if (= i 0) "" ",") "{\"cid\":\"" cid "\",\"mode\":\"" mode "\",\"path\":\"" path "\"}"))))))))
 
 (defn- cp-required-files? [list :vector-i64 a-path :string a-cid :string b-path :string b-cid :string] :bool
@@ -311,10 +330,13 @@
             bundle-path (str store "/" (if (= stash "none") head stash) ".bundle")
             bundle-r (if (cp-ok? update) (cp-git repo (str "bundle" (cp-a) "create" (cp-a) bundle-path (cp-a) "HEAD" (cp-a) ref)) "refused")]
         (if (not (cp-ok? bundle-r)) (cp-result (str "checkpoint/git-capture " bundle-r " stash " stash-r))
-          (let [bundle (cp-save-bundle store bundle-path) profile-bytes (cp-read (cp-arg 4))
-                profile-cid (cp-put store profile-bytes) profile (str "sha256:" (sha256-hex profile-bytes))
-                policy (cp-put store (cp-read (cp-arg 5))) environment (cp-put store (cp-read (cp-arg 6)))
-                summary (cp-put store (cp-read (cp-arg 7))) us (cp-capture-untracked repo store (cp-read (cp-arg 8)))
+          (let [bundle (cp-save-bundle store bundle-path) profile-bytes (cp-capture-read (cp-arg 4))
+                profile-cid (if (cp-capture-read-valid? (cp-arg 4) profile-bytes) (cp-put store profile-bytes) "")
+                profile (str "sha256:" (sha256-hex profile-bytes))
+                policy (cp-capture-block store (cp-arg 5)) environment (cp-capture-block store (cp-arg 6))
+                summary (cp-capture-block store (cp-arg 7))
+                list-bytes (cp-capture-read (cp-arg 8))
+                us (if (cp-capture-read-valid? (cp-arg 8) list-bytes) (cp-capture-untracked repo store list-bytes) "")
                 did (did-from-public (public-from-seed seed))
                 payload (str "{\"bundle\":\"" bundle "\",\"did\":\"" did "\",\"environment\":\"" environment
                   "\",\"epoch\":" epoch ",\"head\":\"" head "\",\"kind\":\"itonami.git-checkpoint/1\",\"parent\":\"" parent
@@ -328,9 +350,10 @@
                     (not (= head-r (cp-git repo "rev-parseARG_SEP--verifyARG_SEPHEAD"))))
               (cp-result "checkpoint/capture-incomplete-or-busy")
               (if (not (= verdict "checkpoint/ok")) (cp-result verdict)
+                (if (not (cp-closure? store envelope)) (cp-result "checkpoint/capture-closure-incomplete")
                 (let [cid (cp-put store envelope)]
                   (if (= cid "") (cp-result "checkpoint/root-publication-failed")
-                    (cp-result (str "checkpoint/created " cid "\n" (cp-text envelope)))))))))))))
+                    (cp-result (str "checkpoint/created " cid "\n" (cp-text envelope))))))))))))))
 
 (defn- cp-capture [] :i64 (cp-capture-with-required "" "" "" ""))
 
