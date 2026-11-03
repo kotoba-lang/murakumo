@@ -314,6 +314,25 @@
                     parent-sync (if (= rename "1") (cp-fs (str (cp-parent-dir dest) (cp-sep "FSYNC"))) "0")]
                 (if (and (= rename "1") (= parent-sync "1")) "checkpoint/restored" "checkpoint/publish-failed")))))))
 
+;; Emit only the signed checkpoint closure after the entire contract and every
+;; block have passed verification. Consumers must wait for the terminal line
+;; before publishing, and the host must keep the source store quiescent.
+;; CID repeats are allowed (for example when policy and summary coincide).
+(defn- cp-closure-list [store :string cid :string b :vector-i64] :i64
+  (let [p (cp-payload b) bundle (cp-str b p "bundle") index (cp-load store bundle)
+        chunks (json-member index 0 "chunks") us (json-member b p "untracked")
+        a (cp-say (str "checkpoint/block " cid))
+        d (cp-say (str "checkpoint/block " bundle))
+        e (cp-say (str "checkpoint/block " (cp-str b p "policy")))
+        f (cp-say (str "checkpoint/block " (cp-str b p "environment")))
+        g (cp-say (str "checkpoint/block " (cp-str b p "summary")))
+        h (cp-say (str "checkpoint/block " (digest-cid (cp-str b p "profile") 85)))
+        i (loop [n 0] (if (= n (json-count b us)) 0
+            (let [x (cp-say (str "checkpoint/block " (cp-str b (json-element b us n) "cid")))] (recur (+ n 1)))))
+        j (loop [n 0] (if (= n (json-count index chunks)) 0
+            (let [x (cp-say (str "checkpoint/block " (json-string index (json-element index chunks n))))] (recur (+ n 1)))))]
+    (cp-say "checkpoint/closure-complete")))
+
 (defn- cp-restore [] :i64
   (let [store (cp-arg 1) cid (cp-arg 2)]
     (if (not (cp-block? store cid)) (cp-say "checkpoint/missing-or-corrupt-root")
@@ -322,6 +341,7 @@
         (cond (not (= v "checkpoint/ok")) (cp-say v)
               (not (cp-closure? store b)) (cp-say "checkpoint/missing-or-corrupt-block")
               (= (cp-arg 0) "verify") (cp-say "checkpoint/verified")
+              (= (cp-arg 0) "closure") (cp-closure-list store cid b)
               :else (cp-say (cp-materialize store b (cp-arg 10))))))))
 
 ;; Signed recovery attestation after the resumed node produces a successor.
@@ -365,7 +385,7 @@
 
 (defn checkpoint-main [] :i64
   (cond (= (cp-arg 0) "capture") (cp-capture)
-        (or (= (cp-arg 0) "restore") (= (cp-arg 0) "verify")) (cp-restore)
+        (or (= (cp-arg 0) "restore") (= (cp-arg 0) "verify") (= (cp-arg 0) "closure")) (cp-restore)
         (= (cp-arg 0) "recovery") (cp-recovery)
         (= (cp-arg 0) "verify-recovery") (cp-verify-recovery)
         :else (cp-say "checkpoint/command")))

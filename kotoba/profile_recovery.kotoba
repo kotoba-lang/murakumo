@@ -3,7 +3,7 @@
 ;; The host supplies reviewed immutable profile/runtime pins and fresh tool
 ;; grants. SOUL and itonami.edn are data, never an authority source. No model
 ;; output is dispatched as a tool. This adapter does not run legacy cron scripts.
-;; HTTPS transport is an explicitly admitted curl oneshot in the existing user
+;; Transport is an explicitly admitted curl oneshot in the existing user
 ;; manager, not a detached child escaping the native spawn's 10-second budget.
 (ns murakumo.profile-recovery
   (:export [profile-recovery-main]))
@@ -36,38 +36,101 @@
     (let [s (pr-unit-state unit)]
       (cond (= s "exited") 1 (= s "failed") -1 :else 0))))
 
-;; All arguments and properties are fixed except task-owned paths and the
-;; content-addressed unit name. curl ignores ~/.curlrc, never follows redirects,
-;; receives no credentials, and can contact only this profile's declared host.
-(defn- pr-submit [unit :string request :string response :string seconds :i64] :bool
+;; This is a host-pinned transport description, not proof that the socket's
+;; peer is the expected machine or that its model is qualified. The host must
+;; authenticate the tunnel, own its directory, and protect the header file.
+(defn- pr-local-mtp? [runtime :vector-i64] :bool
+  (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-mtp/1")
+       (= (cp-str runtime 0 "endpoint") "http://localhost/v1/chat/completions")
+       (cp-safe-absolute? (cp-str runtime 0 "socket"))
+       (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
+       (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))))
+
+;; Paths and the content-addressed unit name are host-supplied. curl ignores
+;; ~/.curlrc and redirects. The local variant cannot use a TCP proxy or select
+;; a network URL: it sends only through the explicitly pinned Unix socket.
+(defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
   (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
     (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
     (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
     (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%"
-    (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1" (cp-a) "--proto" (cp-a) "=https"
-    (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body" (cp-a) "--silent" (cp-a) "--show-error"
+    (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1"
+    (if (pr-local-mtp? runtime)
+      (str (cp-a) "--noproxy" (cp-a) "*"
+           (cp-a) "--unix-socket" (cp-a) (cp-str runtime 0 "socket")
+           (cp-a) "--header" (cp-a) (str "@" (cp-str runtime 0 "authorizationFile"))
+           (cp-a) "-fsS")
+      (str (cp-a) "--proto" (cp-a) "=https" (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body"
+           (cp-a) "--silent" (cp-a) "--show-error"))
     (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
     (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
-    (cp-a) "--output" (cp-a) response (cp-a) "https://api.murakumo.cloud/v1/chat/completions"))))
+    (cp-a) "--output" (cp-a) response (cp-a)
+    (if (pr-local-mtp? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions")))))
 
 (defn- pr-answer [b :vector-i64] :string
   (if (not (json-valid? b)) ""
     (let [cs (json-member b 0 "choices") c (if (>= cs 0) (json-element b cs 0) -1)
           m (if (>= c 0) (json-member b c "message") -1)]
-      (if (>= m 0) (cp-str b m "content") ""))))
+      ;; A nonempty prefix is not a completed turn. Refuse truncated,
+      ;; tool-call, missing and unknown finish reasons rather than checkpointing
+      ;; them as a completed profile step.
+      (if (and (>= m 0) (= (cp-str b c "finish_reason") "stop")) (cp-str b m "content") ""))))
 
-(defn- pr-wait [unit :string response :string] :bool
+;; The local server must report the requested model and actual MTP execution.
+;; This is response evidence, not an attestation of the server or its weights;
+;; the host still has to authenticate and qualify the socket peer.
+(defn- pr-mtp-response? [runtime :vector-i64 b :vector-i64] :bool
+  (if (not (json-valid? b)) false
+    (let [s (json-member b 0 "mtplx_stats")
+          enabled (if (>= s 0) (json-member b s "runtime_mtp_enabled") -1)
+          head (if (>= s 0) (json-member b s "draft_head_installed") -1)]
+      (and (>= s 0) (= (cp-str b 0 "model") (cp-str runtime 0 "model"))
+           (= (cp-str b s "generation_mode") "mtp")
+           (>= enabled 0) (= (json-kind b enabled) 5)
+           (>= head 0) (= (json-kind b head) 5)
+           (> (cp-num b s "mtp_forward_calls") 0)))))
+
+;; The server's diagnostic-heavy response can exceed the peer's 16 KiB block
+;; limit. Keep the full model text and only the fields needed for continuation
+;; and MTP admission. Bind the compact record to the raw cache bytes by hash;
+;; the hash alone does not make the raw response available on a recovery host.
+(defn- pr-mtp-compact [runtime :vector-i64 b :vector-i64] :vector-i64
+  (let [answer (pr-answer b) stats (if (json-valid? b) (json-member b 0 "mtplx_stats") -1)]
+    (if (or (= answer "") (not (pr-mtp-response? runtime b))) (vector-alloc 0)
+      (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":" (pr-json-quote answer)
+        "}}],\"model\":" (pr-json-quote (cp-str b 0 "model"))
+        ",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":"
+        (cp-num b stats "mtp_forward_calls") ",\"runtime_mtp_enabled\":true},\"rawResponseDigest\":\"sha256:"
+        (sha256-hex b) "\"}")))))
+
+(defn- pr-replicable? [b :vector-i64] :bool
+  (and (> (vector-count b) 0) (<= (vector-count b) 16384)))
+
+;; A crash can leave the output durable while state still points at this turn.
+;; Only the exact completed response may be reused. Sync it again before
+;; publishing state, since an interrupted earlier write may not have flushed.
+(defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
+  (if (cp-exists? path)
+    (and (= (cp-cid (cp-read path)) cid) (= (cp-fs (str path (cp-sep "FSYNC"))) "1"))
+    (cp-write path answer)))
+
+(defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
     (let [state (pr-unit-code unit)]
       (cond (= state 1)
-            (and (cp-exists? response) (not (= (pr-answer (cp-read response)) "")))
+            (and (cp-exists? response)
+                 (let [b (cp-read response)]
+                   (and (not (= (pr-answer b) ""))
+                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime b)))))
             (or (= state -1) (> i 900)) false
             :else (let [z (pr-pause)] (if z (recur (+ i 1)) false))))))
 
 (defn- pr-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64] :bool
-  (and (json-canonical? runtime) (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime/1")
+  (and (json-canonical? runtime)
+       (or (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime/1")
+                (= (cp-str runtime 0 "endpoint") "https://api.murakumo.cloud/v1/chat/completions"))
+           (pr-local-mtp? runtime))
        (= (cp-str runtime 0 "rail") "murakumo")
-       (= (cp-str runtime 0 "endpoint") "https://api.murakumo.cloud/v1/chat/completions")
        (= (str "sha256:" (sha256-hex meta)) (cp-str runtime 0 "profileDigest"))
        (= (str "sha256:" (sha256-hex role)) (cp-str runtime 0 "roleDigest"))
        (= (cp-str runtime 0 "profile") "accountability-steward")
@@ -78,50 +141,97 @@
        (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
        (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
 
+;; A separate, host-pinned read-only lane for the AWAI growth steward. The
+;; profile metadata does not grant any of its listed capabilities: this
+;; adapter only asks the model for a draft and never dispatches tool calls.
+;; The host selects and pins both the work order and the bounded source
+;; snapshot; neither is a live observation or an authorization.
+(defn- pr-growth-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64 work :vector-i64 context :vector-i64] :bool
+  (and (json-canonical? runtime) (pr-local-mtp? runtime)
+       (= (cp-str runtime 0 "rail") "murakumo") (= (cp-str runtime 0 "tools") "none")
+       (= (cp-str runtime 0 "profile") "awai-growth-steward")
+       (not (= (cp-str runtime 0 "model") ""))
+       (= (str "sha256:" (sha256-hex meta)) (cp-str runtime 0 "profileDigest"))
+       (= (str "sha256:" (sha256-hex role)) (cp-str runtime 0 "roleDigest"))
+       (= (str "sha256:" (sha256-hex work)) (cp-str runtime 0 "workDigest"))
+       (= (str "sha256:" (sha256-hex context)) (cp-str runtime 0 "contextDigest"))
+       (> (vector-count work) 0) (<= (vector-count work) 8192)
+       (> (vector-count context) 0) (<= (vector-count context) 8192)
+       (cp-hex? (cp-str runtime 0 "source") 40)
+       (not (= (cp-str runtime 0 "task") "")) (= (field-problem (cp-str runtime 0 "task")) "enroll/ok")
+       (>= (string-index-of (cp-text meta) ":profile/id \"awai-growth-steward\"") 0)
+       (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
+       (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
+
 (defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64] :string
   (let [dir (str repo "/profile") meta (cp-read (str dir "/itonami.edn")) role (cp-read (str dir "/SOUL.md"))
+        growth (= (cp-str runtime 0 "profile") "awai-growth-steward")
+        work-path (str dir "/tasks/first-turn.md") context-path (str dir "/context.md")
+        work (if (and growth (cp-exists? work-path)) (cp-read work-path) (vector-alloc 0))
+        context (if (and growth (cp-exists? context-path)) (cp-read context-path) (vector-alloc 0))
         state (cp-read (str repo "/state.json")) task (cp-str runtime 0 "task")]
     (cond (or (< seconds 1) (> seconds 840)) "profile/budget-refused"
-          (not (pr-runtime? runtime meta role)) "profile/runtime-refused"
+          (not (or (pr-runtime? runtime meta role) (pr-growth-runtime? runtime meta role work context))) "profile/runtime-refused"
           (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
           :else
           (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
                 prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
-                linked (if (= next 1) (= previous "none") (= previous (cp-cid prior)))]
+                linked (if (= next 1) (= previous "none")
+                         (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))
+                              (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime prior))))]
             (if (not linked) "profile/previous-output-mismatch"
-              (let [instruction (if (= limit 2) (str "Read-only checkpoint recovery task " task ", step " next
+              (let [instruction (if growth
+                       (str "Read-only AWAI growth steward task " task ", step " next ".\n"
+                         (cp-text work) "\n\nBounded source snapshot, not live observations:\n" (cp-text context)
+                         "\nAll tools are denied. Do not change files, publish, merge or contact anyone."
+                         " Do not invent observations or report completion of unperformed work."
+                         " Use a concise six-row table with next job, evidence and stop condition for each role."
+                         " Use each full role ID. Avoid repeated evidence and source snapshot details."
+                         " Keep the whole answer under 450 tokens. End with brief unknowns and next handoff.")
+                       (if (= limit 2) (str "Read-only checkpoint recovery task " task ", step " next
                        ". Continue from the preceding assistant result, if present. Propose one next read-only verification."
                        " Do not call tools, change files, publish, merge or contact anyone. Reply in at most 16 tokens.")
                        (str "Resident accountability-steward proposal turn " next ", task " task
                          ". Follow the profile's propose-only goal and continue from the preceding proposal."
                          " State one concrete next verification and what evidence would decide it."
                          " You have no current external observations; do not invent progress or completion."
-                         " All tools are denied. Do not change files, publish, merge or contact anyone."))
+                         " All tools are denied. Do not change files, publish, merge or contact anyone.")))
                     body (str "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":" tokens ",\"messages\":["
                       "{\"content\":" (pr-json-quote (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))) ",\"role\":\"system\"},"
                       (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
                       "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
                       ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}")
-                    id (sha256-hex (cp-bytes body)) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
+                    id (sha256-hex (cp-bytes (if (pr-local-mtp? runtime)
+                         (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
+                         body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     saved (cp-write request (cp-bytes body)) status (pr-unit-state unit)
-                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds)))]
-                (if (or (not submitted) (not (pr-wait unit response))) "profile/inference-unavailable-state-retained"
-                  (let [answer (cp-read response) cid (cp-cid answer)
+                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds runtime)))]
+                (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
+                  (let [raw (cp-read response)
+                        answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
+                        cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
                         newstate (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
                         tmp (str repo "/state.json.tmp")
-                        ok (and (cp-mkdir outdir) (not (cp-exists? output)) (cp-write output answer) (cp-write tmp newstate))
+                        usable (pr-replicable? answer)
+                        ok (and usable
+                                (cp-mkdir outdir) (pr-save-output output answer cid) (cp-write tmp newstate))
                         rename (if ok (cp-fs (str tmp (cp-sep "RENAME") repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
-                    (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed")))))))))
+                    (if (not usable) "profile/response-not-replicable"
+                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))
+
+(defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
+  (if (= (cp-str runtime 0 "profile") "awai-growth-steward") 768
+    (if resident 256 32)))
 
 (defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 2 32))
+  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false)))
 
 (defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 1000000 256))
+  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true)))
 
 (defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
   (pr-step-bounded repo runtime cache next 840))
