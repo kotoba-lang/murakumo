@@ -46,6 +46,17 @@
 (defn observe-inputs? [node :string ip :string identity :string known :string] :bool
   (and (ob-name? node) (ob-ip? ip) (ob-path? identity) (ob-path? known)))
 (defn- ob-a [] :string "ARG_SEP")
+(defn- ob-ssh-command [node :string ip :string identity :string known :string cmd :string] :string
+  (let [a (ob-a)]
+    (str "/usr/bin/ssh" a "-F" a "/dev/null" a "-i" a identity
+         a "-o" a "IdentitiesOnly=yes" a "-o" a "IdentityAgent=none"
+         a "-o" a "BatchMode=yes" a "-o" a "ConnectTimeout=3"
+         a "-o" a "ServerAliveInterval=1" a "-o" a "ServerAliveCountMax=2"
+         a "-o" a "StrictHostKeyChecking=yes" a "-o" a (str "UserKnownHostsFile=" known)
+         a "-o" a "GlobalKnownHostsFile=/dev/null" a "-o" a "VerifyHostKeyDNS=no"
+         a "-o" a "UpdateHostKeys=no"
+         a "-o" a (str "HostKeyAlias=" node) a "-o" a "ClearAllForwardings=yes"
+         a "-o" a "RequestTTY=no" a (str node "@" ip) a (wrap-cmd cmd))))
 ;; The only permitted commands are selected by this component, never by a
 ;; remote response or checkpoint. An empty request means invalid input/mode.
 (defn observe-ssh-request [node :string ip :string identity :string known :string mode :string] :string
@@ -55,17 +66,9 @@
                   (= mode "model-files") (str "/usr/bin/stat -f '%HT %z %N' " base "model.safetensors " base "mtp.safetensors")
                   (= mode "pressure") "/usr/bin/memory_pressure -Q"
                   (= mode "disk") "/bin/df -Pk /"
-                  :else "") a (ob-a)]
+                  :else "")]
     (if (or (= cmd "") (not (observe-inputs? node ip identity known))) ""
-      (str "/usr/bin/ssh" a "-F" a "/dev/null" a "-i" a identity
-           a "-o" a "IdentitiesOnly=yes" a "-o" a "IdentityAgent=none"
-           a "-o" a "BatchMode=yes" a "-o" a "ConnectTimeout=3"
-           a "-o" a "ServerAliveInterval=1" a "-o" a "ServerAliveCountMax=2"
-           a "-o" a "StrictHostKeyChecking=yes" a "-o" a (str "UserKnownHostsFile=" known)
-           a "-o" a "GlobalKnownHostsFile=/dev/null" a "-o" a "VerifyHostKeyDNS=no"
-           a "-o" a "UpdateHostKeys=no"
-           a "-o" a (str "HostKeyAlias=" node) a "-o" a "ClearAllForwardings=yes"
-           a "-o" a "RequestTTY=no" a (str node "@" ip) a (wrap-cmd cmd)))))
+      (ob-ssh-command node ip identity known cmd))))
 ;; Host response is <exit> LF <stdout>. Empty or ambiguous output is refusal.
 ;; Output is untrusted observation only; neither the in-band marker nor these
 ;; values confer admission authority. The host must enforce capture bounds.
