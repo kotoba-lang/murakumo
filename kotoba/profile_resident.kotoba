@@ -252,6 +252,13 @@
          (rt-ack-file-safe? ack (cp-str cfg 0 "environmentFile"))
          (rt-ack-file-safe? ack (cp-str cfg 0 "runtimeFile")))))
 
+;; The work directory and GitHub CLI are invocation arguments rather than
+;; config fields; check them before the archive creates files or pushes.
+(defn- rt-archive-paths-safe? [cfg :vector-i64 work :string gh :string] :bool
+  (let [ack (cp-str cfg 0 "archiveAck")]
+    (and (rt-ack-safe? cfg "") (cp-safe-absolute? work) (cp-safe-absolute? gh)
+         (rt-ack-dir-safe? ack work) (rt-ack-file-safe? ack gh))))
+
 ;; Archive an admitted head under the resident's local lock, then publish the
 ;; acknowledgement only after readback and a second admission check. The host
 ;; supplies a fresh, private work path and pinned GitHub executable/repository.
@@ -263,8 +270,7 @@
         parent (ln-field descriptor 7) task (ln-field descriptor 8) store (ln-field descriptor 9) ack (ln-field descriptor 10)
         exact (str "resident/archive " root " " author " " profile " " policy " " environment " " epoch-text
                    " " parent " " task " " store " " ack)]
-    (if (or (not (= descriptor exact)) (not (rt-ack-safe? cfg ""))
-            (= work ack) (= work (str ack ".tmp"))) "resident-archive/head-refused"
+    (if (or (not (= descriptor exact)) (not (rt-archive-paths-safe? cfg work gh))) "resident-archive/head-refused"
       (let [result (ga-archive work store root author profile policy environment (cp-int epoch-text) parent task repo gh)
             tree (ln-field result 2) outcome (ln-field result 3)
             valid (and (cp-hex? tree 40) (or (= outcome "acknowledged") (= outcome "unacknowledged"))
