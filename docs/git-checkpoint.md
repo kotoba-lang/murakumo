@@ -30,6 +30,28 @@ This is one Mac and local test data. It does not run the Git capture or
 restore, GitHub archive, authenticated bot, independent host or resource
 governor. The diagnostic runtime and compiler are not release qualified.
 
+## Mac local Git capture and restore diagnostic
+
+A later [single-Mac fixture](evidence/awai154-mac-checkpoint-end-to-end-20261103/receipt.json)
+ran the current checkpoint capture, verify, closure and restore functions with
+real local Git and the draft Darwin FS2 runtime. It reconstructed a separate
+repository with the same HEAD, staged and unstaged changes, and explicitly
+listed untracked file. Wrong policy, a corrupted block and an existing
+destination were refused. The [recovery fixture](evidence/awai154-mac-checkpoint-end-to-end-20261103/recovery.json)
+recorded and verified a signed successor locally.
+
+The fixture replaces only `cp-spawn` with a **privileged test-only adapter**
+that maps fixed virtual paths to a disposable local directory. This adapter is
+not a production guest capability. It does not verify GitHub storage, host
+process-tree control, independent nodes, bot execution or a resource governor.
+
+The checkpoint entry point now returns zero only for terminal success and
+nonzero for refusal or failure. Its status text remains the authoritative
+named outcome: a caller must treat traps and uncertain operations as unknown,
+not blindly retry them. This intentionally changes the prior exit contract;
+callers relying on zero for failures must be updated. Closure block lines are
+still emitted before the terminal `checkpoint/closure-complete` line.
+
 ## Existing implementation and the remaining gap
 
 | Component inspected | Existing behavior | This change / remaining work |
