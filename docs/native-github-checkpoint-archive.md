@@ -113,3 +113,11 @@ validation rejects noncanonical slash and dot-component spellings. The
 [isolated input-gate observation](evidence/awai150-archive-path-isolation-20261103/)
 includes negative controls. The host must still prevent filesystem aliases and
 concurrent path replacement, and this is not a production archive qualification.
+
+A [Mac local-Git observation](evidence/awai150-mac-local-archive-20261103/)
+exercised the current archive and restore path end-to-end using a synthetic
+privacy response, a local bare remote and a privileged test-only spawn adapter.
+It found that system Git config caused a refusal in the earlier diagnostic
+host. A newer candidate disables system Git config in that host, after which
+local archive and restore succeeded; repo-local helper configuration was still
+refused. Real GitHub authorization and production transport remain unqualified.
