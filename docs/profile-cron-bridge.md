@@ -333,6 +333,8 @@ A subsequent [local sequencing fixture](evidence/awai150-cron-cursor-sequence-20
 
 A refreshed [source composition check](evidence/awai150-current-source-check-20261103/README.md) includes the current controller, resident, recovery, checkpoint, archive, bridge and four called cursor functions. A bounded Mac bootstrap `check` accepted it and refused a control without `cc-advance`. The other dependency sources are historical and are not fully provenance-locked; the result is not a compiled image or a runnable gateway.
 
+That first refreshed source still had historical lease core and group functions; **do not use it as a runtime build input**. A [later source composition](evidence/awai150-lease-closure-refresh-20261103/README.md) includes the current lease core and group as well. Even this newer source is not a qualified runtime: other dependencies remain historical, and it has only passed source checking and a small extracted lease test.
+
 `docs/evidence/awai150-cron-work-binding-20261103.json` records native source-closure tests for the supported and unsupported profile cases, a wrong-work case and a bypass control. This does not prove an integrated inference turn.
 
 The native coordinator also checks that the two fresh archive staging paths do
