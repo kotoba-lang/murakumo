@@ -39,6 +39,13 @@
   (cp-git repo-dir (str "-c" (cp-a) "http.sslVerify=true" (cp-a) "-c" (cp-a)
                          "http.followRedirects=false" (cp-a) args)))
 
+;; Canonical lexical paths only; the private host must still prevent aliases,
+;; mounts and concurrent replacement. Do not stage inside or above the source
+;; store, or restore inside or above the archive staging directory.
+(defn- ga-path-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0)
+      (= (string-index-of b (str a "/")) 0)))
+
 ;; Never copy an unverified object. The caller keeps the source store
 ;; quiescent and the private task directory exclusively owned throughout.
 (defn- ga-copy [store :string out :string cid :string] :bool
@@ -74,7 +81,7 @@
 (defn- ga-archive [work :string store :string cid :string author :string profile :string policy :string environment :string
                    epoch :i64 parent :string task :string repo :string gh :string] :string
   (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? store))
-            (not (cp-safe-absolute? gh)) (= work store) (not (ga-repo? repo))
+            (not (cp-safe-absolute? gh)) (ga-path-overlap? work store) (not (ga-repo? repo))
             (not (cp-raw? cid)) (not (ga-verified? store cid author profile policy environment epoch parent task))) "archive/input-refused"
         (not (ga-private? gh repo)) "archive/private-repository-unverified"
         (not (= (cp-fs "I" work "") "1")) "archive/work-exists-or-unavailable"
@@ -127,7 +134,7 @@
 
 (defn- ga-restore [work :string dest :string cid :string author :string profile :string policy :string environment :string
                   epoch :i64 parent :string task :string repo :string gh :string] :string
-  (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest)) (= work dest)
+  (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest)) (ga-path-overlap? work dest)
             (not (cp-safe-absolute? gh)) (not (ga-repo? repo)) (not (cp-raw? cid))
             (cp-exists? dest) (cp-exists? (str dest ".partial"))) "archive-restore/input-refused"
         (not (ga-private? gh repo)) "archive-restore/private-repository-unverified"

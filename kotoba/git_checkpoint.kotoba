@@ -45,7 +45,10 @@
 (defn- cp-safe-absolute? [s :string] :bool
   (and (> (string-length s) 1) (= (string-substring s 0 1) "/")
        (= (field-problem s) "enroll/ok")
-       (< (string-index-of s "_SEP") 0) (< (string-index-of s "..") 0)))
+       (< (string-index-of s "_SEP") 0) (< (string-index-of s "..") 0)
+       (< (string-index-of s "//") 0) (< (string-index-of s "/./") 0)
+       (not (= (string-substring s (- (string-length s) 1) (string-length s)) "/"))
+       (not (= (string-substring s (- (string-length s) 2) (string-length s)) "/."))))
 
 ;; Intentionally bounded ASCII path profile. No dotfiles, control/delimiter
 ;; bytes, traversal, .git, aliases, duplicate or overlapping paths.
