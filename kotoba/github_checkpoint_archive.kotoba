@@ -118,6 +118,11 @@
 ;; This restores data, not a lease, a current head, or permission to run it.
 ;; The host isolates work and dest, validates the exact repo and executables,
 ;; and reconciles all partial/unknown outcomes before another attempt.
+(defn- ga-manifest-matches? [actual :vector-i64 expected :vector-i64] :bool
+  (let [found (cp-cid actual) canonical (cp-cid expected)
+        legacy (cp-cid (cp-bytes (str (cp-text expected) "\n")))]
+    (or (= found canonical) (= found legacy))))
+
 (defn- ga-restore [work :string dest :string cid :string author :string profile :string policy :string environment :string
                   epoch :i64 parent :string task :string repo :string gh :string] :string
   (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest)) (= work dest)
@@ -140,7 +145,7 @@
               tree (cp-line (cp-out tree-result))
               check (if (and (cp-ok? tree-result) (cp-hex? tree 40)) (cp-git readback "fsckARG_SEP--fullARG_SEP--strict") "refused")
               checkout (if (cp-ok? check) (cp-git readback "checkoutARG_SEP--quietARG_SEPFETCH_HEADARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
-              verified (and (cp-ok? checkout) (= (cp-cid (cp-read (str readback "/manifest.json"))) (cp-cid manifest))
+              verified (and (cp-ok? checkout) (ga-manifest-matches? (cp-read (str readback "/manifest.json")) manifest)
                             (ga-verified? blocks cid author profile policy environment epoch parent task))]
           (if (not verified) "archive-restore/readback-refused"
             (if (= (cp-materialize blocks (cp-load blocks cid) dest) "checkpoint/restored")

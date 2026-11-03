@@ -64,7 +64,7 @@ establishes full resident or GitHub integration.
 The draft also exports `github-checkpoint-restore-main`, which accepts a fresh
 private work path, a fresh destination, the independently pinned checkpoint
 identity and contract, repository and `gh` executable. It fetches the archive
-ref, checks Git integrity, compares the exact canonical manifest, verifies the
+ref, checks Git integrity, compares the manifest against canonical bytes or canonical bytes followed by one LF, verifies the
 signed checkpoint and closure, then materializes a new checkout. It does not
 select a current head, acquire a lease or start a bot. Failed and unknown work
 remains for host reconciliation. The host must isolate paths and constrain Git,
@@ -74,7 +74,10 @@ The [bounded local fixture](evidence/awai150-native-github-restore-20261103.json
 restored a signed synthetic checkpoint and refused wrong author, a tampered
 block, a non-private response and an existing destination. It stubs privacy,
 changes the remote to local Git and uses a byte-patched test compiler; it is
-not a real GitHub or production recovery qualification. An older operator-made
-fixture manifest with a trailing newline was refused: this candidate requires
-the exact native canonical manifest, so older archives need a separately
-validated migration or recovery path.
+not a real GitHub or production recovery qualification. A later [local fixture](evidence/awai150-native-github-restore-legacy-20261103.json)
+restored the operator-made synthetic manifest with one trailing LF as well as
+the native no-newline form. Two LFs and a tampered block were refused. This
+only addresses that specific manifest format: the earlier GitHub test ref uses
+`itonami/fixture`, while this candidate fetches `itonami/archive`; it does not
+automatically discover or migrate older refs. Real GitHub recovery and other
+legacy formats remain unqualified.
