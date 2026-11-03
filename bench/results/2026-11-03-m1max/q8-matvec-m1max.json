@@ -1,0 +1,162 @@
+{
+  "schema": "murakumo.kernel-bench.q8_0-matvec.v1",
+  "measured_at": "2026-11-03T21:20:07+0900",
+  "kernel": {
+    "op": "Q8_0 x Q8_0 matvec (ggml_vec_dot_q8_0_q8_0 regime), exact integer scales",
+    "shape": [
+      4864,
+      896
+    ],
+    "shape_from": "Qwen2.5-0.5B blk.*.ffn_up",
+    "weights": "synthetic 31-bit LCG bytes, packed 8 per i64",
+    "token_macs_qwen2_5_0_5b": 493961216
+  },
+  "reps": 300,
+  "rounds": 5,
+  "checksum": {
+    "reps_1": "256895886555412",
+    "reps_300": "182271268304401",
+    "mutant_reps_1": "127909983820564",
+    "gate": "all builds equal; mutant differs"
+  },
+  "builds": {
+    "amu-macos": {
+      "cli": "bin/amu",
+      "cli_sha256": "916f323731815994906926baf42fefb8c162b2f61e1be45f06f1169b30951a6a",
+      "amu_head": "1abb17f30cbc9e0f680a23b1aa8a48117195fc40"
+    },
+    "amu-static": {
+      "root": "seed/bootstrap/aarch64-linux-static-root.elf",
+      "root_sha256": "e140b8d285a2ce44bc691f91c2efa02db11469bf88a68381e5cae83ffae1ee97"
+    },
+    "c": {
+      "cc": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "O2": "-O2",
+      "O3": "-O3 -mcpu=native"
+    }
+  },
+  "host": {
+    "machine": "arm64",
+    "cpu": "Apple M1 Max",
+    "memsize": 34359738368,
+    "os": "26.4",
+    "loadavg_start_end": [
+      [
+        32.22998046875,
+        29.73583984375,
+        29.5830078125
+      ],
+      [
+        31.220703125,
+        29.60986328125,
+        29.54052734375
+      ]
+    ]
+  },
+  "results": {
+    "amu-macos": {
+      "ms_per_matvec_median": 2.4721,
+      "ms_per_matvec_range": [
+        2.4664,
+        2.4819
+      ],
+      "gmac_per_s": 1.763,
+      "kernel_only_decode_bound_tok_s": 3.57,
+      "wall_s": {
+        "0": [
+          0.018,
+          0.0177,
+          0.0179,
+          0.0179,
+          0.0187
+        ],
+        "300": [
+          0.7596,
+          0.7576,
+          0.76,
+          0.7594,
+          0.7633
+        ]
+      }
+    },
+    "c-O2": {
+      "ms_per_matvec_median": 1.4463,
+      "ms_per_matvec_range": [
+        1.4449,
+        1.4914
+      ],
+      "gmac_per_s": 3.013,
+      "kernel_only_decode_bound_tok_s": 6.1,
+      "wall_s": {
+        "0": [
+          0.0049,
+          0.0045,
+          0.0059,
+          0.0047,
+          0.0045
+        ],
+        "300": [
+          0.4383,
+          0.4383,
+          0.4396,
+          0.4405,
+          0.4519
+        ]
+      }
+    },
+    "c-O3": {
+      "ms_per_matvec_median": 1.4476,
+      "ms_per_matvec_range": [
+        1.4458,
+        1.6448
+      ],
+      "gmac_per_s": 3.011,
+      "kernel_only_decode_bound_tok_s": 6.09,
+      "wall_s": {
+        "0": [
+          0.0043,
+          0.0045,
+          0.0044,
+          0.0046,
+          0.0063
+        ],
+        "300": [
+          0.438,
+          0.4388,
+          0.4385,
+          0.4473,
+          0.4997
+        ]
+      }
+    },
+    "amu-static": {
+      "ms_per_matvec_median": 315.616,
+      "ms_per_matvec_range": [
+        304.8315,
+        316.5604
+      ],
+      "gmac_per_s": 0.014,
+      "kernel_only_decode_bound_tok_s": 0.03,
+      "wall_s": {
+        "0": [
+          0.2938,
+          0.2855,
+          0.2847
+        ],
+        "20": [
+          6.6061,
+          6.3821,
+          6.6159
+        ]
+      },
+      "report": "{:status :ok :result 131595493254121 :fuel {:initial 9007199254740991 :remaining 9007199232521269 :metered false}}",
+      "checksum_matches": true,
+      "reps": 20
+    }
+  },
+  "non_claims": [
+    "One kernel, not tokens: kernel_only_decode_bound_tok_s divides the per-token matvec MACs by this kernel's rate and ignores attention, norms, sampling, memory traffic beyond these weights and threads.",
+    "Single thread for every build; llama.cpp's CPU path uses NEON sdot and 8 threads.",
+    "Synthetic weights; no GGUF is read by the Kotoba builds."
+  ]
+}

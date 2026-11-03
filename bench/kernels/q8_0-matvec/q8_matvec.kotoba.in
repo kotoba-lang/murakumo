@@ -1,0 +1,97 @@
+(ns murakumo.q8-matvec (:export [main]))
+
+;; One Q8_0 x Q8_0 matrix-vector product, the operation that dominates a
+;; batch-1 decode step (llama.cpp's CPU path: ggml_vec_dot_q8_0_q8_0).
+;; Shape: Qwen2.5-0.5B ffn_up, @ROWS@ rows x @COLS@ columns, 32-element blocks.
+;; Weights are 8 signed bytes packed per i64 word, as stored in a GGUF row;
+;; block scales are fixed-point integers, so the result is exact and must
+;; equal q8_matvec.c bit for bit. Weights are synthetic (31-bit LCG): the
+;; native Mac host gives guests no filesystem, and a static image has 64 MiB.
+;; run.sh substitutes @ROWS@, @COLS@ and @REPS@.
+
+(defn- rows [] :i64 @ROWS@)
+(defn- cols [] :i64 @COLS@)
+(defn- reps [] :i64 @REPS@)
+(defn- blocks [] :i64 (quot (cols) 32))
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- pack-word [s :i64] :vector-i64
+  (loop [j 0 w 0 t s]
+    (if (= j 8) [w t]
+      (let [n (lcg t)]
+        (recur (+ j 1)
+               (bit-or w (i64-shift-left (bit-and (i64-shift-right n 16) 255) (* 8 j)))
+               n)))))
+
+(defn- fill-words [v :vector-i64 n :i64 seed :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [p (pack-word s)
+            u (vector-assoc! v i (vector-at p 0))]
+        (recur (+ i 1) (vector-at p 1))))))
+
+(defn- fill-scales [v :vector-i64 n :i64 seed :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            u (vector-assoc! v i (+ 1 (bit-and (i64-shift-right t 8) 1023)))]
+        (recur (+ i 1) t)))))
+
+(defn- fill-x [v :vector-i64 n :i64 seed :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            u (vector-assoc! v i (- (bit-and (i64-shift-right t 16) 255) 128))]
+        (recur (+ i 1) t)))))
+
+;; Eight signed bytes of one packed word against eight activation bytes.
+(defn- word-dot [w :i64 x :vector-i64 b :i64] :i64
+  (+ (+ (+ (* (i64-shift-right (i64-shift-left w 56) 56) (vector-at x b))
+           (* (i64-shift-right (i64-shift-left w 48) 56) (vector-at x (+ b 1))))
+        (+ (* (i64-shift-right (i64-shift-left w 40) 56) (vector-at x (+ b 2)))
+           (* (i64-shift-right (i64-shift-left w 32) 56) (vector-at x (+ b 3)))))
+     (+ (+ (* (i64-shift-right (i64-shift-left w 24) 56) (vector-at x (+ b 4)))
+           (* (i64-shift-right (i64-shift-left w 16) 56) (vector-at x (+ b 5))))
+        (+ (* (i64-shift-right (i64-shift-left w 8) 56) (vector-at x (+ b 6)))
+           (* (i64-shift-right w 56) (vector-at x (+ b 7)))))))
+
+;; One 32-element block: four packed words.
+(defn- block-dot [W :vector-i64 wi :i64 x :vector-i64 b :i64] :i64
+  (+ (+ (word-dot (vector-at W wi) x b)
+        (word-dot (vector-at W (+ wi 1)) x (+ b 8)))
+     (+ (word-dot (vector-at W (+ wi 2)) x (+ b 16))
+        (word-dot (vector-at W (+ wi 3)) x (+ b 24)))))
+
+(defn- row-dot [W :vector-i64 SW :vector-i64 x :vector-i64 SX :vector-i64 r :i64] :i64
+  (let [nb (blocks)]
+    (loop [k 0 acc 0]
+      (if (= k nb) acc
+        (recur (+ k 1)
+               (+ acc (* (* (block-dot W (* (+ (* r nb) k) 4) x (* k 32))
+                            (vector-at SW (+ (* r nb) k)))
+                         (vector-at SX k))))))))
+
+(defn- matvec [W :vector-i64 SW :vector-i64 x :vector-i64 SX :vector-i64 c0 :i64] :i64
+  (let [n (rows)]
+    (loop [r 0 c c0]
+      (if (= r n) c
+        (recur (+ r 1)
+               (bit-and (+ (* c 31) (row-dot W SW x SX r)) (mask48)))))))
+
+(defn main [] :i64
+  (let [nb (blocks)
+        nw (quot (* (rows) (cols)) 8)
+        W (vector-alloc nw)
+        SW (vector-alloc (* (rows) nb))
+        x (vector-alloc (cols))
+        SX (vector-alloc nb)
+        s1 (fill-words W nw 12345)
+        s2 (fill-scales SW (* (rows) nb) s1)
+        s3 (fill-x x (cols) s2)
+        s4 (fill-scales SX nb s3)]
+    (loop [i 0 c (bit-and s4 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (matvec W SW x SX c))))))
