@@ -136,6 +136,7 @@
 (defn- ga-restore [work :string dest :string cid :string author :string profile :string policy :string environment :string
                   epoch :i64 parent :string task :string repo :string gh :string] :string
   (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest)) (ga-path-overlap? work dest)
+            (ga-path-overlap? work (str dest ".partial"))
             (not (cp-safe-absolute? gh)) (not (ga-repo? repo)) (not (cp-raw? cid))
             (not (cp-absent? dest)) (not (cp-absent? (str dest ".partial")))) "archive-restore/input-refused"
         (not (ga-private? gh repo)) "archive-restore/private-repository-unverified"
