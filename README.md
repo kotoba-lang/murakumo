@@ -74,9 +74,10 @@ python3 -I bench/kernels/q8_0-matvec/run.py --amu ../amu --out q8-matvec-mymac.j
   Amu's own GPU route on macOS is planned, not built.
 - **Amu selfhost on the Mac.** `bin/amu`, the signed Mach-O that Amu builds
   of itself, compiles murakumo's Q8_0 kernel today at 1.7× the time of C. It
-  cannot yet read a model file, use floats in user code, SIMD, threads or the
-  GPU; [the roadmap](docs/inference-roadmap.md) changes the Kotoba spec and the
-  Amu compiler, stage by stage, until it can (JUN-804).
+  cannot yet read a model file, use SIMD, threads or the GPU, and its f32 code
+  is slow (stage S1, kotoba-lang/amu#1813, keeps f32 locals in FP registers and is
+  not yet adopted); [the roadmap](docs/inference-roadmap.md) changes the Kotoba
+  spec and the Amu compiler, stage by stage, until it can (JUN-804).
 
 Native agent development recovery: [signed Git checkpoints between nodes](docs/git-checkpoint.md)
 (JUN-156; two-host recovery drill, separate from automatic placement).
