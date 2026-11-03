@@ -24,4 +24,7 @@
          (not (jo-checkpoint-links? checkpoint "other" output-cid "proof" proof-cid))
          (not (jo-checkpoint-links? checkpoint "output" proof-cid "proof" output-cid))
          (not (jo-checkpoint-links? checkpoint "output" output-cid "output" proof-cid))
+         (jo-overlap? "results/a" "results/a/b")
+         (jo-overlap? "results/a/b" "results/a")
+         (not (jo-overlap? "results/a" "results/ab"))
          (= (en-b64-encode (jo-decode output)) output))))

@@ -4,7 +4,7 @@
 ;; Compose after fleet_job_node and git_checkpoint. The trusted host must own
 ;; both the capture tree and block store exclusively throughout this operation;
 ;; path-based metadata and reads do not bind against a concurrent replacement.
-(ns murakumo.fleet-job-output (:export [job-output-main job-output-proof-verify-main job-output-checkpoint-verify-main]))
+(ns murakumo.fleet-job-output (:export [job-output-main job-output-proof-verify-main job-output-checkpoint-verify-main job-output-stage-main]))
 
 (defn- jo-once? [s :string key :string] :bool
   (let [line (str "\n" key " ") all (str "\n" s) i (string-index-of all line)]
@@ -101,6 +101,45 @@
         sig (if valid (cp-str proof 0 "signature") "")
         log (str "receipt " receipt "\nsignature " sig "\noutput-base64url " (en-b64-encode output) "\n")]
     (if valid (jo-verdict log did job) "job-output/proof-invalid")))
+
+;; Host-owned private trees are required: these path operations do not pin
+;; identities against concurrent replacement. Existing or ambiguous paths are
+;; never overwritten, removed, or retried after a partial stage.
+(defn- jo-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0) (= (string-index-of b (str a "/")) 0)))
+
+(defn- jo-stage-path? [repo :string path :string] :bool
+  (and (checkpoint-path? path) (cp-real-parents? repo path false)
+       (cp-absent? (str repo "/" path))
+       (= (cp-git repo (str "ls-files" (cp-a) "--error-unmatch" (cp-a) "--" (cp-a) path)) "1\n")
+       (= (cp-git repo (str "check-ignore" (cp-a) "--" (cp-a) path)) "1\n")))
+
+(defn- jo-stage-file? [repo :string path :string data :vector-i64] :bool
+  (let [file (str repo "/" path)]
+    (and (cp-write file data) (= (cp-fs "H" file "644") "1")
+         (= (cp-meta-field (cp-fs "U" file "") 0) "420")
+         (= (cp-size file) (vector-count data)) (= (cp-fs "M" file "") "1")
+         (= (cp-fs "M" (cp-parent-dir file) "") "1"))))
+
+;; Stage the verified pair as private-repo untracked files. The caller then
+;; explicitly allowlists these paths in checkpoint capture; this function
+;; does not create or publish a checkpoint or authorize replay on failure.
+(defn job-output-stage-main [] :i64
+  (let [repo (jn-arg 0) store (jn-arg 1) output-cid (jn-arg 2) proof-cid (jn-arg 3)
+        did (jn-arg 4) job (jn-arg 5) out-path (jn-arg 6) proof-path (jn-arg 7)]
+    (if (or (not (cp-safe-absolute? repo)) (not (cp-safe-absolute? store)) (jo-overlap? repo store)
+            (not (jn-private-dir? repo)) (not (jn-private-dir? store))
+            (not (cp-raw? output-cid)) (not (cp-raw? proof-cid))
+            (not (checkpoint-path? out-path)) (not (checkpoint-path? proof-path)) (jo-overlap? out-path proof-path))
+      (let [x (jn-say "job-output/stage-config-refused")] 2)
+      (let [output (jo-block store output-cid) proof (jo-block store proof-cid)
+            blocks (and (jo-block? store output-cid output) (jo-block? store proof-cid proof))
+            verified (and blocks (= (jo-proof-verdict proof output did job) "job-output/verified"))
+            paths (and verified (jo-stage-path? repo out-path) (jo-stage-path? repo proof-path))]
+        (if (not paths) (let [x (jn-say "job-output/stage-refused")] 1)
+          (if (and (jo-stage-file? repo out-path output) (jo-stage-file? repo proof-path proof))
+            (let [x (jn-say "job-output/staged")] 0)
+            (let [x (jn-say "job-output/stage-unknown")] 1)))))))
 
 (defn job-output-proof-verify-main [] :i64
   (let [store (jn-arg 0) output-cid (jn-arg 1) proof-cid (jn-arg 2) did (jn-arg 3) job (jn-arg 4)]
