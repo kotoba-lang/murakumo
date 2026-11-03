@@ -24,17 +24,33 @@ its acceptance items are covered here:
      promise preempts it. Its own value is
      `lease-text(node, job id, slot 0, epoch 1, now + ttl)`, and the chosen
      value names the holder.
-  4. A node that does not hold the lease stops (`held-by`).
+  4. Before starting the cell, the node checks the chosen value is canonical,
+     names this job and slot, has the expected epoch and revision, names this
+     node, and is still within its lease deadline. A different holder stops
+     (`held-by`); absent, stale or mismatched values refuse dispatch.
+  5. The holder atomically creates and fsyncs a per-job attempt marker in its
+     private host-provisioned directory, then rechecks the lease deadline.
+     Existing or uncertain markers stop and require reconciliation.
+  6. The holder runs the cell with `cell-execute`: the release verdict
   5. The holder runs the cell with `cell-execute`: the release verdict
      again, the image layout, and podman with a fixed argv
      ([cell run](cell-run.md)).
-  6. It signs the agent-step receipt with the lease epoch
+  7. It signs the agent-step receipt with the lease epoch
      ([agent step](agent-step.md)).
 - **`verify`, on anyone:** it learns the chosen lease with `lease-round`, maps
+  the holder to its did through the trust, and requires the trusted caller's
+  expected job ID to match both the lease class and signed receipt. It also
+  checks the receipt node and signature. The signed time is the dispatch time,
+  not proof that the cell finished before lease expiry.
+- **The fleet token.** `run` takes an input file or empty argument at 16,
+  a fleet token file or empty argument at 17, and the required private attempt
+  directory at 18. `verify` takes a fleet token file or empty argument at 5,
+  followed by the independently determined expected job ID at 6.
   the holder to its did through the trust, and judges a node's receipt with
   `receipt-verdict`.
-- **The fleet token.** `run` (after its optional input file, argument 16)
-  and `verify` take an optional fleet token file as their last argument.
+- **The fleet token.** `run` takes an input file or empty argument at 16,
+  a fleet token file or empty argument at 17, and the required private attempt
+  directory at 18. `verify` takes an optional fleet token file.
   With it, their lease rounds carry the token's macs
   ([lease node, Fleet token](lease-node.md#fleet-token)). The runs below use
   none.
@@ -49,6 +65,51 @@ Three refactors make the composition possible:
 
 The agent-step, lease-node and cell-run gates were all rerun and give the
 same results.
+
+The host must provision one stable 0700 attempt root on a durable local
+filesystem, with trusted private ancestors and exclusive ownership. All local
+entry points for the same job must use that exact root, including after
+restart. A live host must supply `clock`, not a caller-selected numeric test
+time. The root is a host policy input, never job input. A successful atomic
+`mkdir` plus fsync of both the marker and parent precedes dispatch; no automatic
+path removes the marker. A preexisting marker, failed mkdir, or uncertain fsync
+does not authorize retry. A failed start therefore remains UNKNOWN until a
+separately authorized reconciliation. Disk-full and unbounded marker retention
+also need operator handling; do not silently evict deduplication history.
+
+In an isolated x86_64 Linux test, 20 simultaneous native attempts for the same
+ID produced one marker and 19 refusals. A missing fsync capability after mkdir
+left the marker and a subsequent process refused to retry. With three real
+authenticated loopback voters and a fixed clock, the first matching job reached
+a cell stub; a second process for that job stopped at the persisted marker.
+A 0755 root was refused. Voters shared one host, admission and cell execution
+were stubbed, and a real reboot or power-loss test was not performed.
+
+This guards repeated starts on one correctly configured host. It does not make
+different roots or separate hosts share a claim, terminate an old process after
+lease expiry, fence external effects, or implement outcome reconciliation. The
+distributed authority and effect sink still need their own fencing protocol.
+
+AWAI-147 adds a dispatch guard for the adopted lease: a live, canonical value
+must name this exact job, node, slot, epoch and revision. The old `rogue`
+argument cannot bypass it. The native `test-job-dispatch-lease` gate covers
+wrong holders/jobs, expiry, invalid or excessive deadlines and malformed
+values. A separate `jn-run` test used stubs for admission, the lease round and
+the cell: a non-holder with the legacy `rogue` argument did not reach the
+stubbed cell, while a guard-removal mutant did. These tests do not demonstrate
+a live quorum, nor do they establish effect-boundary fencing after dispatch.
+An additional isolated x86_64 Linux test ran the actual proposer, three
+authenticated loopback voter processes and `jn-run`, with separate durable
+voter files and a fixed test clock. Cell admission and cell execution were
+stubs: a preselected lease for the same node but a different job was refused;
+a lease for another node was refused even with the legacy `rogue` argument;
+and a matching live lease reached the cell stub. The voter processes and test
+token were stopped/cleared afterward. All voters shared one host, used no
+topology membership document, and no real cell, host admission, concurrent
+race or effect sink was tested.
+
+The 2026-10-23 transcript below remains historical; its rogue path is now a
+separate test-only mutant and has not been rerun as part of this change.
 
 ## Reproduce
 
@@ -71,12 +132,15 @@ pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
   for f in fleet_agent_step fleet_intent_core fleet_topology_verify fleet_lease_core fleet_lease_node fleet_job_node; do sed '1,/\]))$/d' kotoba/$f.kotoba; done
   echo '(defn main [] :i64 (if (= (typed-cap-call 38 :string :string "0") "voter") (lease-node-main) (job-node-main)))'
 } > "$G/job.kotoba"
+# Negative controls only; never deploy either mutant. The old `rogue`
+# argument no longer disables the production job node's dispatch guard.
+sed 's/(jn-lease-problem chosen node jid check-now)/(if (= (jn-arg 15) "rogue") "job\/lease-ok" (jn-lease-problem chosen node jid check-now))/' "$G/job.kotoba" > "$G/job-rogue.kotoba"
 # a verifier without the fence: no holder or epoch check
 sed -e 's/(not (= did holder-did)) "job\/not-the-holder"/false "job\/not-the-holder"/' \
     -e 's/(not (= epoch holder-epoch)) "job\/stale-epoch"/false "job\/stale-epoch"/' "$G/job.kotoba" > "$G/nofence.kotoba"
 podman run --rm --pull never --platform linux/arm64 --network none \
   -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
-    for c in job nofence; do
+    for c in job job-rogue nofence; do
       rm -f /gate/$c.elf
       ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
       chmod +x /gate/$c.elf
@@ -88,6 +152,7 @@ G=$1; MODE_B=$2; TAG=$3; B=$4
 R=$(cat $G/release.digest)
 IN=bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey
 PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+JID=$(printf '{"input":"%s","kind":"itonami.agent-step/1","policy":"%s","profile":"%s","rail":"murakumo"}' "$IN" "$PO" "$R" | sha256sum | cut -d' ' -f1)
 DA=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29
 DK=64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb
 PORTS=${B}1,${B}2,${B}3; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
@@ -100,9 +165,17 @@ for v in 1 2 3; do
 done
 sleep 0.3
 node() {  # name key fd admitted t mode
+  IMAGE=job; [ "$6" = rogue ] && IMAGE=job-rogue
+  mkdir -m 700 "$G/$TAG-$1-attempts"
+  env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman:/usr/bin/stat:/usr/bin/mkdir KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/$IMAGE.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 '' '' "$G/$TAG-$1-attempts" > $G/$TAG-$1.out 2>&1
+  env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman:/usr/bin/stat:/usr/bin/mkdir KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/$IMAGE.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 '' '' "$G/$TAG-$1-attempts" > $G/$TAG-$1.out 2>&1
   env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
     KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
-    $G/job.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 > $G/$TAG-$1.out 2>&1
+    $G/$IMAGE.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 > $G/$TAG-$1.out 2>&1
 }
 rm -f $G/$TAG-b70.out $G/$TAG-k16.out
 node b70 node.key site-a $DA 100 follow &
@@ -116,18 +189,22 @@ done
 for n in b70 k16; do
   if grep -q '^receipt ' $G/$TAG-$n.out; then
     env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-      $G/job.elf verify $PORTS $TRUST $G/$TAG-$n.out 200 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify $n's receipt: /"
+      $G/job.elf verify $PORTS $TRUST $G/$TAG-$n.out 200 '' "$JID" 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify $n's receipt: /"
   fi
 done
 EOF
 cat > "$G/verify-again.sh" <<'EOF'
 G=$1; IMG=$2; B=753; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
+R=$(cat "$G/release.digest")
+IN=bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey
+PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+JID=$(printf '{"input":"%s","kind":"itonami.agent-step/1","policy":"%s","profile":"%s","rail":"murakumo"}' "$IN" "$PO" "$R" | sha256sum | cut -d' ' -f1)
 TRUST=b70=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,k16=did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT
 for v in 1 2 3; do env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_43=127.0.0.1:$B$v $G/job.elf voter $B$v $G/rogue-v$v.state 5000 > /dev/null 2>&1 & done
 sleep 0.3
 for n in b70 k16; do
   env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-    $G/$IMG.elf verify ${B}1,${B}2,${B}3 $TRUST $G/rogue-$n.out 300 2>&1 | grep -v '^{:status' | sed "s/^/$IMG verifier, $n's receipt: /"
+    $G/$IMG.elf verify ${B}1,${B}2,${B}3 $TRUST $G/rogue-$n.out 300 '' "$JID" 2>&1 | grep -v '^{:status' | sed "s/^/$IMG verifier, $n's receipt: /"
 done
 wait
 EOF
@@ -155,8 +232,9 @@ nofence verifier, k16's receipt: holder b70 verdict job/confirmed
 - **honest.** b70 and k16 both go for the job's lease. k16 starts once
   b70's round is over, so its round adopts b70's chosen value. b70 runs the
   cell and signs. k16 stops, and nothing of it runs.
-- **rogue.** k16 runs the cell anyway and signs a receipt. The verifier
-  confirms only b70's, so the job is confirmed once although it ran twice.
+- **rogue.** The separate test-only mutant makes k16 run the cell anyway and
+  sign a receipt. The verifier confirms only b70's, so the job is confirmed
+  once although it ran twice. The unmodified node does not offer this bypass.
 - **verify-again.** The voters start again from their state files. The
   verifier still learns b70, and a verifier without the fence confirms both
   receipts.
@@ -220,6 +298,7 @@ G=$1; IMG=$2; TAG=$3; B=$4
 R=$(cat $G/release.digest)
 IN=bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey
 PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+JID=$(printf '{"input":"%s","kind":"itonami.agent-step/1","policy":"%s","profile":"%s","rail":"murakumo"}' "$IN" "$PO" "$R" | sha256sum | cut -d' ' -f1)
 DA=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29
 DK=64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb
 PORTS=${B}1,${B}2,${B}3; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
@@ -232,9 +311,10 @@ for v in 1 2 3; do
 done
 sleep 0.3
 node() {  # name key fd admitted allow t
+  mkdir -m 700 "$G/$TAG-$1-attempts"
   env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-    KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
-    $G/$IMG.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N $5 $G/release.json $G/layout-cell $PORTS $6 follow > $G/$TAG-$1.out 2>&1
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman:/usr/bin/stat:/usr/bin/mkdir KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/$IMG.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N $5 $G/release.json $G/layout-cell $PORTS $6 follow '' '' "$G/$TAG-$1-attempts" > $G/$TAG-$1.out 2>&1
 }
 node k16 k16.key site-b $DK 1 101   # k16's host grants the wasm class only
 node b70 node.key site-a $DA 2 102
@@ -242,7 +322,7 @@ for n in k16 b70; do
   echo "$TAG $n: $(grep -E '^(ineligible|lease|held-by|verdict|layout|refused) ' $G/$TAG-$n.out | tr '\n' ' ')$(grep -q '^receipt ' $G/$TAG-$n.out && echo '| receipt')"
 done
 env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-  $G/job.elf verify $PORTS $TRUST $G/$TAG-b70.out 200 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify b70's output: /"
+  $G/job.elf verify $PORTS $TRUST $G/$TAG-b70.out 200 '' "$JID" 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify b70's output: /"
 wait
 EOF
 podman machine ssh -- "sh $G/class.sh $G job class 754; sh $G/class.sh $G late late 755" 2>&1 | grep -v 'Copying\|Getting image\|Writing manifest'
@@ -338,6 +418,7 @@ cat > "$G/turn.sh" <<'EOF'
 G=$1; B=757
 R=$(cat $G/release-bot.digest); IN=$(cat $G/turn-input.cid)
 PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+JID=$(printf '{"input":"%s","kind":"itonami.agent-step/1","policy":"%s","profile":"%s","rail":"murakumo"}' "$IN" "$PO" "$R" | sha256sum | cut -d' ' -f1)
 DA=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29
 PORTS=${B}1,${B}2,${B}3; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
 N=1792500000000
@@ -349,16 +430,17 @@ for v in 1 2 3; do
 done
 sleep 0.3
 run() {  # tag input-file t
+  mkdir -m 700 "$G/turn-$1-attempts"
   env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-    KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
-    $G/job-2.elf run $R $IN $PO murakumo b70 $G/node.key site-a $DA $N 2 $G/release-bot.json $G/layout-bot $PORTS $3 follow $2 \
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman:/usr/bin/stat:/usr/bin/mkdir KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/job-2.elf run $R $IN $PO murakumo b70 $G/node.key site-a $DA $N 2 $G/release-bot.json $G/layout-bot $PORTS $3 follow $2 '' "$G/turn-$1-attempts" \
     > $G/turn-$1.out 2>&1
   echo "$1: $(grep -E '^(job input/|lease |held-by |verdict |layout )' $G/turn-$1.out | tr '\n' ' ')$(grep -q '^receipt ' $G/turn-$1.out && echo '| receipt')"
 }
 run changed-input $G/turn-input-changed.txt 100
 run turn $G/turn-input.txt 101
 env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-  $G/job-2.elf verify $PORTS $TRUST $G/turn-turn.out 200 2>&1 | grep -v '^{:status' | sed "s/^/verify the turn's receipt: /"
+  $G/job-2.elf verify $PORTS $TRUST $G/turn-turn.out 200 '' "$JID" 2>&1 | grep -v '^{:status' | sed "s/^/verify the turn's receipt: /"
 wait
 EOF
 podman machine ssh -- "sh $G/turn.sh $G" 2>&1 | grep -v 'Copying\|Getting image\|Writing manifest'
