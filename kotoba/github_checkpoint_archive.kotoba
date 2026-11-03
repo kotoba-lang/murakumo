@@ -2,7 +2,7 @@
 ;; its pinned closure. The host owns the filesystem scope, Git/GH executables,
 ;; credentials, environment, egress and data classification. This component
 ;; archives immutable verified objects; it does not grant a lease or launch.
-(ns murakumo.github-checkpoint-archive (:export [github-checkpoint-archive-main]))
+(ns murakumo.github-checkpoint-archive (:export [github-checkpoint-archive-main github-checkpoint-restore-main]))
 
 ;; Restrict the supported repository spelling to an unambiguous ASCII subset.
 ;; The host independently pins the expected repository and verifies its auth
@@ -113,3 +113,42 @@
 (defn github-checkpoint-archive-main [] :i64
   (cp-say (ga-archive (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
                       (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9) (cp-arg 10) (cp-arg 11))))
+
+;; Fetch only a host-pinned signed checkpoint into fresh private staging.
+;; This restores data, not a lease, a current head, or permission to run it.
+;; The host isolates work and dest, validates the exact repo and executables,
+;; and reconciles all partial/unknown outcomes before another attempt.
+(defn- ga-restore [work :string dest :string cid :string author :string profile :string policy :string environment :string
+                  epoch :i64 parent :string task :string repo :string gh :string] :string
+  (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest)) (= work dest)
+            (not (cp-safe-absolute? gh)) (not (ga-repo? repo)) (not (cp-raw? cid))
+            (cp-exists? dest) (cp-exists? (str dest ".partial"))) "archive-restore/input-refused"
+        (not (ga-private? gh repo)) "archive-restore/private-repository-unverified"
+        (not (= (cp-fs "I" work "") "1")) "archive-restore/work-exists-or-unavailable"
+        (not (= (cp-fs "H" work "700") "1")) "archive-restore/work-permissions"
+        :else
+        (let [readback (str work "/readback") blocks (str readback "/blocks")
+              remote (str "https://github.com/" repo ".git") ref (str "refs/heads/itonami/archive/" cid)
+              manifest (cp-bytes (str "{\"author\":\"" author "\",\"environment\":\"" environment
+                "\",\"epoch\":" epoch ",\"kind\":\"itonami.github-checkpoint-archive/1\",\"parent\":\"" parent
+                "\",\"policy\":\"" policy "\",\"profile\":\"" profile "\",\"root\":\"" cid "\",\"task\":\"" task "\"}"))
+              created (= (cp-fs "I" readback "") "1")
+              init (if created (cp-git readback "initARG_SEP--quietARG_SEP--template=") "refused")
+              fetch (if (and (cp-ok? init) (ga-config-safe? readback))
+                      (ga-git readback (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
+              tree-result (if (cp-ok? fetch) (cp-git readback "rev-parseARG_SEPFETCH_HEAD^{tree}") "refused")
+              tree (cp-line (cp-out tree-result))
+              check (if (and (cp-ok? tree-result) (cp-hex? tree 40)) (cp-git readback "fsckARG_SEP--fullARG_SEP--strict") "refused")
+              checkout (if (cp-ok? check) (cp-git readback "checkoutARG_SEP--quietARG_SEPFETCH_HEADARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
+              verified (and (cp-ok? checkout) (= (cp-cid (cp-read (str readback "/manifest.json"))) (cp-cid manifest))
+                            (ga-verified? blocks cid author profile policy environment epoch parent task))]
+          (if (not verified) "archive-restore/readback-refused"
+            (if (= (cp-materialize blocks (cp-load blocks cid) dest) "checkpoint/restored")
+              (str "archive-restore/restored " cid " " tree)
+              "archive-restore/materialize-unknown")))))
+
+(defn github-checkpoint-restore-main [] :i64
+  (let [result (ga-restore (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
+                           (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9) (cp-arg 10) (cp-arg 11))
+        out (cp-say result)]
+    (if (= (string-index-of result "archive-restore/restored ") 0) 0 1)))
