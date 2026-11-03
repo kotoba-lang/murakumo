@@ -28,6 +28,22 @@
     (and (cp-safe-absolute? ack) (not (= ack config)) (not (= tmp config))
          (not (nc-resident-path? cfg ack)) (not (nc-resident-path? cfg tmp)))))
 
+;; Archive staging directories must not consume each other or a path needed
+;; for dispatch/cursor/archive recovery. Compare path components, not textual
+;; prefixes ("/work-a" is separate from "/work"). The host still prevents
+;; symlinks, hard links and concurrent modification of its private scope.
+(defn- nc-path-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0)
+      (= (string-index-of b (str a "/")) 0)))
+
+(defn- nc-work-paths-safe? [before :string after :string marker :string cursor :string ack :string] :bool
+  (let [pending (str cursor ".pending") ack-tmp (str ack ".tmp")]
+    (not (or (nc-path-overlap? before after)
+             (nc-path-overlap? before marker) (nc-path-overlap? after marker)
+             (nc-path-overlap? before pending) (nc-path-overlap? after pending)
+             (nc-path-overlap? before ack-tmp) (nc-path-overlap? after ack-tmp)
+             (nc-path-overlap? marker pending) (nc-path-overlap? marker ack-tmp)))))
+
 ;; The marker is created and synced before inference can be submitted. A
 ;; leftover or partial marker is UNKNOWN; never infer failure and retry. The
 ;; enclosing task lock and host-owned directory exclude cooperating writers.
@@ -73,6 +89,7 @@
       (cond (= plan "cursor/idle") "cron-resident/idle"
             (not (= plan "bridge/ok")) "cron-resident/plan-refused"
             (or (not (cp-hex? job 64))
+                (not (nc-work-paths-safe? work-before work-after marker cursor-path (cp-str cfg 0 "archiveAck")))
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path marker)
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".pending"))
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-before)
