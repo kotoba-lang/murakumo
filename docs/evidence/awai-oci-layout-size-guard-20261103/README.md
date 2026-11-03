@@ -1,36 +1,30 @@
-# Refuse large descriptors in the whole-read OCI verifier
+# Bounded OCI layout reads: local diagnostic
 
-`fleet_oci_layout` reads each descriptor's blob into a byte value and then a
-`vector-i64` before hashing. That path is not suitable for an 8.6 GB model.
-It now refuses declared blobs over 4 MiB before requesting their existence or
-contents, with `layout/blob-too-large`. This is an intentionally restrictive
-compatibility change: larger images that previously reached the reader will
-now be refused. The threshold is a policy limit for this draft whole-read
-path, not a claim about all OCI or a measured safe limit for every host.
+The draft layout verifier refuses descriptors larger than 4 MiB. FS2 F obtains
+the actual file size before allocation; FS2 E reads at most 256 KiB per call,
+and the guest checks the response framing and exact length. The OCI marker and
+index have separate 1 KiB and 1 MiB bounds. FS2 F/E support is now required;
+this is a compatibility change. Large model weights require a separate artifact
+path, rather than this image-layer verifier.
 
-A local Mac native fixture extracted the actual `ol-blob-code` and
-`ol-reason` functions. Its existence and read providers were stubs. It
-accepted the maximum-size descriptor far enough to report the stubbed missing
-file, refused one byte above the limit and the observed 8.6 GB size, and
-preserved malformed-digest and negative-size refusals. It also accepted a
-matching empty blob and rejected a mismatched declared size with stubbed digest
-and read functions. A control without the
-size guard failed the same gate. No large file, model or registry was read.
-A bounded native compiler source check also accepted a local unity composition
-of this complete layout source with the existing SHA-2, JSON reader and OCI
-artifact source. It did not compile or execute the complete layout component;
-the dependency closure and real provider remain unqualified.
+On a Mac, a native diagnostic executable composed the actual changed layout
+source with the existing SHA-2, JSON, and OCI sources and the draft Darwin FS2
+provider. It returned success for a small valid OCI layout, digest mismatch for
+a corrupted layer, size mismatch for a sparse 8,595,477,990-byte layer whose
+descriptor claimed nine bytes, and index mismatch for a sparse index of that
+size. A separate native fixture checked an empty file, a 262,145-byte file
+across the chunk boundary, rejection above a four-byte limit, and a sparse
+8,595,477,990-byte file. The sparse files occupied no model-sized disk space.
+A source check accepted the full composition. These are local diagnostics, not
+validation of a production provider, registry, or fleet deployment.
 
-This is not a bounded untrusted-file reader: the descriptor may lie, the
-underlying file may change after the check, and the layout/index reads are
-not bounded here. It is not a complete OCI installer, verifier or sandbox.
-The path must remain unavailable for untrusted or large layouts until the
-provider enforces bounds and verification and consumption share a qualified
-stable snapshot. Use the fune streaming work for that integration.
+The bounded reader is not a snapshot: metadata, ranges, repeated manifest reads
+and later import may see different file versions. Same-size concurrent changes
+and provider behavior remain unqualified. Do not treat this as a verifier for
+untrusted layouts until a qualified stable snapshot is shared with consumption.
 
-| Artifact | SHA-256 |
+| Diagnostic artifact | SHA-256 |
 | --- | --- |
-| changed source | `4b190bee9d5e2947110dd3aa0a2219e4bef9245c9d0606891653a67db1c44410` |
-| signed native fixture | `a1d69cca5ef09fdf942541e9e87dab369e6995b4dc20c06996d1d8a137815756` |
-| signed guard-removed control | `965a5e7c4075c9fc1f47b866976067278a1ebd3e51b208cde77d1a617f30727f` |
-| Mac bootstrap compiler | `920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6` |
+| changed layout source | `0c7874dfae726a69904519f499fa62c8e9677171bc2a0623575df94af17dcbf7` |
+| signed complete-layout fixture | `f015612be5c4d10338335283553bdf90c1d48823b45372bbfd799ea4f0be16be` |
+| signed bounded-reader fixture | `842b1270bb0d9a7d1813aba5cf12c05fa03428f50270b90ea2a009eab163d44e` |
