@@ -1,0 +1,113 @@
+(ns awai150-repo-sync-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+
+(defn- cp-sep [s :string] :string (str s "_SEP"))
+
+(defn- cp-read [p :string] :vector-i64 (cp-bytes "fixture response"))
+(defn- cp-exists? [p :string] :bool false)
+(defn- cp-cid [b :vector-i64] :string "fixture-cid")
+(defn- cp-str [b :vector-i64 o :i64 k :string] :string (cond (= k "profile") "fixture" (= k "task") "task" (= k "previous") "none" (= k "model") "fixture" :else ""))
+(defn- cp-num [b :vector-i64 o :i64 k :string] :i64 1)
+(defn- cp-fs [op :string p :string tail :string] :string
+ (if (or (= op "D") (= op "B"))
+   (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op p "\u0000" tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) ""))
+   "1"))
+(defn- cp-absent? [p :string] :bool (= (cp-fs "D" p "") "0"))
+(defn- cp-mkdir [s :string] :bool true)
+(defn- cp-parent-dir [s :string] :string "/tmp")
+(defn- cp-write [p :string b :vector-i64] :bool (= (cp-fs "B" p (cp-text b)) (cp-text b)))
+(defn- json-canonical? [b :vector-i64] :bool true)
+(defn- pr-runtime? [a :vector-i64 b :vector-i64 c :vector-i64] :bool true)
+(defn- pr-growth-runtime? [a :vector-i64 b :vector-i64 c :vector-i64 d :vector-i64 e :vector-i64] :bool false)
+(defn- pr-local-mtp? [b :vector-i64] :bool false)
+(defn- pr-answer [b :vector-i64] :string "answer")
+(defn- pr-mtp-response? [a :vector-i64 b :vector-i64] :bool true)
+(defn- pr-json-quote [s :string] :string "quoted")
+(defn- sha256-hex [b :vector-i64] :string "1111111111111111111111111111111111111111111111111111111111111111")
+(defn- pr-unit-state [s :string] :string (let [z (typed-cap-call 37 :string :string "ENTERED-DISPATCH\n")] "exited"))
+(defn- pr-run-decision [s :string a :bool b :bool c :bool d :bool] :string "profile/reuse-unit")
+(defn- pr-prepare-submit [a :string b :string c :vector-i64] :bool true)
+(defn- pr-submit [a :string b :string c :string d :i64 e :vector-i64] :bool true)
+(defn- pr-wait [a :string b :string c :vector-i64] :bool true)
+(defn- pr-mtp-compact [a :vector-i64 b :vector-i64] :vector-i64 b)
+(defn- pr-replicable? [b :vector-i64] :bool true)
+(defn- pr-save-output [p :string b :vector-i64 c :string] :bool true)
+(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64] :string
+  (let [dir (str repo "/profile") meta (cp-read (str dir "/itonami.edn")) role (cp-read (str dir "/SOUL.md"))
+        growth (= (cp-str runtime 0 "profile") "awai-growth-steward")
+        work-path (str dir "/tasks/first-turn.md") context-path (str dir "/context.md")
+        work (if (and growth (cp-exists? work-path)) (cp-read work-path) (vector-alloc 0))
+        context (if (and growth (cp-exists? context-path)) (cp-read context-path) (vector-alloc 0))
+        state (cp-read (str repo "/state.json")) task (cp-str runtime 0 "task")]
+    (cond (or (< seconds 1) (> seconds 840)) "profile/budget-refused"
+          (not (or (pr-runtime? runtime meta role) (pr-growth-runtime? runtime meta role work context))) "profile/runtime-refused"
+          (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
+              (not (= (cp-str state 0 "task") task))) "profile/state-refused"
+          :else
+          (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
+                prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
+                linked (if (= next 1) (= previous "none")
+                         (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))
+                              (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime prior))))]
+            (if (not linked) "profile/previous-output-mismatch"
+              (let [instruction (if growth
+                       (str "Read-only AWAI growth steward task " task ", step " next ".\n"
+                         (cp-text work) "\n\nBounded source snapshot, not live observations:\n" (cp-text context)
+                         "\nAll tools are denied. Do not change files, publish, merge or contact anyone."
+                         " Do not invent observations or report completion of unperformed work."
+                         " Use a concise six-row table with next job, evidence and stop condition for each role."
+                         " Use each full role ID. Avoid repeated evidence and source snapshot details."
+                         " Keep the whole answer under 450 tokens. End with brief unknowns and next handoff.")
+                       (if (= limit 2) (str "Read-only checkpoint recovery task " task ", step " next
+                       ". Continue from the preceding assistant result, if present. Propose one next read-only verification."
+                       " Do not call tools, change files, publish, merge or contact anyone. Reply in at most 16 tokens.")
+                       (str "Resident accountability-steward proposal turn " next ", task " task
+                         ". Follow the profile's propose-only goal and continue from the preceding proposal."
+                         " State one concrete next verification and what evidence would decide it."
+                         " You have no current external observations; do not invent progress or completion."
+                         " All tools are denied. Do not change files, publish, merge or contact anyone.")))
+                    body (str "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":" tokens ",\"messages\":["
+                      "{\"content\":" (pr-json-quote (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))) ",\"role\":\"system\"},"
+                      (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
+                      "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
+                      ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}")
+                    id (sha256-hex (cp-bytes (if (pr-local-mtp? runtime)
+                         (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
+                         body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
+                    request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
+                    marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
+                    request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
+                    known (and (or (= request-status "0") (= request-status "1"))
+                               (or (= marker-status "0") (= marker-status "1"))
+                               (or (= response-status "0") (= response-status "1")))
+                    present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    decision (if known (pr-run-decision (pr-unit-state unit) present matches (= marker-status "1") (= response-status "1")) "profile/submission-unknown")
+                    submitted (cond (= decision "profile/reuse-unit") true
+                                    (= decision "profile/new-unit")
+                                    (and (pr-prepare-submit request marker body-bytes)
+                                         (pr-submit unit request response seconds runtime))
+                                    :else false)]
+                (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
+                  (let [raw (cp-read response)
+                        answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
+                        cid (cp-cid answer)
+                        outdir (str repo "/outputs") output (str outdir "/" next ".json")
+                        newstate (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
+                        tmp (str repo "/state.json.tmp")
+                        usable (pr-replicable? answer)
+                        ok (and usable
+                                (cp-mkdir outdir) (= (cp-fs "M" repo "") "1")
+                                (pr-save-output output answer cid) (cp-write tmp newstate))
+                        rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
+                        sync (if (= rename "1") (cp-fs "M" repo "") "0")]
+                    (if (not usable) "profile/response-not-replicable"
+                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))
+
+(defn main [] :i64
+ (let [repo (typed-cap-call 38 :string :string "0")
+       result (pr-step-range repo (cp-bytes "runtime") (str repo "/cache") 1 20 2 16)
+       out (typed-cap-call 37 :string :string (str result "\n"))]
+   (if (= result "profile/state-publication-unknown") 2 0)))

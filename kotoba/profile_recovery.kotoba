@@ -209,6 +209,10 @@
           (not (or (pr-runtime? runtime meta role) (pr-growth-runtime? runtime meta role work context))) "profile/runtime-refused"
           (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
+          ;; An interrupted prior publication leaves a durable candidate whose
+          ;; outcome is unknown. Never dispatch inference or overwrite it on a
+          ;; retry; the private host must reconcile it under the same lock.
+          (not (cp-absent? (str repo "/state.json.tmp"))) "profile/state-publication-unknown"
           :else
           (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
                 prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
