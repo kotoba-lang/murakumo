@@ -23,8 +23,16 @@ and later import may see different file versions. Same-size concurrent changes
 and provider behavior remain unqualified. Do not treat this as a verifier for
 untrusted layouts until a qualified stable snapshot is shared with consumption.
 
+The manifest is now hashed again when its bytes are read for parsing and when
+its config digest is read separately for launch. In a second full-source Mac
+fixture, the valid layout and config passed, an invalid manifest digest was
+rejected, and a same-length valid JSON manifest with a changed config digest
+was refused after the earlier valid check. This narrows a read-to-read gap; it
+does not create an atomic snapshot for the entire layout or the later import.
+
 | Diagnostic artifact | SHA-256 |
 | --- | --- |
-| changed layout source | `0c7874dfae726a69904519f499fa62c8e9677171bc2a0623575df94af17dcbf7` |
-| signed complete-layout fixture | `f015612be5c4d10338335283553bdf90c1d48823b45372bbfd799ea4f0be16be` |
+| current layout source | `d7db899f0d0aa903caef1b2aca82b6e875ea2fa75974ce70b150ff188dc47a74` |
+| signed manifest authentication fixture | `513ef3e8f1140aa36ef8672f8c1231c70da97617ec1e01e119de1254b18341b5` |
+| signed original complete-layout fixture | `f015612be5c4d10338335283553bdf90c1d48823b45372bbfd799ea4f0be16be` |
 | signed bounded-reader fixture | `842b1270bb0d9a7d1813aba5cf12c05fa03428f50270b90ea2a009eab163d44e` |
