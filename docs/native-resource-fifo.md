@@ -17,9 +17,15 @@ rename and directory fsync. After syncing the new queue, the intent is renamed
 to `queue.last` and the directory is synced again. A surviving intent or pending file blocks ordinary
 operations. The intent contains both the original and target queue. Under the
 same lock, explicit `recover` archives the intent only when it describes one
-valid append or single removal, no pending file remains, and the queue already
-equals the target. Recovery re-syncs the directory and never applies the
-transition again. Invalid, older-format or unresolved intents remain blocked
+valid append or single removal and no pending file remains. If the queue equals
+the target, recovery reports `fifo/recovered`; if it still equals the original,
+recovery reports `fifo/aborted`. Both paths sync the visible queue, intent and
+directory before archiving the intent, then sync the directory again. Neither
+path applies the transition again or authorizes a workload retry: a trusted
+host must reconcile the operation identity and any external workload separately.
+After a lost recovery response, `fifo/no-intent` alone does not distinguish
+an archived committed transition from an archived aborted one.
+Invalid, older-format or unresolved intents remain blocked
 for trusted-host reconciliation. The source requires a host-owned,
 non-aliased directory; it does not make an untrusted directory safe or
 establish power-loss durability on every filesystem.
