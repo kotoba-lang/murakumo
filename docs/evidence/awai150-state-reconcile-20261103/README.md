@@ -60,6 +60,26 @@ model response, request and task were synthetic; this is not an integrated
 resident turn, Mac runtime test, real model or GitHub recovery. Power loss,
 concurrency, state persistence, process-tree and fault injection remain open.
 
+## Follow-up: complete profile-step recovery path
+
+The `fullstep` fixture composes the current profile-recovery functions with
+111 required functions from the earlier current-cron native closure. On the
+same bounded Linux ARM64 VM, it checked a real canonical profile, pinned
+profile and role hashes, prior state, deterministic reconstruction of the
+request and its cache identity, actual systemd unit state, real JSON/SHA-256/
+CID and FS2, using a synthetic MTP response. A test-owned exited transient unit
+had the same deterministic name as the request. The recovered state linked to
+the compact output CID and the temporary state disappeared. The spawn grant
+allowed `systemctl` alone, so it did not authorize model dispatch.
+
+On that same path five independent changes to request, dispatch marker,
+response, output and candidate state each returned
+`profile/state-publication-unknown`, preserving original state and the temp
+file. The test unit was stopped and no matching transient service remained.
+This is the actual step/reconciliation path with synthetic files, not a full
+resident/lease/GitHub turn or actual MTP inference. The remaining limitations
+above still apply.
+
 The source SHA-256 is
 `e27335e7f421657c2872533816a3080ab4f0b269d4b897aa81f5dba640e9ed21`;
 the diagnostic compiler SHA-256 is
@@ -71,3 +91,4 @@ the diagnostic compiler SHA-256 is
 | step | `5a7f57f324321c4f8ac80c04489ebffbee75ff2feebfbd88f2e3026da38c511a` | `ddbda3de78f14c3fb3ac3588ee9115d9f042679fdbf89ae52fd5b9ac34ea7aa3` |
 | CID and JSON | `a4963c3078eef61fd6a8093525bdff0693c7ae03b5cfefae8741f86a923f3808` | `bedb2d7ac213e0ebbe65d119d484cb61e68590a077c0aec27bce9e8c4b3b08c0` |
 | systemd status | `ba53be3f39aa079957f723415f4bbbabb5beea3a7a70d0fc1490b4aaa9b29fa0` | `094917bb9b591da9e959972021fef049fb1b35eb7fea37046e5dce0c01bd06f8` |
+| complete step | `509d99bd67cc2710197993002f319a988e8ddaad5241702cb0ba864b22a80fd1` | `769469298692aa7f772f318bee141d0207b19460e185aefa1801741a26e0d64e` |
