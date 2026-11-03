@@ -1,0 +1,31 @@
+(ns marker-fs (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- cp-fs [op :string path :string tail :string] :string (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))] (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) "?")))
+(defn- cp-read [p :string] :vector-i64 (cp-bytes (cp-fs "A" p "")))
+(defn- cp-cid [b :vector-i64] :string (cp-text b))
+(defn- pr-unit-state [unit :string] :string unit)
+(defn- pr-unit-active? [s :string] :bool
+  (or (= s "start-pre") (= s "start") (= s "start-post") (= s "running")))
+
+(defn- pr-run-decision [status :string request-exists :bool request-matches :bool
+                       marker-exists :bool marker-matches :bool response-exists :bool] :string
+  (cond (and (or (pr-unit-active? status) (= status "exited"))
+             request-exists request-matches marker-exists marker-matches) "profile/reuse-unit"
+        (and (= status "unit/not-found") (not request-exists)
+             (not marker-exists) (not response-exists)) "profile/new-unit"
+        :else "profile/submission-unknown"))
+
+(defn- probe [unit :string] :string
+ (let [repo "/case" request "/case/request" marker "/case/marker" response "/case/response" body-bytes (cp-bytes "request-data")
+                    request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
+                    pending-status (cp-fs "D" (str repo "/state.json.tmp") "")
+                    known (and (or (= request-status "0") (= request-status "1"))
+                               (or (= marker-status "0") (= marker-status "1"))
+                               (or (= response-status "0") (= response-status "1")))
+                    present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    marked (= marker-status "1")
+                    marker-matches (if marked (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n") false)
+                    decision (if (and known (= pending-status "0"))
+                               (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")] decision))
+(defn main [] :i64 (let [u (typed-cap-call 38 :string :string "0") v (probe u) x (typed-cap-call 37 :string :string (str v "\n"))] 0))
