@@ -88,16 +88,20 @@
     (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
 (defn- cp-put [store :string b :vector-i64] :string
   (let [cid (cp-cid b) p (str store "/" cid) status (cp-fs "D" p "")]
-    (if (or (> (vector-count b) 131072)
-            (cond (= status "1") (not (= (cp-cid (cp-read p)) cid))
-                  (= status "0") (not (cp-write p b))
-                  :else true)) "" cid)))
+    ;; Even an existing block may be the unsynced remnant of a previous
+    ;; writer. Verify its actual size and bytes, then sync it and its parent.
+    ;; A failed read must never stand in for the empty block.
+    (if (and (<= (vector-count b) 131072)
+             (or (= status "1") (and (= status "0") (cp-write p b)))
+             (cp-block? store cid) (= (cp-fs "M" p "") "1")
+             (= (cp-fs "M" store "") "1")) cid "")))
 (defn- cp-load [store :string cid :string] :vector-i64
   (if (and (cp-raw? cid) (cp-exists? (str store "/" cid))) (cp-read (str store "/" cid)) (vector-alloc 0)))
 (defn- cp-block? [store :string cid :string] :bool
   (let [path (str store "/" cid) size (if (cp-raw? cid) (cp-size path) -1)
         b (if (and (>= size 0) (<= size 131072)) (cp-range path 0 size) (vector-alloc 0))]
     (and (cp-raw? cid) (>= size 0) (<= size 131072) (= (vector-count b) size)
+         (or (> size 0) (cp-empty-readable? path))
          (= (cp-size path) size) (= (cp-cid b) cid))))
 (defn- cp-str [b :vector-i64 o :i64 k :string] :string
   (let [v (json-member b o k)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
@@ -205,6 +209,12 @@
                                          (= (cp-fs "M" (cp-parent-dir p) "") "1"))))
             (recur (+ i 1)) false))))))
 (defn- cp-range [p :string off :i64 n :i64] :vector-i64 (cp-read-op p "E" (str off ":" n)))
+;; A zero-length reply otherwise loses the distinction between a valid FS2
+;; frame and an unavailable read. Require the complete empty response frame.
+(defn- cp-empty-readable? [p :string] :bool
+  (let [r (typed-cap-call :fs/app-data :string :bytes (cp-frame "E" p "0:0"))]
+    (and (= (bytes-count r) 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70)
+         (= (bytes-at r 2) 83) (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))))
 ;; FS2 read failure and a legitimate empty file both yield an empty vector.
 ;; Check regular-file size before and after the bounded read so failure to
 ;; read a nonempty source cannot silently become an empty checkpoint block.
@@ -214,7 +224,8 @@
     (if (and (>= n 0) (<= n 131072)) (cp-range p 0 n) (vector-alloc 0))))
 (defn- cp-capture-read-valid? [p :string b :vector-i64] :bool
   (let [n (cp-size p)]
-    (and (>= n 0) (<= n 131072) (= n (vector-count b)))))
+    (and (>= n 0) (<= n 131072) (= n (vector-count b))
+         (or (> n 0) (cp-empty-readable? p)))))
 (defn- cp-capture-block [store :string path :string] :string
   (let [b (cp-capture-read path)]
     (if (cp-capture-read-valid? path b) (cp-put store b) "")))
