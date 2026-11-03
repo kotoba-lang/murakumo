@@ -149,7 +149,11 @@
                      (= (typed-cap-call 35 :string :string (str dir "FSYNC_SEP")) "1"))
               "job/attempt-recorded" "job/attempt-unknown")))))))
 
-(defn- jn-run [] :i64
+;; The default entry point always passes the exact CID-checked input. A
+;; separately composed adapter may supply a source payload only after it has
+;; verified the input envelope and source together. The job identity, attempt
+;; marker, lease and receipt still bind to the original envelope.
+(defn- jn-run-with-source [source :string source-admitted :bool] :i64
   (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
         node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
         now (if (= (jn-arg 9) "clock") (jn-int (typed-cap-call 7 :string :string "wall")) (jn-int (jn-arg 9)))
@@ -187,28 +191,14 @@
                     (cond (not (= attempt "job/attempt-recorded")) (let [x (jn-say attempt)] 1)
                           (not (= still-held "job/lease-ok")) (let [x (jn-say still-held)] 1)
                           :else
-                          (let [r (cell-execute index profile "container" layout state allowed itext)]
+                          (let [r (cell-execute index profile "container" layout state allowed (if source-admitted source itext))]
                             (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
                               (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field r 1)) jid node (jn-field r 2))
                                     c (jn-say (string-concat "receipt " text))
                                     d (jn-say (string-concat "signature " (sign-statement seed text)))]
                                 0))))))))))))
 
-;; The expected job id comes from the trusted caller, never the receipt.
-;; Receipt time is the dispatch timestamp, not proof of completion before expiry.
-(defn- jn-receipt-verdict [chosen :string trust :string expected :string receipt :string sig :string] :string
-  (let [holder (jn-text chosen "node") at (jn-num receipt "at") b (jn-bytes receipt)
-        guard (jn-lease-problem chosen holder expected at)]
-    (cond (not (jn-attempt-id? expected)) "job/expected-id-invalid"
-          (not (= guard "job/lease-ok")) guard
-          (or (not (json-canonical? b)) (not (= (json-kind b 0) 1))
-              (not (= (json-count b 0) 8))
-              (not (= (jn-text receipt "kind") "itonami.agent-step-receipt/1"))) "job/receipt-invalid"
-          (not (= (jn-text receipt "job") expected)) "job/receipt-job"
-          (not (= (jn-text receipt "node") holder)) "job/receipt-node"
-          :else (receipt-verdict (jn-did-of trust holder) (jn-num chosen "epoch")
-                                 at (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
-                                 (jn-text receipt "job") (jn-text receipt "node") (jn-text receipt "output") sig))))
+(defn- jn-run [] :i64 (jn-run-with-source "" false))
 
 (defn- jn-verify [] :i64
   (let [ports (jn-arg 1) trust (jn-arg 2)
