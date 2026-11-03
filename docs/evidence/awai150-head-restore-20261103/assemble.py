@@ -12,5 +12,5 @@ main='''(defn main [] :i64
  (let [v (gh-advance (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6) (cp-arg 7) (cp-int (cp-arg 8)) (cp-arg 9) (cp-arg 10) (cp-arg 11) (cp-arg 12) (cp-arg 13)) x (cp-say v)] (if (= (string-index-of v "head/advanced ") 0) 0 1))
  (= (cp-arg 0) "head-restore")
  (let [v (gh-restore (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6) (cp-arg 7) (cp-arg 8) (cp-arg 9) (cp-arg 10)) x (cp-say v)] (if (= (string-index-of v "head-restore/restored ") 0) 0 1))
- :else (checkpoint-main)))\n''' 
+ :else (checkpoint-main)))\n'''
 (p/'fixture.kotoba').write_text(s+g+h+main)
