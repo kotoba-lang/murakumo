@@ -1,0 +1,88 @@
+;; Bounded streaming SHA-256 observation for a host-pinned model blob.
+;; Compose after sha2.core and fleet_oci_layout. The host owns the file and
+;; prevents writers, aliases and replacement throughout reading and use.
+;; FS2 E reopens by path, so this is not an immutable snapshot or launch grant.
+(ns murakumo.fleet-model-digest (:export [model-digest-main]))
+
+(defn- md-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- md-out [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- md-regular? [meta :string] :bool
+  (let [n (string-length meta)]
+    (and (>= n 2) (= (string-substring meta (- n 2) n) " 0"))))
+(defn- md-decimal [s :string] :i64
+  (let [n (string-length s) limit 68719476736]
+    (if (or (= n 0) (> n 11) (and (> n 1) (= (string-substring s 0 1) "0"))) -1
+      (loop [i 0 value 0]
+        (if (= i n) value
+          (let [c (string-code-point-at s i) digit (- c 48)]
+            (if (or (< digit 0) (> digit 9) (> value (quot (- limit digit) 10))) -1
+              (recur (+ i 1) (+ (* value 10) digit)))))))))
+
+;; A caller gives a private, host-pinned path. Reject traversal and the legacy
+;; FS2 separator spelling; host must also prevent symlinks and hard-link races.
+(defn- md-path? [p :string] :bool
+  (and (> (string-length p) 1) (<= (string-length p) 512)
+       (= (string-substring p 0 1) "/") (< (string-index-of p "..") 0)
+       (< (string-index-of p "//") 0) (< (string-index-of p "/./") 0)
+       (< (string-index-of p "_SEP") 0)
+       (not (= (string-substring p (- (string-length p) 2) (string-length p)) "/."))
+       (loop [i 0]
+         (if (= i (string-length p)) true
+           (let [c (string-code-point-at p i)]
+             (and (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90))
+                      (and (>= c 48) (<= c 57)) (= c 47) (= c 45) (= c 95) (= c 46))
+                  (recur (+ i 1))))))))
+
+;; SHA-256 compression writes into the persistent work vector. Each input
+;; chunk is a multiple of 64 except the last; the final block carries the
+;; total file length, not the size of the last range.
+(defn- md-blocks [work :vector-i64 data :vector-i64 length :i64 k :vector-i64] :bool
+  (loop [i 0]
+    (if (= i length) true
+      (let [w (s2-add (s2-rounds (s2-begin (s2-expand (s2-load work data i (vector-count data)))) k))]
+        (recur (+ i 64))))))
+
+(defn- md-pad [work :vector-i64 data :vector-i64 offset :i64 remain :i64 total :i64 k :vector-i64] :bool
+  (let [size (if (< remain 56) 64 128)
+        padding (loop [i 0 out (vector-alloc size)]
+                  (if (= i size) out
+                    (let [v (cond (< i remain) (vector-at data (+ offset i))
+                                  (= i remain) 128
+                                  (>= i (- size 8)) (bit-and (u64-shift-right (* total 8) (* (- (- size 1) i) 8)) 255)
+                                  :else 0)]
+                      (recur (+ i 1) (vector-assoc! out i v)))))]
+    (md-blocks work padding size k)))
+
+(defn- md-stream [path :string size :i64 work :vector-i64] :bool
+  (let [k (s2-k)]
+    (loop [offset 0]
+      (if (= offset size)
+        (md-pad work (vector-alloc 0) 0 0 size k)
+        (let [left (- size offset) count (if (> left 65536) 65536 left)
+              last (= (+ offset count) size)
+              ok (arena-scope
+                   (let [r (typed-cap-call 35 :string :bytes (ol-frame "E" path (str (ol-dec offset) ":" (ol-dec count))))]
+                     (if (not (and (= (bytes-count r) (+ count 5)) (= (bytes-at r 0) 0)
+                                   (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+                                   (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))) false
+                       (let [data (vector-i64-from-bytes (bytes-slice r 5 (+ count 5)))
+                             whole (* (quot count 64) 64) good (md-blocks work data whole k)]
+                         (and good (if last (md-pad work data whole (- count whole) size k) true))))))]
+          (if (not ok) false (if last true (recur (+ offset count)))))))))
+
+(defn model-digest-main [] :i64
+  (let [path (md-arg 0) wanted (md-arg 1) size (md-decimal (md-arg 2))
+        valid (and (md-path? path) (= (digest-problem wanted) "oci/ok") (>= size 0) (= (md-arg 3) ""))]
+    (if (not valid) (let [x (md-out "model/input-refused")] 2)
+      (let [meta (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+            measured (ol-size meta 68719476736)]
+        (if (or (not (md-regular? meta)) (not (= measured size))) (let [x (md-out "model/size-unknown")] 1)
+          (let [work (s2-work (s2-iv 8)) ok (md-stream path size work)
+                after (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+                digest (if ok (str "sha256:" (hex (s2-out work 8))) "")
+                result (cond (not ok) "model/read-unknown"
+                             (not (= meta after)) "model/changed-unknown"
+                             (not (= digest wanted)) "model/digest-mismatch"
+                             :else "model/digest-observed")
+                x (md-out result)]
+            (if (= result "model/digest-observed") 0 1)))))))
