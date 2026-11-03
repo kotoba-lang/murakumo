@@ -1,0 +1,23 @@
+{
+  "kind": "awai151.darwin-fifo-two-minis/1",
+  "date": "2026-11-03 Asia/Tokyo",
+  "sourceSha256": "efd391789af509b94eadc65a35d1676ef2e6fbd2a8186b3f75cd7ea48ea97619",
+  "diagnosticCompilerSha256": "920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6",
+  "diagnosticPackagerSha256": "f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d",
+  "normalArtifactSha256": "542b3e1c5231e9a833ca33e8813f1a150b762d524d80add408fce5b8730b4dbd",
+  "testArtifactSha256": {
+    "after-intent": "b01ea9a38783a6b8f9d25f91b52dfefb71cce182b58b5b2896bc222e76fb4226",
+    "after-pending": "de15df11e72be686f8d47c98c23367c2b77a7756110312ade89636b0de105d71",
+    "after-rename": "001d8a987016f1bf507b8c648aa14083e2b485c7aca34a0c96b99e1b4d9d585f",
+    "after-sync": "e2e63c8875e3736b0d7e6c81082439ae467d7e14d7f6643f4c7cdeb0d02eb2f2",
+    "after-archive": "009a5938c969da5d1e0076ccdec8674c66a11b734f25723af9a301e864825c9c"
+  },
+  "observers": {"contract.py":"439c7324887a92bde7aa7252b42c3237afdce7cf880ea7ff6d3e7cd60adab7dc", "contract-levi.py":"a17c28a0ba9ef9e761defa7ee23b350209f0d802f1896c63b93ce43d18139d8b", "lock-check.py":"ac41f155ce2055b215810cef431151fe07db4dac3784bd5bb8f03b1396f2da3a", "kill-observer.py":"8a6610eff02047a93a8de5e867478e5d538dcfb8751ab195eb6a012025bd0ad9"},
+  "hosts": [
+    {"node":"levi", "os":"macOS 26.7.2 arm64", "ramBytes":17179869184, "pretestPressureFreePercent":87, "pretestSwapUsedMiB":0, "sequentialCases":11, "raceAttempts":8, "raceEnqueued":8, "raceBusy":0, "heldFlock":"fifo/busy", "killPhases":5, "temporaryFixtureRemoved":true},
+    {"node":"benjamin", "os":"macOS 26.7.2 arm64", "ramBytes":17179869184, "pretestPressureFreePercent":91, "pretestSwapUsedMiB":0, "sequentialCases":11, "raceAttempts":8, "raceEnqueued":7, "raceBusy":1, "heldFlock":"fifo/busy", "killPhases":5, "temporaryFixtureRemoved":true}
+  ],
+  "killOutcome": "On each host, the uninstrumented artifact refused with fifo/pending-unknown after SIGKILL at the intent, pending, queue rename and queue directory sync boundaries; after completed-intent archival it returned the queued ticket. All 10 synthetic child processes exited -9.",
+  "method": "Copied signed fixture binaries and test-only observers over authenticated Tailscale SSH to private unique task directories. Verified each image hash after execution. Observer killed only child processes it launched, bounded by 3 CPU seconds each. No inference, real bot, existing workload or user data was modified. Initial Levi fixture failed with executable permission denied; the task-owned image was chmod 700 and the contract was rerun in a new fixture directory. Asher SSH timed out and was not used.",
+  "limits": "The same diagnostic artifact on two separate Macs, each tested locally; no cross-host queue or network protocol exercised. The eight-way races do not establish arrival fairness. No power-loss, fsync failure, production runtime, trust boundary, full workload process tree, resource reservation, full governor, MTP inference or fleet qualification. Snapshot memory pressure is not reservable capacity."
+}
