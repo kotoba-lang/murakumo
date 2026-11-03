@@ -80,6 +80,8 @@
           (= source-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
           (not (cp-exists? definition-path)) (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
     "cron-resident/input-refused"
+    (if (not (cp-absent? (str cursor-path ".pending")))
+      "cron-resident/cursor-unknown"
     (let [definition (cp-read definition-path) cursor (cp-read cursor-path) source (cp-read source-path)
           now (rt-now) plan (br-problem cfg definition pin cursor source now)
           slot (if (= plan "bridge/ok") (br-slot definition cursor) -1)
@@ -110,7 +112,7 @@
                               (if (not (= (ln-field turn 0) "resident/published")) "cron-resident/completion-unknown"
                                 (let [new-archive (rt-archive-native cfg work-after repo gh)]
                                   (if (not (= (ln-field new-archive 0) "resident-archive/confirmed")) "cron-resident/archive-pending"
-                                    (nc-advance cfg definition pin cursor-path cursor source slot)))))))))))))))
+                                    (nc-advance cfg definition pin cursor-path cursor source slot))))))))))))))))
 
 ;; An unknown or refused cycle must be visible to the host as a failure even
 ;; when the local lock was released. Exit success only for the two terminal

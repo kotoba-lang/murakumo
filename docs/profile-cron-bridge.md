@@ -327,6 +327,8 @@ The coordinator also rejects exact conflicts between its input files and residen
 
 The native controller exits zero only for idle or completed cycles. Refused, pending and unknown outcomes exit nonzero even if its local lock was released; an unlock failure exits 2. A host must distinguish the printed outcome and reconcile unknown dispatches rather than blindly retrying every nonzero exit. `docs/evidence/awai150-cron-exit-20261103.json` records an extracted-entry-point fixture with a real local lock and a negative control; the underlying cycle is stubbed.
 
+Before planning or dispatch, the controller requires the cursor's `.pending` file to be absent; a present or explicitly unknown FS2 result returns `cron-resident/cursor-unknown`. This also prevents an idle result from concealing an unfinished cursor replacement. The check assumes a private, serialized directory and a qualified existence provider. The diagnostic Darwin provider maps some permission errors to absence, so it is not qualified to establish this condition in production. See [the bounded native fixture](evidence/awai150-cursor-pending-20261103/README.md).
+
 `docs/evidence/awai150-cron-work-binding-20261103.json` records native source-closure tests for the supported and unsupported profile cases, a wrong-work case and a bypass control. This does not prove an integrated inference turn.
 
 The native coordinator also checks that the two fresh archive staging paths do
