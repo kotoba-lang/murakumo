@@ -274,16 +274,19 @@
             after (typed-cap-call 35 :string :string (ol-frame "F" dest ""))]
         (and ok (= before after) (= (ta-fs "M" dest "") "1"))))))
 
-(defn- tv-walk [source :string dest :string size :i64 digest :string] :bool
+;; Return the asset mask only after the full archive digest and every staged
+;; asset match. -1 is failure; a host must still bind directory identity and
+;; its independently obtained inventory to this same private scope.
+(defn- tv-walk-mask [source :string dest :string size :i64 digest :string] :i64
   (let [work (s2-work (s2-iv 8)) k (s2-k) summary (vector-alloc 3)]
     (loop [offset 0 seen 0 zeros 0]
       (if (= offset size)
-        (and (>= zeros 2) (= (bit-and seen 255) 255)
-             (loop [i 0] (if (= i 15) true
-               (and (or (not (= (bit-and seen (i64-shift-left 1 i)) 0))
-                        (= (ta-fs "D" (str dest "/" (ta-name i)) "") "0")) (recur (+ i 1)))))
-             (md-pad work (vector-alloc 0) 0 0 size k)
-             (= (str "sha256:" (hex (s2-out work 8))) digest))
+        (if (and (>= zeros 2) (= (bit-and seen 255) 255)
+                 (loop [i 0] (if (= i 15) true
+                   (and (or (not (= (bit-and seen (i64-shift-left 1 i)) 0))
+                            (= (ta-fs "D" (str dest "/" (ta-name i)) "") "0")) (recur (+ i 1)))))
+                 (md-pad work (vector-alloc 0) 0 0 size k)
+                 (= (str "sha256:" (hex (s2-out work 8))) digest)) seen -1)
         (let [read-ok (arena-scope
                         (let [header (ta-read source offset 512)]
                           (if (not (= (vector-count header) 512)) false
@@ -296,13 +299,17 @@
               zero (= (vector-at summary 0) 0) id (vector-at summary 1) n (vector-at summary 2)
               padded (if (and (> n 0) (<= n 16777216)) (* (quot (+ n 511) 512) 512) -1)
               next (+ offset 512 padded)]
-          (cond (not read-ok) false
+          (cond (not read-ok) -1
                 zero (recur (+ offset 512) seen (+ zeros 1))
                 (or (> zeros 0) (< id 0) (< padded 0) (> next size)
-                    (not (= (bit-and seen (i64-shift-left 1 id)) 0))) false
+                    (not (= (bit-and seen (i64-shift-left 1 id)) 0))) -1
                 (tv-file source (str dest "/" (ta-name id)) (+ offset 512) n work k)
                 (recur next (bit-or seen (i64-shift-left 1 id)) 0)
-                :else false))))))
+                :else -1))))))
+
+
+(defn- tv-walk [source :string dest :string size :i64 digest :string] :bool
+  (>= (tv-walk-mask source dest size digest) 0))
 
 (defn model-artifact-recover-main [] :i64
   (let [layout (md-arg 0) manifest (md-arg 1) manifest-size (md-decimal (md-arg 2))
