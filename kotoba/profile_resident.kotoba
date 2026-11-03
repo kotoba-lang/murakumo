@@ -18,6 +18,16 @@
 (defn- rt-due? [head :vector-i64 request :string now :i64] :bool
   (or (>= now (cp-num head 0 "nextAt")) (not (= request (cp-str head 0 "request")))))
 
+;; A missing request is not a new request. Keep the last consumed CID across
+;; absence and periodic turns, so a transient missing file does not enqueue a
+;; duplicate or erase the consumed cursor. A present file must be a bounded
+;; canonical JSON object; an empty/unreadable or partial write fails closed.
+(defn- rt-request-id [present :bool b :vector-i64 previous :string] :string
+  (if (not present) (if (= previous "") "none" previous)
+    (if (and (> (vector-count b) 0) (<= (vector-count b) 8192)
+             (json-valid? b) (json-canonical? b) (= (json-kind b 0) 1))
+      (cp-cid b) "")))
+
 (defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
   (cp-bytes (lease-group-round epoch (cp-str cfg 0 "node")
     (lease-text (cp-str cfg 0 "node") (cp-str cfg 0 "task") 0 epoch (+ (rt-now) (lease-ttl)) 1)
@@ -188,8 +198,11 @@
   (let [head-path (cp-str cfg 0 "head")
         head (if (cp-exists? head-path) (cp-read head-path) (vector-alloc 0))
         root (if (cp-exists? head-path) (cp-str head 0 "checkpoint") (cp-str cfg 0 "bootstrap"))
-        request (if (cp-exists? (cp-str cfg 0 "request")) (cp-cid (cp-read (cp-str cfg 0 "request"))) "none")]
-    (cond (not (rt-pins-ok? cfg)) "resident/runtime-pins-refused"
+        request-path (cp-str cfg 0 "request") present (cp-exists? request-path)
+        request (rt-request-id present (if present (cp-read request-path) (vector-alloc 0))
+                               (cp-str head 0 "request"))]
+    (cond (= request "") "resident/request-refused"
+          (not (rt-pins-ok? cfg)) "resident/runtime-pins-refused"
           (not (cp-block? (cp-str cfg 0 "store") root)) "resident/missing-checkpoint"
           (not (rt-root? cfg (cp-load (cp-str cfg 0 "store") root))) "resident/checkpoint-refused"
           (not (rt-admitted-head? cfg head))
