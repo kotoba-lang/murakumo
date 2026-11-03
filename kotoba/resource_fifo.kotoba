@@ -77,12 +77,14 @@
           (or (> (string-length journal) 8340) (< (string-length journal) 10)
               (not (= (string-substring journal 0 5) "RGI1\n"))
               (not (rq-transition? old next))) "fifo/journal-invalid"
-          (not (= state next)) "fifo/recovery-unresolved"
+          (not (or (= state next) (= state old))) "fifo/recovery-unresolved"
           ;; Re-sync the already visible state; do not perform its transition
-          ;; again. Failure remains unknown and is not retried automatically.
+          ;; again. "aborted" clears this journal but does not authorize a
+          ;; retry or assert anything about an external workload. The host
+          ;; must reconcile that outcome separately. Failures remain unknown.
           (and (= (rq-fs "M" root "") "1")
                (= (rq-fs "L" intent (str root "/queue.last")) "1")
-               (= (rq-fs "M" root "") "1")) "fifo/recovered"
+               (= (rq-fs "M" root "") "1")) (if (= state next) "fifo/recovered" "fifo/aborted")
           :else "fifo/recovery-unknown")))
 (defn- rq-commit [root :string original :string next :string] :bool
   (let [state (str root "/queue") tmp (str root "/queue.pending") intent (str root "/queue.intent")]
@@ -137,4 +139,5 @@
                 released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
                 z (rq-out (if released result "fifo/unlock-unknown"))]
             (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued") (= result "fifo/cancelled")
-                                  (= result "fifo/empty") (= result "fifo/recovered") (= (string-index-of result "fifo/front ") 0))) 0 1)))))))
+                                  (= result "fifo/empty") (= result "fifo/recovered") (= result "fifo/aborted")
+                                  (= (string-index-of result "fifo/front ") 0))) 0 1)))))))
