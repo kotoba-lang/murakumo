@@ -98,6 +98,11 @@ not establish that a failed cell had no effects or make replay safe.
 The trusted cron composition may opt in to `capture-output` at argument 23.
 After the successful cell exit and post-execution lease check, it emits the
 captured stdout as an unpadded `output-base64url` line alongside the receipt.
+This capture path signs a v2 receipt containing the SHA-256 of the canonical
+adopted lease; the ordinary non-capture path retains the v1 receipt. The
+verifier accepts each version's exact canonical schema, and v2 verification
+compares the signed digest to the independently learned lease. This binds the
+receipt to the lease value but does not fence external effects atomically.
 Ordinary job runs cannot enable capture; an unexpected nonempty value is
 refused. The host must protect this potentially private output. The captured
 bytes are limited by the underlying spawn implementation and are not proof of

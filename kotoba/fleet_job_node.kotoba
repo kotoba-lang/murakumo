@@ -85,10 +85,14 @@
               (recur (+ i 1)) false)))))))
 
 (defn- jn-receipt-bound? [chosen :string receipt :string expected :string] :bool
-  (let [b (jn-bytes chosen)]
+  (let [b (jn-bytes chosen) r (jn-bytes receipt) kind (jn-text receipt "kind")]
     (and (jn-job-id? expected) (json-canonical? b) (= (json-kind b 0) 1) (= (json-count b 0) 6)
+         (json-canonical? r) (= (json-kind r 0) 1)
+         (or (and (= kind "itonami.agent-step-receipt/1") (= (json-count r 0) 8))
+             (and (= kind "itonami.agent-step-receipt/2") (= (json-count r 0) 9)))
          (= (jn-text chosen "class") expected) (= (jn-num chosen "slot") 0)
          (> (jn-num chosen "epoch") 0) (not (= (jn-text chosen "node") ""))
+         (> (jn-num receipt "at") 0) (< (jn-num receipt "at") (jn-num chosen "until"))
          (= (jn-text receipt "job") expected)
          (= (jn-text receipt "node") (jn-text chosen "node")))))
 
@@ -228,7 +232,10 @@
                             final-guard (jn-lease-problem fresh node jid finished)]
                         (if (or (< finished dispatch-now) (not (= fresh chosen)) (not (= final-guard "job/lease-ok")))
                           (let [x (jn-say "job/lease-lost-output-unconfirmed")] 1)
-                          (let [text (step-receipt-text finished did epoch (jn-int (jn-field header 1)) jid node (jn-field header 2))
+                          (let [text (if capture
+                                       (step-receipt-text-v2 finished did epoch (jn-int (jn-field header 1)) jid
+                                                             (sha256-hex (jn-bytes chosen)) node (jn-field header 2))
+                                       (step-receipt-text finished did epoch (jn-int (jn-field header 1)) jid node (jn-field header 2)))
                                 c (jn-say (string-concat "receipt " text))
                                 d (jn-say (string-concat "signature " (sign-statement seed text)))
                                 e (if capture (jn-say (str "output-base64url " (string-substring r (+ nl 1) (string-length r)))) 0)]
@@ -244,9 +251,13 @@
         chosen (if (or (= token "-") (not (jn-job-id? expected))) "" (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token))
         holder (if (= chosen "") "" (jn-text chosen "node"))
         verdict (if (jn-receipt-bound? chosen receipt expected)
-                  (receipt-verdict (jn-did-of trust holder) (jn-num chosen "epoch")
+                  (if (= (jn-text receipt "kind") "itonami.agent-step-receipt/2")
+                    (receipt-verdict-v2 (jn-did-of trust holder) (jn-num chosen "epoch") (sha256-hex (jn-bytes chosen))
+                      (jn-num receipt "at") (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
+                      (jn-text receipt "job") (jn-text receipt "lease") (jn-text receipt "node") (jn-text receipt "output") sig)
+                    (receipt-verdict (jn-did-of trust holder) (jn-num chosen "epoch")
                     (jn-num receipt "at") (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
-                    (jn-text receipt "job") (jn-text receipt "node") (jn-text receipt "output") sig)
+                    (jn-text receipt "job") (jn-text receipt "node") (jn-text receipt "output") sig))
                   "job/lease-binding-refused")
         x (jn-say (str "holder " (if (= holder "") "none" holder) " verdict " verdict))]
     (if (= verdict "job/confirmed") 0 1)))
