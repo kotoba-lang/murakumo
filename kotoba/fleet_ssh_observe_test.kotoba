@@ -20,6 +20,10 @@
           (= (observe-result "0\nhello__murakumo_rc=0\n") "hello"))
         request (observe-ssh-request node ip key known "memory")
         fixed (and (>= (string-index-of request "StrictHostKeyChecking=yes") 0)
+                   (>= (string-index-of request "GlobalKnownHostsFile=/dev/null") 0)
+                   (>= (string-index-of request "VerifyHostKeyDNS=no") 0)
+                   (>= (string-index-of request "UpdateHostKeys=no") 0)
                    (>= (string-index-of request "HostKeyAlias=benjamin") 0)
-                   (>= (string-index-of request "/usr/sbin/sysctl -n hw.memsize") 0))]
+                   (>= (string-index-of request "/usr/sbin/sysctl -n hw.memsize") 0)
+                   (>= (string-index-of (observe-ssh-request node ip key known "disk") "/bin/df -Pk /") 0))]
     (if (and valid rejects fixed) 0 1)))

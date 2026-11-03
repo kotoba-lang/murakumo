@@ -24,6 +24,27 @@ and the diagnostic packager was
 `cb1c67683776113eddd62bcc817bc3a52f2f6b3ae9984cd74c74e2f6874edfa8`.
 The integration source embeds machine-specific paths and remains task-local.
 
+## Host-key scope and disk observation
+
+A subsequent native fixture disabled the default global known-hosts file,
+DNS host-key verification and host-key updates, and added the fixed read-only
+`/bin/df -Pk /` probe. Against Benjamin, all four probes succeeded; the disk
+observation reported 60,984,588 KiB available at that moment. With the same
+target and identity but an empty designated known-hosts file, the fixture
+returned `observation refused` and no partial result. The separately compiled
+native unit fixture passed its fixed-option and fixed-command checks. This
+negative check establishes refusal with this host configuration; it does not
+simulate a populated global known-hosts file or prove all SSH implementations.
+
+The positive source SHA-256 was
+`14e4a3925acca1c41fc96c3dcd46d240bb828e167da3c0bd848e8c586225daa4`
+and signed fixture SHA-256 was
+`63383e47ddde7525a5adbc421a05988b630efee786246465441334b0ffad00a9`.
+The empty-known-hosts source SHA-256 was
+`6436f9390268fd35788f9be48cedd3784d0622d45dc0f3f7f501ec235e51f104`
+and signed fixture SHA-256 was
+`9ec3faf58baa70c026e6d12849e52305361fd7008eafd905f2159aeeacb112a2`.
+
 This does not qualify the production process capability, timeout or capture
 limit, process-tree cleanup, remote execution identity, marker authenticity,
 or other nodes. The fixed in-band status marker can be forged. The trusted

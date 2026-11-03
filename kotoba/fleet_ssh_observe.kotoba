@@ -52,6 +52,7 @@
   (let [cmd (cond (= mode "memory") "/usr/sbin/sysctl -n hw.memsize"
                   (= mode "swap") "/usr/sbin/sysctl -n vm.swapusage"
                   (= mode "pressure") "/usr/bin/memory_pressure -Q"
+                  (= mode "disk") "/bin/df -Pk /"
                   :else "") a (ob-a)]
     (if (or (= cmd "") (not (observe-inputs? node ip identity known))) ""
       (str "/usr/bin/ssh" a "-F" a "/dev/null" a "-i" a identity
@@ -59,6 +60,8 @@
            a "-o" a "BatchMode=yes" a "-o" a "ConnectTimeout=3"
            a "-o" a "ServerAliveInterval=1" a "-o" a "ServerAliveCountMax=2"
            a "-o" a "StrictHostKeyChecking=yes" a "-o" a (str "UserKnownHostsFile=" known)
+           a "-o" a "GlobalKnownHostsFile=/dev/null" a "-o" a "VerifyHostKeyDNS=no"
+           a "-o" a "UpdateHostKeys=no"
            a "-o" a (str "HostKeyAlias=" node) a "-o" a "ClearAllForwardings=yes"
            a "-o" a "RequestTTY=no" a (str node "@" ip) a (wrap-cmd cmd)))))
 ;; Host response is <exit> LF <stdout>. Empty or ambiguous output is refusal.
@@ -82,4 +85,6 @@
         (if (= swap "") ""
           (let [pressure (ob-probe node ip identity known "pressure")]
             (if (= pressure "") ""
-              (str "memory:\n" memory "swap:\n" swap "pressure:\n" pressure))))))))
+              (let [disk (ob-probe node ip identity known "disk")]
+                (if (= disk "") ""
+                  (str "memory:\n" memory "swap:\n" swap "pressure:\n" pressure "disk:\n" disk))))))))))
