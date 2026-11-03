@@ -11,8 +11,13 @@ refused. No refusal is retried in a polling loop.
 
 Writes use an fsynced `queue.intent`, an fsynced `queue.pending`, an atomic
 rename and directory fsync. After syncing the new queue, the intent is renamed
-to `queue.last` and the directory is synced again. A surviving intent or pending file blocks later
-operations for trusted-host reconciliation. The source requires a host-owned,
+to `queue.last` and the directory is synced again. A surviving intent or pending file blocks ordinary
+operations. The intent contains both the original and target queue. Under the
+same lock, explicit `recover` archives the intent only when it describes one
+valid append or head removal, no pending file remains, and the queue already
+equals the target. Recovery re-syncs the directory and never applies the
+transition again. Invalid, older-format or unresolved intents remain blocked
+for trusted-host reconciliation. The source requires a host-owned,
 non-aliased directory; it does not make an untrusted directory safe or
 establish power-loss durability on every filesystem.
 
@@ -55,3 +60,8 @@ The same diagnostic binaries were also checked independently on two Mac minis
 via Tailscale SSH. The [receipt](evidence/awai151-fifo-two-minis-20261103/)
 records local FIFO, held-lock and five SIGKILL cases on each host. This was not
 a cross-host queue, model inference or full governor test.
+
+The [recovery observation](evidence/awai151-fifo-recovery-20261103/) checks
+synthetic process kills, invalid journals and a repeat recovery using the
+diagnostic Mac runtime. It does not simulate power loss or authorize workload
+admission. Earlier process-kill evidence used the prior intent format.
