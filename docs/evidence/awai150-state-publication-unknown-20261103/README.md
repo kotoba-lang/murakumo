@@ -1,10 +1,11 @@
 # Interrupted profile state publication
 
-`pr-step-range` now requires explicit absence of `state.json.tmp` before it
-enters inference dispatch. An existing file or an unknown lookup stops the
-step with `profile/state-publication-unknown`; the host must reconcile the
-private task directory under its existing serialization boundary. A provider
-that returns `0` for lookup errors cannot establish absence.
+The tested revision required explicit absence of `state.json.tmp` before it
+entered inference dispatch. An existing file or an unknown lookup stopped the
+step with `profile/state-publication-unknown`. The later candidate can also
+reconcile a fully verified pending state, as described in
+[`awai150-state-reconcile-20261103`](../awai150-state-reconcile-20261103/README.md).
+A provider that returns `0` for lookup errors cannot establish absence.
 
 On 2026-11-03 an unprivileged user ran the two attached fixture images in a
 1 CPU / 2 GiB Linux ARM64 VM. They embed the current and immediately preceding

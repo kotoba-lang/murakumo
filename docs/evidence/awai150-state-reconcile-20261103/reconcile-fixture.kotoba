@@ -1,0 +1,44 @@
+(ns reconcile-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- cp-cid [b :vector-i64] :string (cp-text b))
+(defn- cp-fs [op :string path :string tail :string] :string
+ (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+  (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) "")))
+(defn- cp-read [path :string] :vector-i64 (cp-bytes (cp-fs "A" path "")))
+(defn- pr-answer [b :vector-i64] :string (if (= (cp-text b) "answer") "answer" ""))
+(defn- pr-local-mtp? [b :vector-i64] :bool false)
+(defn- pr-mtp-response? [a :vector-i64 b :vector-i64] :bool false)
+(defn- pr-mtp-compact [a :vector-i64 b :vector-i64] :vector-i64 b)
+(defn- pr-replicable? [b :vector-i64] :bool (and (> (vector-count b) 0) (<= (vector-count b) 16384)))
+(defn- pr-unit-state [unit :string] :string (if (= unit "done") "exited" "running"))
+(defn- pr-reconcile-pending [repo :string runtime :vector-i64 next :i64 task :string state :vector-i64
+                            body :vector-i64 unit :string request :string marker :string response :string] :string
+  (let [tmp (str repo "/state.json.tmp") outdir (str repo "/outputs")
+        output (str outdir "/" next ".json") statepath (str repo "/state.json")
+        ready (and (= (pr-unit-state unit) "exited")
+                   (= (cp-fs "D" tmp "") "1") (= (cp-fs "D" request "") "1")
+                   (= (cp-fs "D" marker "") "1") (= (cp-fs "D" response "") "1")
+                   (= (cp-fs "D" output "") "1")
+                   (= (cp-cid (cp-read request)) (cp-cid body))
+                   (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n"))]
+    (if (not ready) "profile/state-publication-unknown"
+      (let [raw (cp-read response) completed (and (not (= (pr-answer raw) ""))
+                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime raw)))
+            answer (if completed (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw) (vector-alloc 0))
+            cid (cp-cid answer) expected (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
+            valid (and completed (pr-replicable? answer) (= (cp-cid (cp-read output)) cid)
+                       (= (cp-cid (cp-read tmp)) (cp-cid expected))
+                       (= (cp-cid (cp-read statepath)) (cp-cid state)))
+            durable (and valid (= (cp-fs "M" output "") "1") (= (cp-fs "M" outdir "") "1")
+                         (= (cp-fs "M" tmp "") "1") (= (cp-fs "M" repo "") "1"))
+            renamed (and durable (= (cp-fs "L" tmp statepath) "1"))
+            synced (and renamed (= (cp-fs "M" repo "") "1"))]
+        (if synced (str "profile/step-completed " next " " cid) "profile/state-publication-unknown")))))
+
+(defn main [] :i64
+ (let [root (typed-cap-call 38 :string :string "0")
+       result (pr-reconcile-pending root (cp-bytes "runtime") 1 "task" (cp-bytes "original-state") (cp-bytes "request-body") (typed-cap-call 38 :string :string "1")
+           (str root "/request") (str root "/marker") (str root "/response"))
+       z (typed-cap-call 37 :string :string (str result "\n"))]
+   (if (= result "profile/step-completed 1 answer") 0 1)))
