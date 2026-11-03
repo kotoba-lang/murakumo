@@ -1,0 +1,84 @@
+;; Durable local FIFO primitive for a future resource governor (AWAI-151).
+;; It never dispatches work or decides that a workload has stopped. Only a
+;; trusted host may invoke dequeue after separately verifying the whole
+;; workload's termination. Root, files and all callers must be host-owned.
+(ns murakumo.resource-fifo (:export [resource-fifo-main]))
+
+(defn- rq-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- rq-out [s :string] :i64 (let [z (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- rq-fs [op :string path :string tail :string] :string
+  (let [reply (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+    (if (and (>= (string-byte-length reply) 5) (= (string-substring reply 0 5) "\u0000FS2\u0000"))
+      (string-substring reply 5 (string-length reply)) "")))
+(defn- rq-root? [s :string] :bool
+  (and (> (string-length s) 1) (<= (string-length s) 200)
+       (= (string-substring s 0 1) "/") (not (= (string-substring s (- (string-length s) 1) (string-length s)) "/"))
+       (< (string-index-of s "..") 0) (< (string-index-of s "//") 0) (< (string-index-of s "/./") 0)
+       (not (= (string-substring s (- (string-length s) 2) (string-length s)) "/."))
+       (< (string-index-of s "_SEP") 0)
+       (loop [i 0]
+         (if (= i (string-length s)) true
+           (let [c (string-code-point-at s i)]
+             (if (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90))
+                     (and (>= c 48) (<= c 57)) (= c 47) (= c 45) (= c 95) (= c 46))
+               (recur (+ i 1)) false))))))
+(defn- rq-ticket? [s :string] :bool
+  (and (= (string-length s) 64)
+       (loop [i 0]
+         (if (= i 64) true
+           (let [c (string-code-point-at s i)]
+             (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
+               (recur (+ i 1)) false))))))
+(defn- rq-valid? [s :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 5) (<= n 4165) (= (string-substring s 0 5) "RGQ1\n")
+         (= (mod (- n 5) 65) 0)
+         (loop [i 5]
+           (if (= i n) true
+             (let [ticket (string-substring s i (+ i 64)) suffix (string-substring s (+ i 65) n)]
+               (and (= (string-substring s (+ i 64) (+ i 65)) "\n") (rq-ticket? ticket)
+                    (< (string-index-of suffix (str ticket "\n")) 0) (recur (+ i 65)))))))))
+(defn- rq-commit [root :string original :string next :string] :bool
+  (let [state (str root "/queue") tmp (str root "/queue.pending") intent (str root "/queue.intent")]
+    ;; Keep a separately fsynced intent across the rename and its directory
+    ;; sync. A leftover intent blocks all callers for host reconciliation.
+    (and (= (rq-fs "D" intent "") "0") (= (rq-fs "D" tmp "") "0")
+         (= (rq-fs "B" intent "intent\n") "intent\n") (= (rq-fs "M" intent "") "1")
+         (= (rq-fs "M" root "") "1") (= (rq-fs "B" tmp next) next)
+         (= (rq-fs "M" tmp "") "1") (= (rq-fs "A" tmp "") next)
+         (= (rq-fs "A" state "") original) (= (rq-fs "L" tmp state) "1")
+         (= (rq-fs "M" root "") "1") (= (rq-fs "J" intent "") "1")
+         (= (rq-fs "M" root "") "1"))))
+(defn- rq-apply [root :string op :string ticket :string] :string
+  (let [state-path (str root "/queue") pending (str state-path ".pending") intent (str state-path ".intent")
+        exists (rq-fs "D" state-path "") pending-status (rq-fs "D" pending "") intent-status (rq-fs "D" intent "")
+        state (if (= exists "1") (rq-fs "A" state-path "") "")]
+    (cond (or (not (= pending-status "0")) (not (= intent-status "0"))) "fifo/pending-unknown"
+          (or (not (= exists "1")) (not (rq-valid? state))) "fifo/state-invalid"
+          (= op "front") (if (= state "RGQ1\n") "fifo/empty" (str "fifo/front " (string-substring state 5 69)))
+          (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+          (= op "enqueue")
+            (cond (not (< (string-index-of state (str ticket "\n")) 0)) "fifo/already-queued"
+                  (>= (string-length state) 4165) "fifo/full"
+                  (rq-commit root state (str state ticket "\n")) "fifo/enqueued"
+                  :else "fifo/write-unknown")
+          (= op "dequeue")
+            (cond (= state "RGQ1\n") "fifo/empty"
+                  (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
+                  (rq-commit root state (str "RGQ1\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
+                  :else "fifo/write-unknown")
+          :else "fifo/command-invalid")))
+(defn resource-fifo-main [] :i64
+  (let [root (rq-arg 0) op (rq-arg 1) ticket (rq-arg 2) lock (str root "/queue.lock")]
+    (if (or (not (rq-root? root)) (not (= (rq-arg 3) ""))
+            (not (or (= op "front") (= op "enqueue") (= op "dequeue")))
+            (and (= op "front") (not (= ticket ""))))
+      (let [z (rq-out "fifo/input-invalid")] 2)
+      (if (not (= (rq-fs "D" lock "") "1")) (let [z (rq-out "fifo/lock-unavailable")] 2)
+        (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+          (let [z (rq-out "fifo/busy")] 1)
+          (let [result (rq-apply root op ticket)
+                released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
+                z (rq-out (if released result "fifo/unlock-unknown"))]
+            (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued")
+                                  (= result "fifo/empty") (= (string-index-of result "fifo/front ") 0))) 0 1)))))))
