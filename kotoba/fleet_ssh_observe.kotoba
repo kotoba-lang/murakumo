@@ -3,7 +3,7 @@
 ;; The caller must authorize the node/address pair and supply trusted key paths;
 ;; the host must constrain process execution, output size, and execution time.
 (ns murakumo.fleet-ssh-observe
-  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-memory-swap observe-pressure observe-disk observe-model-files observe-node observe-native-snapshot observe-native-node fleet-ssh-observe-main fleet-model-observe-main fleet-host-observe-main fleet-native-observe-main]))
+  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-memory-swap observe-pressure observe-disk observe-model-files observe-node observe-native-snapshot observe-fixed-snapshot observe-native-node fleet-ssh-observe-main fleet-model-observe-main fleet-host-observe-main fleet-native-observe-main]))
 
 (defn- ob-bytes [s :string] :vector-i64
   (vector-i64-from-bytes (string-to-utf8 s)))
@@ -250,6 +250,35 @@
             disk (observe-disk (string-substring raw dstart n))]
         (if (or (= memory "") (= pressure "") (= disk "")) ""
           (str memory "pressure:\n" pressure "disk:\n" disk))))))
+
+;; Fixed Darwin host record AOS1 is lowercase hex of a 56-byte little-endian
+;; struct plus LF. Values above the portable exact-integer limit are unknown.
+;; A syntactically valid record still does not authenticate the sender or
+;; establish that any amount is reservable.
+(defn- ob-hex-digit [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87) :else -1))
+(defn- ob-fixed-number [raw :string offset :i64 count :i64] :i64
+  (loop [i (- count 1) total 0]
+    (if (< i 0) total
+      (let [pos (* 2 (+ offset i)) hi (ob-hex-digit (string-code-point-at raw pos))
+            lo (ob-hex-digit (string-code-point-at raw (+ pos 1))) byte (+ (* hi 16) lo)]
+        (if (or (< hi 0) (< lo 0) (> total (quot (- 9007199254740991 byte) 256))) -1
+          (recur (- i 1) (+ (* total 256) byte)))))))
+(defn observe-fixed-snapshot [raw :string] :string
+  (if (or (not (= (string-byte-length raw) 113))
+          (not (= (string-substring raw 112 113) "\n"))
+          (not (= (string-substring raw 0 16) "414f533101000000"))) ""
+    (let [memory (ob-fixed-number raw 8 8) total (ob-fixed-number raw 16 8)
+          avail (ob-fixed-number raw 24 8) used (ob-fixed-number raw 32 8)
+          pressure (ob-fixed-number raw 40 4) block (ob-fixed-number raw 44 4)
+          free (ob-fixed-number raw 48 8)]
+      (if (or (<= memory 0) (< total 0) (< avail 0) (< used 0) (> avail total) (> used total)
+              (< pressure 0) (> pressure 100) (<= block 0) (< free 0)
+              (> free (quot 9007199254740991 block))) ""
+        (str "physical-memory-bytes: " (i64-str memory) "\nswap-total-bytes: " (i64-str total)
+             "\nswap-available-bytes: " (i64-str avail) "\nswap-used-bytes: " (i64-str used)
+             "\nmemorystatus-level: " (i64-str pressure) "\ndisk-available-bytes: " (i64-str (* block free)) "\n")))))
 (defn observe-native-node [node :string ip :string identity :string known :string] :string
   (let [result (ob-probe node ip identity known "native-snapshot")]
     (if (ob-ok? result) (observe-native-snapshot (ob-value result)) "")))

@@ -5,7 +5,7 @@
 ;; every invocation. Capture files are retained for host reconciliation.
 ;; This is diagnostic only, not a resource reservation or a qualified host.
 (ns murakumo.fleet-macos-observer
-  (:export [fleet-macos-observer-main fleet-macos-receiver-main]))
+  (:export [fleet-macos-observer-main fleet-macos-receiver-main fleet-macos-fixed-receiver-main]))
 
 (defn- mo-argv [s :string] :vector-i64
   (let [n (string-byte-length s)]
@@ -57,6 +57,16 @@
           raw (observe-result reply)]
       (if (= raw "") "" (observe-native-snapshot raw)))))
 
+;; The remote fixed host is a no-argument, read-only executable. Its exact
+;; signed artifact and installation path still need independent host policy.
+(defn- mo-receive-fixed [node :string ip :string identity :string known :string work :string] :string
+  (if (not (and (observe-inputs? node ip identity known) (ob-path? work))) ""
+    (let [cmd (str "/Users/" node "/.murakumo/bin/fleet-fixed-observer")
+          request (ob-ssh-command node ip identity known cmd)
+          reply (mo-run work "snapshot" "/usr/bin/ssh" request)
+          raw (observe-result reply)]
+      (if (= raw "") "" (observe-fixed-snapshot raw)))))
+
 (defn fleet-macos-observer-main [] :i64
   (let [work (typed-cap-call 38 :string :string "0") extra (typed-cap-call 38 :string :string "1")
         result (if (and (= extra "") (ob-path? work)) (mo-snapshot work) "")
@@ -70,4 +80,12 @@
         result (if (= extra "") (mo-receive node ip identity known work remote) "")
         out (typed-cap-call 37 :string :string
               (if (= result "") "observation/refused native-snapshot\n" (str "observation/untrusted " node "\n" result)))]
+    (if (= result "") 1 0)))
+(defn fleet-macos-fixed-receiver-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        work (typed-cap-call 38 :string :string "4") extra (typed-cap-call 38 :string :string "5")
+        result (if (= extra "") (mo-receive-fixed node ip identity known work) "")
+        out (typed-cap-call 37 :string :string
+              (if (= result "") "observation/refused fixed-snapshot\n" (str "observation/untrusted " node "\n" result)))]
     (if (= result "") 1 0)))
