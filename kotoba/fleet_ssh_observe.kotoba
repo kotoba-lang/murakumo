@@ -3,7 +3,7 @@
 ;; The caller must authorize the node/address pair and supply trusted key paths;
 ;; the host must constrain process execution, output size, and execution time.
 (ns murakumo.fleet-ssh-observe
-  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-memory-swap observe-pressure observe-disk observe-model-files observe-node fleet-ssh-observe-main fleet-model-observe-main]))
+  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-memory-swap observe-pressure observe-disk observe-model-files observe-node observe-native-snapshot observe-native-node fleet-ssh-observe-main fleet-model-observe-main fleet-host-observe-main fleet-native-observe-main]))
 
 (defn- ob-bytes [s :string] :vector-i64
   (vector-i64-from-bytes (string-to-utf8 s)))
@@ -51,6 +51,7 @@
 (defn observe-ssh-request [node :string ip :string identity :string known :string mode :string] :string
   (let [base (str "/Users/" node "/.murakumo/awai147-mtplx-bonsai/")
         cmd (cond (= mode "memory-swap") "/usr/sbin/sysctl -n hw.memsize vm.swapusage"
+                  (= mode "native-snapshot") (str "/Users/" node "/.murakumo/bin/fleet-host-observer")
                   (= mode "model-files") (str "/usr/bin/stat -f '%HT %z %N' " base "model.safetensors " base "mtp.safetensors")
                   (= mode "pressure") "/usr/bin/memory_pressure -Q"
                   (= mode "disk") "/bin/df -Pk /"
@@ -216,6 +217,53 @@
                       (str "ok\n" values "pressure:\n" (ob-value pressure) "disk:\n" (ob-value disk)))))))))))))
 (defn observe-node [node :string ip :string identity :string known :string] :string
   (let [result (ob-collect node ip identity known)] (if (ob-ok? result) (ob-value result) "")))
+
+;; On the remote Mac the native guest asks its explicitly granted host to run
+;; only these fixed executables. The host must bound process time/output and
+;; remove ambient authority; wire 20 support on Darwin is not yet qualified.
+(defn- ob-host-probe [request :string] :string
+  (let [reply (typed-cap-call 20 :string :string request)]
+    (if (or (> (string-byte-length reply) 8192) (not (= (string-index-of reply "0\n") 0))) ""
+      (let [out (string-substring reply 2 (string-byte-length reply))]
+        (if (ob-safe-output? out) out "")))))
+(defn- ob-host-snapshot [] :string
+  (let [memory (ob-host-probe "/usr/sbin/sysctlARG_SEP-nARG_SEPhw.memsizeARG_SEPvm.swapusage")]
+    (if (= (observe-memory-swap memory) "") ""
+      (let [pressure (ob-host-probe "/usr/bin/memory_pressureARG_SEP-Q")]
+        (if (= (observe-pressure pressure) "") ""
+          (let [disk (ob-host-probe "/bin/dfARG_SEP-PkARG_SEP/")]
+            (if (= (observe-disk disk) "") ""
+              (str "__awai_memory__\n" memory "__awai_pressure__\n" pressure "__awai_disk__\n" disk))))))))
+
+;; The receiving native guest checks every section again. The markers and
+;; reported data remain observations, not signed telemetry or reservations.
+(defn observe-native-snapshot [raw :string] :string
+  (let [begin "__awai_memory__\n" pm "__awai_pressure__\n" dm "__awai_disk__\n"
+        n (string-byte-length raw) p (string-index-of raw pm) d (string-index-of raw dm)
+        mstart (string-byte-length begin) pstart (+ p (string-byte-length pm)) dstart (+ d (string-byte-length dm))]
+    (if (or (not (= (string-index-of raw begin) 0)) (< p mstart) (< d pstart) (> dstart n)) ""
+      (let [memory (observe-memory-swap (string-substring raw mstart p))
+            pressure (observe-pressure (string-substring raw pstart d))
+            disk (observe-disk (string-substring raw dstart n))]
+        (if (or (= memory "") (= pressure "") (= disk "")) ""
+          (str memory "pressure:\n" pressure "disk:\n" disk))))))
+(defn observe-native-node [node :string ip :string identity :string known :string] :string
+  (let [result (ob-probe node ip identity known "native-snapshot")]
+    (if (ob-ok? result) (observe-native-snapshot (ob-value result)) "")))
+
+(defn fleet-host-observe-main [] :i64
+  (let [extra (typed-cap-call 38 :string :string "0")
+        result (if (= extra "") (ob-host-snapshot) "")
+        out (typed-cap-call 37 :string :string (if (= result "") "host-observation/refused\n" result))]
+    (if (= result "") 1 0)))
+(defn fleet-native-observe-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        extra (typed-cap-call 38 :string :string "4")
+        result (if (= extra "") (observe-native-node node ip identity known) "")
+        out (typed-cap-call 37 :string :string
+              (if (= result "") "observation/refused native-snapshot\n" (str "observation/untrusted " node "\n" result)))]
+    (if (= result "") 1 0)))
 
 ;; Trusted, bounded diagnostic host entry: NODE IPV4 IDENTITY KNOWN_HOSTS.
 ;; The host authorizes this exact tuple, bounds process output and lifetime,

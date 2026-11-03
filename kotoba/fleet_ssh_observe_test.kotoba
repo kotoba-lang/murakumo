@@ -43,6 +43,9 @@
           (= (observe-disk "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3 10 1 x 10% /\n") "")
           (= (observe-disk "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3 10 1 9 10% /other\n") "")
           (= (observe-disk "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3 10 1 9 10% /\nextra\n") "")
+          (not (= (observe-native-snapshot "__awai_memory__\n17179869184\ntotal = 0.00M used = 0.00M free = 0.00M (encrypted)\n__awai_pressure__\nSystem-wide memory free percentage: 90%\n__awai_disk__\nFilesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3 10 1 9 10% /\n") ""))
+          (= (observe-native-snapshot "__awai_memory__\n17179869184\ntotal = 0.00M used = 0.00M free = 0.00M\n__awai_pressure__\nSystem-wide memory free percentage: 90%\n") "")
+          (= (observe-native-snapshot "__awai_memory__\n17179869184\ntotal = 0.00M used = 0.00M free = 0.00M\n__awai_pressure__\nSystem-wide memory free percentage: 90%\n__awai_disk__\nFilesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3 10 1 x 10% /\n") "")
           (= (observe-model-files node "") "")
           (= (observe-model-files node "Regular File 1 /Users/benjamin/.murakumo/awai147-mtplx-bonsai/model.safetensors\n") "")
           (= (observe-model-files node "Regular File 1 /Users/benjamin/.murakumo/awai147-mtplx-bonsai/model.safetensors\nSymbolic Link 2 /Users/benjamin/.murakumo/awai147-mtplx-bonsai/mtp.safetensors\n") "")
@@ -57,6 +60,7 @@
                    (>= (string-index-of request "UpdateHostKeys=no") 0)
                    (>= (string-index-of request "HostKeyAlias=benjamin") 0)
                    (>= (string-index-of request "/usr/sbin/sysctl -n hw.memsize vm.swapusage") 0)
+                   (>= (string-index-of (observe-ssh-request node ip key known "native-snapshot") "/Users/benjamin/.murakumo/bin/fleet-host-observer") 0)
                    (>= (string-index-of (observe-ssh-request node ip key known "model-files") "/usr/bin/stat -f '%HT %z %N'") 0)
                    (>= (string-index-of (observe-ssh-request node ip key known "disk") "/bin/df -Pk /") 0))]
     (if (and valid rejects fixed) 0 1)))
