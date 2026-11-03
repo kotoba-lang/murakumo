@@ -1,0 +1,79 @@
+;; Conditional GitHub checkpoint head candidate. Compose after
+;; github_checkpoint_archive.kotoba and its pinned closure. A Git ref is not a
+;; lease: an independently authorized host must validate authority, hold the
+;; expected head and fence effects at their actual sinks. Never auto-retry an
+;; unknown result. The host isolates paths, credentials, Git/GH and egress.
+(ns murakumo.github-checkpoint-head (:export [github-checkpoint-head-main]))
+
+(defn- gh-head-text [task :string cid :string] :string
+  (str "{\"checkpoint\":\"" cid "\",\"kind\":\"itonami.github-head/1\",\"task\":\"" task "\"}"))
+
+;; Refuse unexpected files, modes and symlinks in the independently pinned
+;; head. This does not replace the host's protection against path aliases.
+(defn- gh-head-tree? [dir :string rev :string] :bool
+  (let [r (cp-git dir (str "ls-tree" (cp-a) "-r" (cp-a) rev))
+        out (cp-out r) n (string-length out)
+        blob (if (= n 63) (string-substring out 12 52) "")]
+    (and (cp-ok? r) (cp-hex? blob 40)
+         (= out (str "100644 blob " blob "\thead.json\n")))))
+
+;; The operator must provision the initial ref and independently pin its full
+;; commit ID and checkpoint. Each successor has one Git parent and an exact
+;; expected checkpoint parent. A normal non-force push makes concurrent children
+;; of the same expected commit mutually exclusive only while the remote ref is
+;; monotonic and cannot be deleted or rewound by another principal. A normal
+;; push is not an exact expected-OID CAS if the remote is rewound after fetch.
+;; The host must independently enforce that policy and valid lease authority.
+;; Archive verification occurs first. A verified readback of the exact new
+;; commit is required even if the push returned success; a different or
+;; unavailable head stays unknown.
+(defn- gh-advance [work :string store :string cid :string author :string profile :string policy :string environment :string
+                   epoch :i64 parent :string task :string repo :string gh :string expected :string] :string
+  (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? store))
+            (ga-path-overlap? work store) (not (cp-safe-absolute? gh)) (not (ga-repo? repo))
+            (not (cp-hex? expected 40)) (not (cp-raw? parent)) (not (cp-raw? cid))
+            (not (ga-verified? store cid author profile policy environment epoch parent task))) "head/input-refused"
+        (not (= (cp-fs "I" work "") "1")) "head/work-exists-or-unavailable"
+        (not (= (cp-fs "H" work "700") "1")) "head/work-permissions"
+        :else
+        (let [archive (ga-archive (str work "/archive") store cid author profile policy environment epoch parent task repo gh)]
+          (if (not (= (string-index-of archive (str "archive/stored " cid " ")) 0)) "head/archive-unconfirmed"
+            (let [dir (str work "/head") ref (str "refs/heads/itonami/head/" (sha256-hex (cp-bytes task)))
+                  remote (str "https://github.com/" repo ".git") old (gh-head-text task parent)
+                  new (gh-head-text task cid) created (= (cp-fs "I" dir "") "1")
+                  init (if created (cp-git dir "initARG_SEP--quietARG_SEP--template=") "refused")
+                  fetched (if (and (cp-ok? init) (ga-config-safe? dir))
+                            (ga-git dir (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
+                  previous (if (cp-ok? fetched) (cp-git dir "rev-parseARG_SEPFETCH_HEAD") "refused")
+                  shape (and (cp-ok? previous) (= (cp-line (cp-out previous)) expected) (gh-head-tree? dir "FETCH_HEAD"))
+                  content (if shape (cp-git dir "showARG_SEPFETCH_HEAD:head.json") "refused")
+                  checkout (if (and (cp-ok? content) (= (cp-out content) old))
+                             (cp-git dir "checkoutARG_SEP--quietARG_SEP--detachARG_SEPFETCH_HEAD") "refused")
+                  written (and (cp-ok? checkout) (cp-write (str dir "/head.json") (cp-bytes new)))
+                  add (if written (cp-git dir "addARG_SEP--ARG_SEPhead.json") "refused")
+                  commit (if (cp-ok? add) (cp-git dir "commitARG_SEP--quietARG_SEP-mARG_SEPAdvance checkpoint head") "refused")
+                  tip-r (if (cp-ok? commit) (cp-git dir "rev-parseARG_SEPHEAD") "refused")
+                  tip (cp-line (cp-out tip-r))
+                  parent-r (if (cp-ok? tip-r) (cp-git dir "rev-parseARG_SEPHEAD^") "refused")]
+              (if (not (and (cp-ok? parent-r) (cp-hex? tip 40) (= (cp-line (cp-out parent-r)) expected)
+                            (gh-head-tree? dir "HEAD"))) "head/precondition-or-staging-refused"
+                (let [push (ga-git dir (str "push" (cp-a) "--quiet" (cp-a) remote (cp-a) "HEAD:" ref))
+                      check (str work "/check") made (= (cp-fs "I" check "") "1")
+                      ci (if made (cp-git check "initARG_SEP--quietARG_SEP--template=") "refused")
+                      cf (if (and (cp-ok? ci) (ga-config-safe? check))
+                           (ga-git check (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
+                      got (if (cp-ok? cf) (cp-git check "rev-parseARG_SEPFETCH_HEAD") "refused")
+                      fsck (if (and (cp-ok? got) (= (cp-line (cp-out got)) tip))
+                             (cp-git check "fsckARG_SEP--fullARG_SEP--strict") "refused")
+                      readback (if (and (cp-ok? fsck) (gh-head-tree? check "FETCH_HEAD"))
+                                 (cp-git check "showARG_SEPFETCH_HEAD:head.json") "refused")
+                      back-parent (if (cp-ok? readback) (cp-git check "rev-parseARG_SEPFETCH_HEAD^") "refused")]
+                  (if (and (cp-ok? back-parent) (= (cp-line (cp-out back-parent)) expected) (= (cp-out readback) new))
+                    (str "head/advanced " cid " " tip " " (if (cp-ok? push) "acknowledged" "unacknowledged"))
+                    "head/conflict-or-unknown"))))))))
+
+(defn github-checkpoint-head-main [] :i64
+  (let [result (gh-advance (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
+                           (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9) (cp-arg 10) (cp-arg 11) (cp-arg 12))
+        out (cp-say result)]
+    (if (= (string-index-of result "head/advanced ") 0) 0 1)))
