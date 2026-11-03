@@ -100,7 +100,7 @@
     (if (= result "model/digest-observed") 0 (if (= result "model/input-refused") 2 1))))
 
 ;; Proposed private OCI artifact profile. This parses and authenticates the
-;; exact manifest and both named layer descriptors; it is not a snapshot,
+;; exact manifest and all named layer descriptors; it is not a snapshot,
 ;; registry client, model loader, publisher identity, or execution grant.
 (defn- ma-read [path :string limit :i64] :vector-i64
   (let [entry (if (md-path? path) (typed-cap-call 35 :string :string (ol-frame "O" path "")) "")
@@ -111,11 +111,14 @@
   (and (>= d 0) (= (json-kind m d) 1) (= (ol-text m d "mediaType") kind)
        (= (ol-text m d "digest") digest) (= (ol-int m d "size") size)))
 
-(defn- ma-observe [layout :string manifest :string manifest-size :i64 base :string base-size :i64 mtp :string mtp-size :i64] :string
+(defn- ma-observe [layout :string manifest :string manifest-size :i64 base :string base-size :i64 mtp :string mtp-size :i64
+                  assets :string assets-size :i64] :string
   (if (or (not (md-path? layout)) (not (= (digest-problem manifest) "oci/ok"))
           (not (= (digest-problem base) "oci/ok")) (not (= (digest-problem mtp) "oci/ok"))
+          (not (= (digest-problem assets) "oci/ok"))
           (< manifest-size 1) (> manifest-size 1048576) (< base-size 1) (> base-size 17179869184)
-          (< mtp-size 1) (> mtp-size 17179869184) (= base mtp)) "model-artifact/input-refused"
+          (< mtp-size 1) (> mtp-size 17179869184) (< assets-size 1) (> assets-size 17179869184)
+          (= base mtp) (= base assets) (= mtp assets)) "model-artifact/input-refused"
     (let [layout-bytes (ma-read (str layout "/oci-layout") 1024)
           index (ma-read (str layout "/index.json") 1048576)
           indexes (if (and (ol-read-ok? index) (json-valid? index)) (json-member index (ol-root index) "manifests") -1)
@@ -130,8 +133,9 @@
                 (not (= (str "sha256:" (sha256-hex m)) manifest)) (not (json-valid? m))) "model-artifact/manifest-refused"
             :else
             (let [root (ol-root m) layers (json-member m root "layers") config (json-member m root "config")
-                  first-layer (if (and (>= layers 0) (= (json-kind m layers) 2) (= (json-count m layers) 2)) (json-element m layers 0) -1)
+                  first-layer (if (and (>= layers 0) (= (json-kind m layers) 2) (= (json-count m layers) 3)) (json-element m layers 0) -1)
                   second-layer (if (>= first-layer 0) (json-element m layers 1) -1)
+                  third-layer (if (>= first-layer 0) (json-element m layers 2) -1)
                   empty-digest "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
                   empty-config (ma-read (ol-blob-path layout empty-digest) 2)]
               (cond (or (not (= (ol-int m root "schemaVersion") 2))
@@ -141,15 +145,18 @@
                         (not (ol-read-ok? empty-config)) (not (= (vector-count empty-config) 2))
                         (not (= (str "sha256:" (sha256-hex empty-config)) empty-digest))
                         (not (ma-layer? m first-layer "application/vnd.awai.model.bonsai.weights.v1" base base-size))
-                        (not (ma-layer? m second-layer "application/vnd.awai.model.bonsai.mtp.v1" mtp mtp-size))) "model-artifact/descriptor-refused"
+                        (not (ma-layer? m second-layer "application/vnd.awai.model.bonsai.mtp.v1" mtp mtp-size))
+                        (not (ma-layer? m third-layer "application/vnd.awai.model.bonsai.assets.tar.v1" assets assets-size))) "model-artifact/descriptor-refused"
                     (not (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed")) "model-artifact/base-unknown"
                     (not (= (md-observe (ol-blob-path layout mtp) mtp mtp-size) "model/digest-observed")) "model-artifact/mtp-unknown"
+                    (not (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed")) "model-artifact/assets-unknown"
                     :else "model-artifact/digests-observed"))))))
 
 (defn model-artifact-main [] :i64
-  (let [result (if (= (md-arg 7) "")
+  (let [result (if (= (md-arg 9) "")
                  (ma-observe (md-arg 0) (md-arg 1) (md-decimal (md-arg 2))
-                             (md-arg 3) (md-decimal (md-arg 4)) (md-arg 5) (md-decimal (md-arg 6)))
+                             (md-arg 3) (md-decimal (md-arg 4)) (md-arg 5) (md-decimal (md-arg 6))
+                             (md-arg 7) (md-decimal (md-arg 8)))
                  "model-artifact/input-refused")
         x (md-out result)]
     (if (= result "model-artifact/digests-observed") 0 1)))
