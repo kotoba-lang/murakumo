@@ -3,7 +3,7 @@
 ;; The caller must authorize the node/address pair and supply trusted key paths;
 ;; the host must constrain process execution, output size, and execution time.
 (ns murakumo.fleet-ssh-observe
-  (:export [observe-inputs? observe-ssh-request observe-result observe-node]))
+  (:export [observe-inputs? observe-ssh-request observe-result observe-node fleet-ssh-observe-main]))
 
 (defn- ob-bytes [s :string] :vector-i64
   (vector-i64-from-bytes (string-to-utf8 s)))
@@ -67,10 +67,17 @@
 ;; Host response is <exit> LF <stdout>. Empty or ambiguous output is refusal.
 ;; Output is untrusted observation only; neither the in-band marker nor these
 ;; values confer admission authority. The host must enforce capture bounds.
+(defn- ob-safe-output? [s :string] :bool
+  (let [v (ob-bytes s) n (vector-count v)]
+    (and (> n 0) (<= n 8190)
+      (loop [i 0] (if (= i n) true
+        (let [c (vector-at v i)]
+          (if (or (= c 10) (and (>= c 32) (<= c 126))) (recur (+ i 1)) false)))))))
 (defn observe-result [reply :string] :string
   (if (or (> (string-byte-length reply) 8192) (not (= (string-index-of reply "0\n") 0))) ""
-    (let [raw (string-substring reply 2 (string-byte-length reply))]
-      (if (= (remote-exit raw 0) 0) (remote-output raw 0) ""))))
+    (let [raw (string-substring reply 2 (string-byte-length reply))
+          output (if (= (remote-exit raw 0) 0) (remote-output raw 0) "")]
+      (if (ob-safe-output? output) output ""))))
 
 (defn- ob-probe [node :string ip :string identity :string known :string mode :string] :string
   (let [request (observe-ssh-request node ip identity known mode)]
@@ -88,3 +95,16 @@
               (let [disk (ob-probe node ip identity known "disk")]
                 (if (= disk "") ""
                   (str "memory:\n" memory "swap:\n" swap "pressure:\n" pressure "disk:\n" disk))))))))))
+
+;; Trusted, bounded diagnostic host entry: NODE IPV4 IDENTITY KNOWN_HOSTS.
+;; The host authorizes this exact tuple, bounds process output and lifetime,
+;; and protects the identity; guest arguments alone grant no authority.
+(defn fleet-ssh-observe-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        extra (typed-cap-call 38 :string :string "4")
+        data (if (and (= extra "") (observe-inputs? node ip identity known))
+               (observe-node node ip identity known) "")
+        out (typed-cap-call 37 :string :string
+              (if (= data "") "observation/refused\n" (str "observation/untrusted " node "\n" data)))]
+    (if (= data "") 1 0)))
