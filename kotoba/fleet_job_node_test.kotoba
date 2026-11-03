@@ -24,9 +24,9 @@
   (let [job "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         other "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         lease (lease-text "n" job 0 1 2000 0)
-        receipt (str "{\"job\":\"" job "\",\"node\":\"n\"}")
-        wrong-job (str "{\"job\":\"" other "\",\"node\":\"n\"}")
-        wrong-node (str "{\"job\":\"" job "\",\"node\":\"other\"}")
+        receipt (step-receipt-text 1000 "did" 1 0 job "n" "output")
+        wrong-job (step-receipt-text 1000 "did" 1 0 other "n" "output")
+        wrong-node (step-receipt-text 1000 "did" 1 0 job "other" "output")
         extra (str "{\"class\":\"" job "\",\"epoch\":1,\"node\":\"n\",\"revision\":0,\"slot\":0,\"until\":2000,\"x\":1}")]
     (and (jn-receipt-bound? lease receipt job)
          (not (jn-receipt-bound? lease receipt other))
