@@ -19,7 +19,19 @@ publish to a registry, qualify a loader, reserve resources or launch a model.
 
 The descriptor test has an independently calculated compact-JSON digest. The
 selected source and historical native dependencies passed Amu source `check`;
-the test and the actual filesystem flow have not run. Full-closure native
+the new seal test and its actual filesystem flow have not run.
+
+The test-only `test/native/model_oci_existing_consumer_test.py` independently
+constructs the same descriptor shape with small synthetic bytes. On one Mac,
+the previously built native publication fixture with SHA-256
+`d5a852ecc05069d9fc93e044714a369c0a665d9b2c6db17c0a665b97155120c1`
+accepted that layout, restored its synthetic blobs and eight assets, and
+refused a wrong base digest. The fixture's `ma-check`, `md-observe`, and
+`ma-stage-checked` matched the current source. This exercises the existing
+consumer with a Python-created layout; it does **not** execute the new seal
+component or prove its exact output, crash behavior or production ABI.
+
+Full-closure native
 behavior, crash and fsync failures, real model-sized blobs, registry transfer,
 and the existing consumer's recovery path require qualification before use.
 High-load builds and deployments remain subject to the qualified governor.
