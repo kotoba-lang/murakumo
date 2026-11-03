@@ -331,6 +331,8 @@ Before planning or dispatch, the controller requires the cursor's `.pending` fil
 
 A subsequent [local sequencing fixture](evidence/awai150-cron-cursor-sequence-20261103/README.md) composed the updated controller and cursor through real diagnostic FS2 writes, rename and sync, while stubbing scheduling, archive and the turn. An injected unknown lookup after the stubbed turn left the cursor unchanged; a control using the old cursor check advanced it. This is not the full source closure or production qualification.
 
+A refreshed [source composition check](evidence/awai150-current-source-check-20261103/README.md) includes the current controller, resident, recovery, checkpoint, archive, bridge and four called cursor functions. A bounded Mac bootstrap `check` accepted it and refused a control without `cc-advance`. The other dependency sources are historical and are not fully provenance-locked; the result is not a compiled image or a runnable gateway.
+
 `docs/evidence/awai150-cron-work-binding-20261103.json` records native source-closure tests for the supported and unsupported profile cases, a wrong-work case and a bypass control. This does not prove an integrated inference turn.
 
 The native coordinator also checks that the two fresh archive staging paths do
