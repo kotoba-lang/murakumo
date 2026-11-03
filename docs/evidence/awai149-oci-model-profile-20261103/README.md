@@ -1,5 +1,8 @@
 # Experimental OCI model and MTP artifact reader
 
+This is the earlier two-layer diagnostic. The later [assets-layer revision](../awai149-oci-model-assets-20261103/README.md)
+supersedes the profile with three required layers.
+
 `model-artifact-main` connects the bounded model digest observer to a proposed
 private OCI layout profile. The host supplies an absolute layout path and
 independently pinned manifest, base and MTP SHA-256 digests and sizes. The
