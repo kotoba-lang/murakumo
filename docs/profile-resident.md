@@ -562,3 +562,23 @@ These are component limits and may reject larger previously accepted inputs.
 The FS2 host must enforce the range bound and own these paths exclusively;
 metadata and range reads do not establish a same-FD snapshot. This source
 change has not been qualified on a native runtime or production host.
+
+## Flint token preflight candidate
+
+Before a Flint generation the candidate sends the same system and conversation
+text to the local Kapitsa count endpoint, requires a valid positive integer,
+and caps output to `min(maxTokens, 8192 - inputTokens - 256)`. Less than 64
+tokens available, a bad response, or unknown dispatch refuses generation.
+The count request has its own durable request and dispatch marker: an unknown
+outcome is reconciled by the host, never silently resubmitted. A cached count
+is useful only while the host binds it to the same authenticated process,
+model, tokenizer and template as the generation.
+
+Flint runtime and public-environment descriptions must now declare
+`reasoningMemory` as `disabled`. This declaration is not proof of the server's
+environment: the host must verify and maintain `NI_REASONING_MEMORY=0` and
+the process identity through both calls. Kapitsa 0.2.26 can otherwise restore
+reasoning during generation that its count endpoint did not count. The one
+observed parity test is not proof for all messages, templates or transports.
+The source and source-only cases remain unqualified; no real resident turn,
+native host, crash recovery or resource governor was tested.

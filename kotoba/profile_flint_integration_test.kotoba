@@ -2,9 +2,9 @@
 (ns murakumo.profile-flint-integration-test (:export [test-flint-profile-integration test-flint-public-environment]))
 
 (defn test-flint-profile-integration [] :bool
-  (let [runtime (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"socket\":\"/private/socket\"}")
-        bad-context (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":16384,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"socket\":\"/private/socket\"}")
-        bad-budget (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":8192,\"model\":\"flint\",\"socket\":\"/private/socket\"}")
+  (let [runtime (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"reasoningMemory\":\"disabled\",\"socket\":\"/private/socket\"}")
+        bad-context (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":16384,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"reasoningMemory\":\"disabled\",\"socket\":\"/private/socket\"}")
+        bad-budget (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":8192,\"model\":\"flint\",\"reasoningMemory\":\"disabled\",\"socket\":\"/private/socket\"}")
         done (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"done\",\"role\":\"assistant\"}}],\"model\":\"flint\"}")
         incomplete (cp-bytes "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\",\"role\":\"assistant\"}}],\"model\":\"flint\"}")
         multiline (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"line1\\nline2\\tend\",\"role\":\"assistant\"}}],\"model\":\"flint\"}")
@@ -15,6 +15,15 @@
         malformed (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"done\",\"role\":\"assistant\"}}],\"model\":\"flint\",\"rawResponseDigest\":\"sha256:broken\"}")]
     (and (pr-local-flint? runtime) (pr-local? runtime) (not (pr-local-mtp? runtime))
          (not (pr-local-flint? bad-context)) (not (pr-local-flint? bad-budget))
+         (not (pr-local-flint? (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"socket\":\"/private/socket\"}")))
+         (= (pr-count-value (cp-bytes "{\"input_tokens\":2231}")) 2231)
+         (= (pr-count-value (cp-bytes "{\"input_tokens\":0}")) -1)
+         (= (pr-count-value (cp-bytes "{\"input_tokens\":1.5}")) -1)
+         (= (pr-count-value (cp-bytes "{\"input_tokens\":1,\"input_tokens\":2}")) -1)
+         (= (pr-flint-output-budget 2231 6144) 5705)
+         (= (pr-flint-output-budget 7872 6144) 64)
+         (= (pr-flint-output-budget 7873 6144) -1)
+         (= (pr-flint-output-budget -1 6144) -1)
          (= (pr-token-budget runtime true) 6144)
          (pr-local-response? runtime done) (not (pr-local-response? runtime incomplete))
          (> (vector-count compact) 0) (pr-local-response? runtime compact)
@@ -33,9 +42,9 @@
         cfg (cp-bytes (str "{\"modelArtifactDigest\":\"" d "\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"" d "\",\"task\":\"task1\"}"))
         common (str ",\"model\":\"flint\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d
                     "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"socket\":\"/private/socket\",\"source\":\"" src "\",\"task\":\"task1\",\"tools\":\"none\",\"workDigest\":\"" d "\"}")
-        flint (cp-bytes (str "{\"authorizationFile\":\"/private/auth\",\"contextDigest\":\"" d "\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144" common))
+        flint (cp-bytes (str "{\"authorizationFile\":\"/private/auth\",\"contextDigest\":\"" d "\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144" (string-replace-all common "\"rail\":\"murakumo\"" "\"rail\":\"murakumo\",\"reasoningMemory\":\"disabled\"")))
         mtp (cp-bytes (str "{\"authorizationFile\":\"/private/auth\",\"contextDigest\":\"" d "\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"maxTokens\":768" common))
-        env-flint (cp-bytes (str "{\"contextDigest\":\"" d "\",\"contextTokens\":8192,\"kind\":\"itonami.profile-environment-public-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"modelArtifactDigest\":\"" d "\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"source\":\"" src "\",\"task\":\"task1\",\"tools\":\"none\",\"workDigest\":\"" d "\"}"))
+        env-flint (cp-bytes (str "{\"contextDigest\":\"" d "\",\"contextTokens\":8192,\"kind\":\"itonami.profile-environment-public-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"modelArtifactDigest\":\"" d "\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d "\",\"rail\":\"murakumo\",\"reasoningMemory\":\"disabled\",\"roleDigest\":\"" d "\",\"source\":\"" src "\",\"task\":\"task1\",\"tools\":\"none\",\"workDigest\":\"" d "\"}"))
         env-mtp (cp-bytes (str "{\"contextDigest\":\"" d "\",\"kind\":\"itonami.profile-environment-public/2\",\"maxTokens\":768,\"model\":\"flint\",\"modelArtifactDigest\":\"" d "\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"source\":\"" src "\",\"task\":\"task1\",\"tools\":\"none\",\"workDigest\":\"" d "\"}"))
         public-text (cp-text env-flint)
         leaked (cp-bytes (str "{\"authorizationFile\":\"/private/auth\"," (string-substring public-text 1 (string-length public-text))))]

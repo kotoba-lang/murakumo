@@ -151,10 +151,12 @@
 ;; the runtime. Socket, authorizationFile and endpoint remain host-local.
 ;; Pins describe operator-selected artifacts; they do not attest the peer.
 (defn- rt-public-environment? [cfg :vector-i64 runtime :vector-i64 env :vector-i64] :bool
-  (and (json-canonical? env) (= (json-kind env 0) 1) (= (json-count env 0) 14)
+  (and (json-canonical? env) (= (json-kind env 0) 1)
+       (= (json-count env 0) (if (pr-local-flint? runtime) 15 14))
        (or (and (pr-local-mtp? runtime) (= (cp-str env 0 "kind") "itonami.profile-environment-public/2"))
            (and (pr-local-flint? runtime) (= (cp-str env 0 "kind") "itonami.profile-environment-public-flint/1")
-                (= (cp-num env 0 "contextTokens") 8192)))
+                (= (cp-num env 0 "contextTokens") 8192)
+                (= (cp-str env 0 "reasoningMemory") "disabled")))
        (json-canonical? runtime) (= (cp-str runtime 0 "profile") "awai-growth-steward")
        (= (cp-str env 0 "profile") (cp-str runtime 0 "profile"))
        (= (digest-problem (cp-str env 0 "profileDigest")) "oci/ok")

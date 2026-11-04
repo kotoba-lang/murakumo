@@ -87,6 +87,7 @@
        (cp-safe-absolute? (cp-str runtime 0 "socket"))
        (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
        (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))
+       (= (cp-str runtime 0 "reasoningMemory") "disabled")
        (= (cp-num runtime 0 "contextTokens") 8192)
        (>= (cp-num runtime 0 "maxTokens") 64) (<= (cp-num runtime 0 "maxTokens") 6144)))
 (defn- pr-local? [runtime :vector-i64] :bool
@@ -99,7 +100,7 @@
 ;; replace cgroup enforcement, descendant containment or host admission.
 ;; HTTPS uses --fail, supported by Xavier curl 7.68; error bodies are not
 ;; retained as successful model responses.
-(defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
+(defn- pr-submit-kind [unit :string request :string response :string seconds :i64 runtime :vector-i64 count :bool] :bool
   (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
     (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
     (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
@@ -115,7 +116,11 @@
     (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
     (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
     (cp-a) "--output" (cp-a) response (cp-a)
-    (if (pr-local? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions")))))
+    (if count "http://localhost/v1/messages/count_tokens"
+      (if (pr-local? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions"))))))
+
+(defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
+  (pr-submit-kind unit request response seconds runtime false))
 
 (defn- pr-answer [b :vector-i64] :string
   (if (not (json-valid? b)) ""
@@ -253,6 +258,49 @@
 (defn- pr-read-response [path :string] :vector-i64
   (pr-read-bounded path 262144))
 
+;; The host must pin and authenticate one Kapitsa process with reasoning
+;; memory disabled throughout both count and generation, and qualify exact
+;; template/tokenizer parity. A model name or this response cannot prove it.
+;; Unknown or incomplete count dispatch is never retried automatically.
+(defn- pr-count-value [b :vector-i64] :i64
+  (if (not (and (json-valid? b) (= (json-kind b 0) 1) (= (json-count b 0) 1))) -1
+    (let [i (json-member b 0 "input_tokens")]
+      (if (and (>= i 0) (json-int-ok? b i) (> (json-int b i) 0) (<= (json-int b i) 8192))
+        (json-int b i) -1))))
+
+(defn- pr-count-wait [unit :string response :string] :i64
+  (loop [i 0]
+    (let [state (pr-unit-code unit)]
+      (cond (= state 1) (pr-count-value (pr-read-bounded response 1024))
+            (or (= state -1) (> i 900)) -1
+            :else (let [z (pr-pause)] (if z (recur (+ i 1)) -1))))))
+
+(defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64] :i64
+  (if (or (not (pr-local-flint? runtime)) (= (vector-count body) 0)) -1
+    (let [id (sha256-hex (cp-bytes (str "local-flint-count\n" (cp-str runtime 0 "socket") "\n"
+                                    (cp-str runtime 0 "authorizationFile") "\n" (cp-cid body))))
+          unit (str "itonami-count-" (string-substring id 0 24) ".service")
+          request (str cache "/" id ".count-request.json") response (str cache "/" id ".count-response.json")
+          marker (str cache "/" id ".count-dispatch")
+          request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
+          known (and (or (= request-status "0") (= request-status "1"))
+                     (or (= marker-status "0") (= marker-status "1"))
+                     (or (= response-status "0") (= response-status "1")))
+          present (= request-status "1") marked (= marker-status "1")
+          matches (if present (= (cp-cid (pr-read-bounded request (vector-count body))) (cp-cid body)) false)
+          marker-matches (if marked (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n") false)
+          decision (if known (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
+          submitted (cond (= decision "profile/reuse-unit") true
+                          (= decision "profile/new-unit") (and (pr-prepare-submit request marker body)
+                            (pr-submit-kind unit request response seconds runtime true))
+                          :else false)]
+      (if submitted (pr-count-wait unit response) -1))))
+
+(defn- pr-flint-output-budget [input :i64 requested :i64] :i64
+  (let [available (- 8192 input 256)]
+    (if (or (< input 1) (> input 8192) (< requested 64) (> requested 6144) (< available 64)) -1
+      (if (< requested available) requested available))))
+
 ;; A crash can leave the output durable while state still points at this turn.
 ;; Only the exact completed response may be reused. Sync both the file and
 ;; its parent directory before state can refer to it.
@@ -378,10 +426,16 @@
                          " State one concrete next verification and what evidence would decide it."
                          " You have no current external observations; do not invent progress or completion."
                          " All tools are denied. Do not change files, publish, merge or contact anyone.")))
-                    body (str (if (pr-local-flint? runtime) "{\"max_tokens\":" "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":") tokens ",\"messages\":["
-                      "{\"content\":" (pr-json-quote (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))) ",\"role\":\"system\"},"
-                      (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
-                      "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
+                    system-text (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))
+                    history (str (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
+                                 "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}")
+                    count-body (cp-bytes (str "{\"messages\":[" history "],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
+                                              ",\"system\":" (pr-json-quote system-text) ",\"thinking\":{\"type\":\"enabled\"}}"))
+                    counted (if (pr-local-flint? runtime) (pr-count runtime cache seconds count-body) 0)
+                    budget (if (pr-local-flint? runtime) (pr-flint-output-budget counted tokens) tokens)]
+              (if (< budget 1) "profile/context-budget-unknown-or-insufficient"
+                (let [body (str (if (pr-local-flint? runtime) "{\"chat_template_kwargs\":{\"enable_thinking\":true},\"max_tokens\":" "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":") budget ",\"messages\":["
+                      "{\"content\":" (pr-json-quote system-text) ",\"role\":\"system\"}," history "],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
                       (if (pr-local-flint? runtime) ",\"stream\":false,\"temperature\":1,\"top_k\":20,\"top_p\":0.95}"
                         ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}"))
                     id (sha256-hex (cp-bytes (if (pr-local? runtime)
@@ -422,7 +476,7 @@
                         rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs "M" repo "") "0")]
                     (if (not usable) "profile/response-not-replicable"
-                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))))
+                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
   (if (pr-local-flint? runtime) (cp-num runtime 0 "maxTokens")
