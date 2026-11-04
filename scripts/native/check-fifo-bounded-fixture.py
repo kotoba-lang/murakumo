@@ -78,6 +78,25 @@ def main():
             instrumented = anchor[:cut] + ' ' + pause + anchor[cut:]
             (root / (phase + '.kotoba')).write_text(plain.replace('(defn- rq-commit ', helper + '(defn- rq-commit ')
                                                     .replace(anchor, instrumented))
+        recovery_start = plain.index('(defn- rq-recover ')
+        recovery_end = plain.index('(defn- rq-commit ', recovery_start)
+        recovery_source = plain[recovery_start:recovery_end]
+        faults = {
+            'queue-sync': '(= (rq-fs "M" (str root "/queue") "") "1")',
+            'intent-sync': '(= (rq-fs "M" intent "") "1")',
+            'directory-sync': '(= (rq-fs "M" root "") "1")',
+            'post-archive-sync': '(= (rq-fs "M" root "") "1")',
+        }
+        for fault, anchor in faults.items():
+            count = recovery_source.count(anchor)
+            if count != (2 if fault in ('directory-sync', 'post-archive-sync') else 1):
+                raise ValueError('recovery fault anchor changed: ' + fault)
+            if fault == 'post-archive-sync':
+                at = recovery_source.rindex(anchor)
+                mutated = recovery_source[:at] + 'false' + recovery_source[at + len(anchor):]
+            else:
+                mutated = recovery_source.replace(anchor, 'false', 1)
+            (root / (fault + '.kotoba')).write_text(plain[:recovery_start] + mutated + plain[recovery_end:])
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY); saved = None
         if fd != 3:
             try: saved = os.dup(3)
@@ -192,6 +211,38 @@ def main():
                     killed_phases.append(phase)
                 finally:
                     if child.poll() is None: child.kill(); child.wait(timeout=3)
+            injected_faults = []
+            for fault in faults:
+                variant = build(fault)
+                for label, prior in [('old', old), ('new', new)]:
+                    fault_root = root / ('fault-' + fault + '-' + label); fault_root.mkdir(mode=0o700)
+                    (fault_root / 'queue.lock').write_text(''); (fault_root / 'queue').write_text(prior)
+                    journal = 'RGI1\n' + old + 'NEXT\n' + new
+                    (fault_root / 'queue.intent').write_text(journal)
+                    path = '/fault-' + fault + '-' + label
+                    failed = subprocess.run([str(variant), path, 'recover'], cwd=root, pass_fds=(3,),
+                                            capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
+                    if failed.stderr or (failed.returncode, failed.stdout.decode().strip()) != (1, 'fifo/recovery-unknown'):
+                        raise ValueError(('injected fault not unknown', fault, label, failed.returncode, failed.stdout))
+                    post_archive = fault == 'post-archive-sync'
+                    journal_path = fault_root / ('queue.last' if post_archive else 'queue.intent')
+                    other_path = fault_root / ('queue.intent' if post_archive else 'queue.last')
+                    if ((fault_root / 'queue').read_text() != prior or
+                            journal_path.read_text() != journal or other_path.exists()):
+                        raise ValueError(('fault altered recovery state', fault, label))
+                    front = subprocess.run([str(fifo), path, 'front'], cwd=root, pass_fds=(3,),
+                                           capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
+                    expected_front = ((0, 'fifo/empty' if label == 'old' else 'fifo/front '+first)
+                                      if post_archive else (1, 'fifo/pending-unknown'))
+                    if front.stderr or (front.returncode, front.stdout.decode().strip()) != expected_front:
+                        raise ValueError(('unexpected front', fault, label))
+                    recovered = subprocess.run([str(fifo), path, 'recover'], cwd=root, pass_fds=(3,),
+                                               capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
+                    expected = ((1, 'fifo/no-intent') if post_archive else
+                                (0, 'fifo/aborted' if label == 'old' else 'fifo/recovered'))
+                    if recovered.stderr or (recovered.returncode, recovered.stdout.decode().strip()) != expected:
+                        raise ValueError(('recovery failed', fault, label, recovered.returncode, recovered.stdout))
+                    injected_faults.append(fault + '-' + label)
             if COMPONENT.read_bytes() != raw_component or CASES.read_bytes() != raw_cases:
                 raise ValueError('source changed during run')
             if sha(compiler.read_bytes()) != a.compiler_sha256 or sha(packager.read_bytes()) != a.packager_sha256:
@@ -202,6 +253,7 @@ def main():
                               'fifoContractPassed':True, 'oldAndNewJournalRecoveryPassed':True,
                               'concurrentAccepted':len(accepted), 'concurrentBusy':8-len(accepted),
                               'ownedChildKillPhases':killed_phases,
+                              'sourceInjectedSyncFaults':injected_faults,
                               'scope':'local synthetic FIFO diagnostic; not provider or governor qualification'}))
         finally:
             if fd != 3:
