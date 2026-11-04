@@ -33,6 +33,12 @@ provenance, membership, freshness, or permission to reset. The entry and its
 FS2 provider have not yet been built or qualified, and no deployed register
 has been inspected with this candidate.
 
+The draft voter requires a newline before processing a request. A timeout,
+closed connection or receive limit can otherwise yield a valid-looking prefix
+that changes the durable register. A composed source check passes with line
+completion cases; actual socket truncation, timeout, authentication and
+unchanged-register cases have not yet been executed on this candidate.
+
 `init-fresh` returns `voter/init-created`, `voter/init-refused`, or
 `voter/init-unknown`; unknown means publication may have happened and must be
 reconciled before any retry. On ARM64 Linux/XFS, the native fixture in

@@ -148,6 +148,7 @@
 
 ;; text before the first newline; text after the first space ("" when none)
 (defn- ln-line [s :string] :string (let [k (string-index-of s "\n")] (if (< k 0) s (string-substring s 0 k))))
+(defn- ln-complete-line? [s :string] :bool (>= (string-index-of s "\n") 0))
 (defn- ln-rest [s :string] :string (let [k (string-index-of s " ")] (if (< k 0) "" (string-substring s (+ k 1) (string-length s)))))
 
 ;; ---------------------------------------------------------------------------
@@ -303,11 +304,13 @@
         ;; requires a real fence, and a lost response remains unknown.
         (if (not (and permitted (ln-topology-current? topology-path topo)))
           (let [z (ln-write c)] 0)
-          (let [raw (ln-line (ln-recv c true))
+          (let [received (ln-recv c true)
+                raw (ln-line received)
                 line (if (= token "") raw (ln-rest raw))
-                ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))]
+                ok (and (ln-complete-line? received)
+                        (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line)))))]
             (if (not ok)
-              (let [x (ln-say "voter refused unauthenticated") z (ln-write c)] 0)
+              (let [x (ln-say "voter refused incomplete or unauthenticated") z (ln-write c)] 0)
               (if (not (ln-topology-current? topology-path topo)) (let [z (ln-write c)] 0)
                 (let [rep (ln-handle file line topo now)
                       current (ln-topology-current? topology-path topo)

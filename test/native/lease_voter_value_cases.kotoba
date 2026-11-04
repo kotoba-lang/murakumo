@@ -1,6 +1,13 @@
 ;; Source cases for topology-bound acceptance. A live integration fixture
 ;; must also exercise persisted prior accepted values and quorum recovery.
-(ns murakumo.lease-voter-value-cases (:export [test-lease-voter-values test-lease-register-shape]))
+(ns murakumo.lease-voter-value-cases (:export [test-lease-voter-values test-lease-register-shape test-lease-complete-line]))
+
+;; Timeout, EOF, and the receive bound can all return a valid-looking prefix.
+(defn test-lease-complete-line [] :bool
+  (and (ln-complete-line? "prepare 1 node\n")
+       (ln-complete-line? "prepare 1 node\nextra")
+       (not (ln-complete-line? "prepare 1 node"))
+       (not (ln-complete-line? ""))))
 
 (defn test-lease-voter-values [] :bool
   (let [topo (ln-bytes "{\"payload\":{\"nodes\":[{\"enabled\":true,\"node\":\"node-a\"}]}}")
