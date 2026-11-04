@@ -352,3 +352,49 @@ tests the selected native client's loopback/HMAC and lease comparison, not a
 real authenticated fleet quorum, real lease loss during count, the full
 two-phase resident, receiver fencing, model inference or governor
 qualification. No persistent service or model was started.
+
+## Combined two-phase and native lease-client seam on Xavier
+
+On 2026-11-04, a single bounded fixture combined the selected current
+`rt-dispatch`, `rt-lease`, `rt-post-problem`, `pr-step-range`, `pr-count`,
+`lease-group-round`, `ln-ask` and `recovery-lease-problem` bodies with the
+diagnostic FS2 and host clock. These eight bodies were compared byte-for-byte
+with the current source; other fixture dependencies were historical. Runtime
+and profile selection, count ID and generation submission were test stubs.
+Generation submission only wrote a sentinel; it made no model request.
+
+Three Python mock voters on separate loopback addresses checked request HMACs
+and returned replies signed with a synthetic token. The fixture reused a
+completed synthetic count through a task-owned transient systemd unit, then
+performed the actual selected native lease-client check. The unit was absent
+before the test and independently verified `not-found` and `inactive` after
+cleanup; all mock listeners were closed. No persistent service or model was
+started. The retained remote synthetic artifacts are in
+`/tmp/awai-lease-loopback-8iq2tlua`.
+
+| Third-round voter behavior | Observed result |
+| --- | --- |
+| Same lease value | Generation stub reached; turn intent and busy marker present; stub received a 588-second timeout. |
+| Changed lease value | `resident/lease-lost`; no generation sentinel or turn intent; busy marker retained. |
+| Two invalid reply MACs | `resident/lease-lost`; no generation sentinel or turn intent; busy marker retained. |
+
+The changed value was deliberately injected by the mocks and is not evidence
+of normal quorum evolution. All three voters ran on one machine; this was not
+the native voter implementation or a fleet quorum. Real model inference and
+GitHub state publication were not exercised. The lease can still change after
+the post-count check and before submission; atomic receiver-side fencing and
+qualification of the process/resource boundary remain necessary.
+
+The generated fixture source SHA-256 was
+`5b44f7efa1f60552e1716020eec38c2de1644af2c1f09b773d4ad223a6a4760a`;
+its generated ELF SHA-256 was
+`f12b5de438648a4346f453e7838f81b7fffdfa4420e88fd6c6755aa86b6c542a`.
+The source-derived Linux ARM64 F3 compiler SHA-256 was
+`46fce6f620a73d91c7ec482687856a3354646f416e05085a6fa61022d37a5e0b`.
+The fixture builder and operator script SHA-256 values were respectively
+`1b398d6f865294af55b9a40e5c3ca99d14e3ef23212b320e4310188c31625ce7` and
+`9de01f28fbfb3dadb4c91e7dfc06a7d8ec177b93520677d9fda27f7dbc94b570`.
+Compiler sampled peak RSS was 62,928 KiB; the same, changed and invalid-MAC
+guests sampled at 3,988, 3,196 and 2,668 KiB. Native processes had 3/4-second
+CPU limits and an 8 GiB address-space ceiling; RSS was sampled and processes
+were terminated above 200 MiB, which is not a hard RSS limit.
