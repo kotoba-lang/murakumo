@@ -11,6 +11,13 @@ established separately before reinitialization. This draft has no automatic
 enrollment/recovery procedure and must not be deployed as one. A valid but
 stale register can still be replayed; this check alone does not prevent rollback.
 
+The current candidate reads only regular registers of 1–131072 bytes through
+bounded FS2 ranges and refuses larger or unreadable files; it does not reset
+them. Register writes above that bound are refused. The host must qualify the
+FS2 O/E provider and exclusive path handling. Existing oversized state needs
+explicit reconciliation. The token and other input paths are not bounded by
+this change.
+
 `init-fresh` returns `voter/init-created`, `voter/init-refused`, or
 `voter/init-unknown`; unknown means publication may have happened and must be
 reconciled before any retry. On ARM64 Linux/XFS, the native fixture in

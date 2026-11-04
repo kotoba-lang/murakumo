@@ -73,7 +73,12 @@
     (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
       (string-substring r 5 (string-length r)) "")))
 (defn- ln-exists? [path :string] :bool (= (ln-fs "D" path "") "1"))
-(defn- ln-load [path :string] :string (if (ln-exists? path) (ln-fs "A" path "") ""))
+;; An unknown or oversized register must never become a fresh voter state.
+;; Compare the decoded bytes as well: malformed UTF-8 is not a valid register.
+(defn- ln-load [path :string] :string
+  (let [b (ln-read-bounded path 131072)
+        text (if (> (vector-count b) 0) (string-from-utf8 (bytes-from-vector-i64 b)) "")]
+    (if (and (> (vector-count b) 0) (ln-doc-equal? b (ln-bytes text))) text "")))
 ;; the parent directory of path ("/" for a top-level file)
 (defn- ln-dirname [path :string] :string
   (let [b (ln-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))]
@@ -82,12 +87,13 @@
 ;; fsync it, rename it over <path>, fsync the directory; 1 when every step
 ;; answered 1, else 0
 (defn- ln-store [path :string text :string] :i64
-  (let [tmp (string-concat path ".tmp")
-        w (ln-fs "B" tmp text)
-        f (if (and (not (= text "")) (= w text)) (ln-fs "M" tmp "") "0")
-        r (if (= f "1") (ln-fs "L" tmp path) "0")
-        d (if (= r "1") (ln-fs "M" (ln-dirname path) "") "0")]
-    (if (= d "1") 1 0)))
+  (if (> (string-byte-length text) 131072) 0
+    (let [tmp (string-concat path ".tmp")
+          w (ln-fs "B" tmp text)
+          f (if (and (not (= text "")) (= w text)) (ln-fs "M" tmp "") "0")
+          r (if (= f "1") (ln-fs "L" tmp path) "0")
+          d (if (= r "1") (ln-fs "M" (ln-dirname path) "") "0")]
+      (if (= d "1") 1 0))))
 
 ;; Explicit genesis for a new voter only. T is FS2's no-replace rename, so
 ;; even concurrent initializers cannot overwrite an existing register. This
@@ -284,18 +290,20 @@
 ;; regular-file size before requesting exactly that bounded range, and check
 ;; the size again. The provider must enforce response bounds; the host must
 ;; exclude path replacement and same-size concurrent writes.
-(defn- ln-doc-size [path :string] :i64
+(defn- ln-bounded-size [path :string maximum :i64] :i64
   (let [meta (ln-fs "O" path "") digits (ln-field meta 1) size (ln-int digits)]
     (if (and (= (ln-field meta 3) "0") (<= (string-length digits) 6)
-             (> size 0) (<= size 262144)) size -1)))
+             (> size 0) (<= size maximum)) size -1)))
 
-(defn- ln-load-doc [path :string] :vector-i64
-  (let [size (ln-doc-size path)]
+(defn- ln-read-bounded [path :string maximum :i64] :vector-i64
+  (let [size (ln-bounded-size path maximum)]
     (if (< size 1) (vector-alloc 0)
       (let [r (typed-cap-call :fs/app-data :string :bytes (ln-frame "E" path (str "0:" size))) n (bytes-count r)]
         (if (and (= n (+ size 5)) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
-                 (= (bytes-at r 3) 50) (= (bytes-at r 4) 0) (= (ln-doc-size path) size))
+                 (= (bytes-at r 3) 50) (= (bytes-at r 4) 0) (= (ln-bounded-size path maximum) size))
           (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))))
+
+(defn- ln-load-doc [path :string] :vector-i64 (ln-read-bounded path 262144))
 
 (defn- ln-doc-equal? [a :vector-i64 b :vector-i64] :bool
   (and (= (vector-count a) (vector-count b))
