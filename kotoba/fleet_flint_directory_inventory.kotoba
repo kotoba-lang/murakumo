@@ -1,0 +1,54 @@
+;; Flint-specific ADI2 parsing. Compose after fleet_directory_inventory and
+;; fleet_model_flint_oci_stage. Frames and expected IDs are not authorities:
+;; a trusted host must bind successful helper output to open directory FDs,
+;; exclude concurrent mutation and verify the child FD is the parent's actual
+;; no-follow `.kapitsa` entry. Neither match is permission to load a model.
+(ns murakumo.fleet-flint-directory-inventory (:export [flint-bound-inventory?]))
+
+(defn- fi-root-name [id :i64] :string
+  (if (< id 6) (ft-name id)
+    (case id 6 "model.safetensors" 7 "experts.safetensors" 8 ".kapitsa"
+      9 ".awai-model-receipt.json" 10 "." 11 ".." "")))
+(defn- fi-child-name [id :i64] :string
+  (case id 0 "manifest.json" 1 "." 2 ".." ""))
+(defn- fi-id [s :string start :i64 n :i64 root :bool] :i64
+  (let [limit (if root 12 3)]
+    (loop [i 0]
+      (if (= i limit) -1
+        (if (di-name? s start n (if root (fi-root-name i) (fi-child-name i))) i (recur (+ i 1)))))))
+
+;; ADI1 payload has exact names and types; receipt is an explicit root-only
+;; mode. Unexpected, duplicate and unknown-type entries all fail closed.
+(defn- fi-inventory? [s :string root :bool receipt :bool] :bool
+  (if (or (not (di-hex? s)) (and (not root) receipt)) false
+    (let [bytes (quot (- (string-length s) 1) 2) declared (di-u32 s 4)
+          expected (if root (if receipt 4095 3583) 7)]
+      (if (or (not (= (string-substring s 0 8) "41444931")) (> declared 4096)
+              (not (= bytes (+ declared 8)))) false
+        (loop [offset 8 seen 0]
+          (if (= offset bytes) (= seen expected)
+            (if (< (- bytes offset) 22) false
+              (let [reclen (di-u16 s (+ offset 16)) namelen (di-u16 s (+ offset 18)) typ (di-byte s (+ offset 20))
+                    valid (and (di-nonzero-ino? s offset) (>= reclen 22) (= (rem reclen 4) 0)
+                               (<= reclen (- bytes offset)) (> namelen 0) (<= namelen 255)
+                               (<= (+ namelen 22) reclen))
+                    id (if valid (fi-id s (+ offset 21) namelen root) -1)
+                    dir (if root (or (= id 8) (= id 10) (= id 11)) (or (= id 1) (= id 2)))]
+                (if (or (not valid) (< id 0) (and root (= id 9) (not receipt))
+                        (not (= (di-byte s (+ offset 21 namelen)) 0))
+                        (not (= (bit-and seen (i64-shift-left 1 id)) 0))
+                        (if dir (not (= typ 4)) (not (= typ 8)))) false
+                  (recur (+ offset reclen) (bit-or seen (i64-shift-left 1 id))))))))))))
+
+;; Expected IDs must originate from the trusted open FDs, not the frame.
+;; root=true selects the stage root; root=false selects `.kapitsa`.
+(defn flint-bound-inventory? [s :string root :bool receipt :bool dev :string ino :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 49) (<= n 8241) (= (rem n 2) 1)
+         (= (string-substring s (- n 1) n) "\n")
+         (= (string-substring s 0 8) "41444932")
+         (di-id-hex? dev) (di-id-hex? ino)
+         (= (string-substring dev 8 16) "00000000")
+         (not (= ino "0000000000000000"))
+         (= (string-substring s 16 32) dev) (= (string-substring s 32 48) ino)
+         (fi-inventory? (str "41444931" (string-substring s 8 16) (string-substring s 48 n)) root receipt))))

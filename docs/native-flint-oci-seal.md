@@ -27,6 +27,15 @@ validate every Kapitsa manifest field or tensor, independently inventory the
 directory, atomically publish the stage, recover an interruption, or grant
 permission to load it.
 
+`flint-bound-inventory?` is a separate ADI2 frame parser candidate for an exact
+Flint root inventory and a separate `.kapitsa` inventory. It rejects extra or
+duplicate entries and unexpected types; a receipt is allowed only in the
+explicit root-with-receipt mode. Caller-supplied frames and IDs are not
+authority. Before using this as a boundary, a qualified host must bind both
+helper results to held directory FDs, verify the child FD is the root's actual
+no-follow `.kapitsa` entry, and exclude replacement, hard-link aliases and
+concurrent mutation. This parser is not yet connected to staging or recovery.
+
 The separate `model-flint-assets-pack-main` candidate accepts a pinned
 `awai.flint-source-observation/1` containing exactly the seven metadata files
 and two weight descriptors. It validates the file list against the Kapitsa
