@@ -67,6 +67,34 @@ This is a synthetic seam test, not an actual clock, systemd/curl, lease,
 generation, source-locked application or governor test. The lease refresh,
 atomic fence, wall-clock and workload-lifetime limitations above remain open.
 
+## Darwin diagnostic clock capability observation
+
+On one local Darwin ARM64 host (macOS 26.3.1, build `25D771280a`), a
+source-unity fixture containing the actual `pr-wall-ms` and a host-time window
+assertion was built with the pinned compiler and `fs2-cli-stdio-general`
+diagnostic packager named above. The signed fixture exited with SIGTRAP
+(subprocess return `-5`), without stdout or stderr. Its source and image
+SHA-256 were `c6f3716ee28d6927a93f538e5fe9274dd4a47b04f9c032b4aa5fa3807457f96f`
+and `d5a2f34bd9ade2c93c660f55c276c9fb4e5f4be33f7de77ce05816e37ec45a9c`.
+
+A separate fixture performing only `typed-cap-call 7` with `wall` also exited
+with SIGTRAP (`-5`); its source/image SHA-256 were
+`7cce6bc18352531845022ba471ce0c2892a1c787c9c709931472a21ed9249279` /
+`c53977bdd6028a6ecacfb190a27bfcfaecea261f1e9d24c0edbedc855c6aa927`.
+With that call replaced by a fixed decimal test string, the selected
+`pr-wall-ms` parser returned the expected number (exit 0); its source/image
+SHA-256 were `0ed1705924d7251c7eb4b5de71dbf21b0c7329140708bd52d947e66c0911dcb6`
+and `aa51bcae5114715f69fe1c8cb1c06c14303b76060bd368fd3cfe712daeda7953`.
+Each compiler and test process had a three-second CPU limit, without a hard
+memory cap. Signed images and private temporary directories were task-owned.
+
+This demonstrates that the tested diagnostic combination did not supply a
+usable wall-clock call in these fixtures; the exact trap stage is unverified.
+It is not a test of a production Mac runtime, Linux runtime, clock rollback,
+real lease or governor. Darwin clock capability and the complete resident
+runtime closure must be independently qualified before using the deadline
+path; do not infer that the arithmetic-only diagnostic exercised wire 7.
+
 ### Expired submission call counter
 
 A follow-up native fixture records calls and passed timeout values in a
