@@ -202,7 +202,7 @@ def main():
                     raise ValueError(('archive wrong-policy control', refused))
             if snapshot('repo') != before or snapshot('restored') != after:
                 raise ValueError('source or restore changed')
-            if helper.digest(compiler) != a.compiler_sha256 or helper.digest(packager) != a.packager_sha256:
+            if hashlib.sha256(compiler.read_bytes()).hexdigest() != a.compiler_sha256 or hashlib.sha256(packager.read_bytes()).hexdigest() != a.packager_sha256:
                 raise ValueError('tool changed')
             receipt.update({'compilerSha256': a.compiler_sha256, 'packagerSha256': a.packager_sha256,
                             'capture': True, 'verify': True, 'restoreMatches': True,
