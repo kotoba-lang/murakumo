@@ -29,6 +29,11 @@
              (json-valid? b) (json-canonical? b) (= (json-kind b 0) 1))
       (cp-cid b) "")))
 
+;; Inspect size before reading a host-owned request. Empty, over-limit or
+;; unknown files remain refused by rt-request-id; no silent retry is implied.
+(defn- rt-read-request [present :bool path :string previous :string] :string
+  (rt-request-id present (if present (pr-read-bounded path 8192) (vector-alloc 0)) previous))
+
 (defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
   (let [now (rt-now)]
     (if (or (< epoch 1) (> epoch 9007199254740991) (<= now 0)
@@ -216,7 +221,7 @@
 (defn- rt-archive-ack? [path :string root :string] :bool
   (if (= path "") true
     (if (not (cp-exists? path)) false
-      (let [ack (cp-read path)]
+      (let [ack (pr-read-bounded path 4096)]
         (and (json-canonical? ack) (= (json-kind ack 0) 1) (= (json-count ack 0) 4)
           (= (cp-str ack 0 "kind") "itonami.github-archive-ack/1")
           (= (cp-str ack 0 "checkpoint") root) (cp-hex? (cp-str ack 0 "tree") 40)
@@ -369,8 +374,7 @@
         head-present (= head-status "1") head (rt-read-head cfg head-path)
         root (if head-present (cp-str head 0 "checkpoint") (cp-str cfg 0 "bootstrap"))
         request-path (cp-str cfg 0 "request") request-status (cp-fs "D" request-path "") present (= request-status "1")
-        request (rt-request-id present (if present (cp-read request-path) (vector-alloc 0))
-                               (cp-str head 0 "request"))]
+        request (rt-read-request present request-path (cp-str head 0 "request"))]
     (cond (not (or (= head-status "0") (= head-status "1"))) "resident/head-unknown"
           ;; A writer may have stopped during request replacement. Do not
           ;; turn the old request into a periodic run while its successor is

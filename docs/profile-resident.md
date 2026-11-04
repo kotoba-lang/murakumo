@@ -627,3 +627,11 @@ reasoning during generation that its count endpoint did not count. The one
 observed parity test is not proof for all messages, templates or transports.
 The source and source-only cases remain unqualified; no real resident turn,
 native host, crash recovery or resource governor was tested.
+
+Resident request files are size-checked and range-read with an 8192-byte cap
+before JSON validation. Archive acknowledgement files use the same bounded
+reader with a 4096-byte cap. Empty, oversized, short or unavailable reads
+refuse progress. These path-based checks require host-owned paths and do not
+protect against same-size replacement by a concurrent writer; an FS2 provider
+that does not implement the required metadata and range operations may refuse
+or trap.
