@@ -1,9 +1,14 @@
 ;; Pure name vectors only. These do not execute tar staging or filesystem I/O.
 (ns murakumo.fleet-model-flint-oci-stage-test (:export [test-flint-asset-names test-flint-file-list test-flint-index]))
 
+(defn- ft-test-colons [n :i64] :vector-i64
+  (loop [i 0 v (vector-alloc n)]
+    (if (= i n) v (recur (+ i 1) (vector-assoc! v i 58)))))
 (defn test-flint-index [] :bool
   (let [good "{\"metadata\":{\"total_size\":1},\"weight_map\":{\"layer.a\":\"model.safetensors\",\"layer.b\":\"experts.safetensors\"}}"]
-    (and (fk-index-valid? (ms-bytes good))
+    (and (fk-index-colons? (ft-test-colons 4100))
+         (not (fk-index-colons? (ft-test-colons 4101)))
+         (fk-index-valid? (ms-bytes good))
          (not (fk-index-valid? (ms-bytes "{\"weight_map\":{}}")))
          (not (fk-index-valid? (ms-bytes "{\"weight_map\":{\"a\":\"model.safetensors\"}}")))
          (not (fk-index-valid? (ms-bytes "{\"weight_map\":{\"a\":\"model.safetensors\",\"b\":\"../experts.safetensors\"}}")))

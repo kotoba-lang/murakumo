@@ -1702,11 +1702,11 @@
 
 (defn- fk-index-valid? [b :vector-i64] :bool
   (if (or (not (ol-read-ok? b)) (= (vector-count b) 0) (> (vector-count b) 1048576)
-          (not (json-valid? b))) false
+          (not (fk-index-colons? b)) (not (json-valid? b))) false
     (let [root (ol-root b) mapping (if (= (json-kind b root) 1) (json-member b root "weight_map") -1)]
       (if (or (< mapping 0) (not (= (json-kind b mapping) 1))) false
-        (loop [i (jr-skip b (+ mapping 1)) seen 0]
-          (if (not (= (jr-at b i) 34)) false
+        (loop [i (jr-skip b (+ mapping 1)) seen 0 count 0]
+          (if (or (>= count 4096) (not (= (jr-at b i) 34))) false
             (let [end (jr-skip-string b i) colon (jr-skip b end) value (jr-skip b (+ colon 1))
                   shard (if (= (json-kind b value) 3) (json-string b value) "")
                   kind (cond (= shard "model.safetensors") 1 (= shard "experts.safetensors") 2 :else 0)
@@ -1714,7 +1714,7 @@
                   updated (bit-or seen kind)]
               (if (or (= kind 0) (<= end (+ i 2))) false
                 (cond (= sep 125) (= updated 3)
-                      (= sep 44) (recur (jr-skip b (+ next 1)) updated)
+                      (= sep 44) (recur (jr-skip b (+ next 1)) updated (+ count 1))
                       :else false)))))))))
 
 (defn- fk-stage-index? [stage :string] :bool
@@ -1908,3 +1908,9 @@
   (and (flint-parent-frame? parent-frame root-dev root-ino root-dev child-ino)
        (model-flint-verified-inventory? layout manifest manifest-size base base-size experts experts-size
                                        assets assets-size stage root-frame root-dev root-ino child-frame root-dev child-ino)))
+
+(defn- fk-index-colons? [b :vector-i64] :bool
+  (loop [i 0 count 0]
+    (if (= i (vector-count b)) true
+      (let [next (if (= (vector-at b i) 58) (+ count 1) count)]
+        (if (> next 4100) false (recur (+ i 1) next))))))

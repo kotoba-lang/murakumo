@@ -28,10 +28,11 @@ expected identity both supplied for the wrong directory can be accepted;
 the test-only host binding refuses it before the verifier. This is not a
 production host binding.
 
-The exact full-stage source-unity fixture SHA-256 is
+The initial full-stage source-unity fixture SHA-256 was
 `f54691c8c9c7678b211d287101e250fb6eddb20d4c0177ae564b3eeccbd73429`;
-its diagnostic image SHA-256 is
+its diagnostic image SHA-256 was
 `bffb6a47019a045a80779ed95cf84a3fff701d24f6e74040a613589cea56faed`.
+The later bounded fixture and image hashes are recorded below.
 The three `scripts/verify-flint-*-native*.py` consumers compare the relevant
 fixture functions with the current source and use synthetic inputs. The
 archived operator scripts are experiment records with local absolute paths and
@@ -51,3 +52,31 @@ grow substantially with adversarial input. A byte limit alone does not
 provide a CPU budget. Qualified process-tree resource control, trusted FD
 custody, immutable reads, loader semantics, and authenticated runtime
 integration remain prerequisites for production deployment.
+
+## Conservative count bound
+
+On the local diagnostic Mac, the original validator accepted synthetic
+12,000-entry / 444,016-byte input in 2.782 s, while a 24,000-entry /
+888,016-byte input hit a 3-second CPU limit (exit -24). One sample per size;
+these timings are not a runtime guarantee. The validator now scans at most
+4,100 raw colon bytes before calling the duplicate-key JSON parser, then
+permits at most 4,096 weight-map entries. A colon inside a string counts
+toward the first limit too; otherwise-valid indexes can be rejected. This
+is a deliberately conservative bound for the currently observed Flint
+profile, not a general safetensors specification or a promise for future
+Flint variants.
+
+The updated signed native diagnostic accepted 4,096 synthetic entries and
+refused 4,097; it refused 12,000 and 24,000 entries before JSON validation.
+The prior real index was freshly copied over strict SSH, digest-checked,
+accepted by the updated native check in 0.486 s, and its task-owned copy was
+removed. The small native unit suite and a shard-reference mutant check passed;
+the three synthetic staging/inventory regression scripts passed. The updated
+stage fixture SHA-256 is
+`e5f010611f1fd4afe95f0c0332e245c1207d94ac07832b1e392355007524e811`
+and its signed image is
+`9719929366de96e148e7a7020b9a2b2ce5406555555ed6f64dd3b873107a1d86`.
+`scale-operator.py` records the task-specific synthetic operator and pinned
+local tools. The entry and raw-colon limits reduce this demonstrated case;
+they do not establish a CPU bound for all permitted inputs or eliminate the
+need for a qualified host resource governor.

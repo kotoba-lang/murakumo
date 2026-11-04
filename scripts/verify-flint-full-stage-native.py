@@ -5,7 +5,7 @@ sys.dont_write_bytecode=True
 repo=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('descriptor',repo/'scripts/verify-flint-oci-descriptor-native.py');h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
 s=(repo/'docs/evidence/awai149-flint-index-20261105/fixture.kotoba').read_text()
-files={'fleet_model_flint_oci_stage.kotoba':['ft-name','ft-id','ft-walk','ft-stage','fk-file-name','fk-file-id','fk-manifest-valid?','fk-stage-manifest?','fk-index-valid?','fk-stage-index?','model-flint-oci-stage-main'],'fleet_model_flint_oci_seal.kotoba':['mf-check'],'fleet_model_digest.kotoba':['md-observe','ma-read','md-present?'],'fleet_model_assets.kotoba':['ta-header?','tw-copy','mp-mode?']}
+files={'fleet_model_flint_oci_stage.kotoba':['ft-name','ft-id','ft-walk','ft-stage','fk-file-name','fk-file-id','fk-manifest-valid?','fk-stage-manifest?','fk-index-colons?','fk-index-valid?','fk-stage-index?','model-flint-oci-stage-main'],'fleet_model_flint_oci_seal.kotoba':['mf-check'],'fleet_model_digest.kotoba':['md-observe','ma-read','md-present?'],'fleet_model_assets.kotoba':['ta-header?','tw-copy','mp-mode?']}
 for file,names in files.items():
  src=(repo/'kotoba'/file).read_text()
  for name in names:
