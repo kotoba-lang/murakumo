@@ -96,3 +96,26 @@ been updated for RGQ4 and includes the injected acknowledgement-loss and
 bypass cases, but its complete suite was not run here. This is not a real
 kernel fsync failure, power loss, multihost recovery, process supervisor or
 qualified resource governor; do not deploy workloads on this evidence.
+
+### Three-Mac RGQ4 diagnostic observation
+
+On 2026-11-04, the source-bound RGQ4 diagnostic, the injected lost-sync image
+and the history-guard bypass image above were sent to naphtali, benjamin and
+judah over Tailscale SSH with strict previously pinned host keys. All three
+reported Darwin kernel `25.6.0`, checked each image SHA-256 and strict code
+signature, and passed the same short sequence: reserve, release, dequeue,
+injected settle acknowledgement loss, blocked front, bypass control exposing
+the next ticket, wrong-ticket refusal, exact-ticket recovery, next full
+reservation and RGQ3 refusal. Each native process had a three-second CPU cap.
+The outer staging directory was independently checked absent after cleanup;
+the observer's own case directory used `TemporaryDirectory` cleanup.
+
+The candidate source file SHA-256 was
+`bd23560f142c1e417662eca2f026c521c931be5ed48739c7976c91b10588c825` and
+`scripts/native/observe-fifo-settle-barrier.py` SHA-256 was
+`8bbf46c4666d2dc543435088ddae74994066457a83ba694ffcb534bd8a46feda`.
+This is an injected-result diagnostic on one operation sequence per host, not
+real fsync failure, power loss, independent process death, full FIFO suite,
+resource reservation, whole-workload lifetime, a distributed fence or governor
+qualification. No model, build workload, persistent service or existing
+workload was changed.
