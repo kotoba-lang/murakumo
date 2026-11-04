@@ -17,15 +17,20 @@
   (and (= (ln-port-count ports) 3)
     (let [a (rf-host (ln-port ports 0)) b (rf-host (ln-port ports 1)) c (rf-host (ln-port ports 2))]
       (and (not (= a "")) (not (= b "")) (not (= c "")) (not (= a b)) (not (= b c)) (not (= a c))))))
+(defn- rf-clock-ballot-ok? [now :i64 epoch :i64] :bool
+  (and (> now 0) (<= now (- 9007199254740991 (lease-ttl)))
+       (> epoch 0) (<= epoch 9007199254740991)))
 (defn- rf-learn [plan :vector-i64 previous :bool] :string
   (let [node (cp-str plan 0 "node") task (cp-str plan 0 "task")
         epoch (cp-num plan 0 (if previous "previousEpoch" "epoch"))
         ports (cp-str plan 0 (if previous "previousPorts" "ports"))
-        token (lease-token (cp-str plan 0 "tokenFile")) now (rf-now)]
-    (if (= token "") ""
-      (lease-round now node
-        (if previous (cp-text (cp-read (cp-str plan 0 "previousLease")))
-          (lease-text node task 0 epoch (+ now (lease-ttl)) (cp-num plan 0 "revision"))) ports token))))
+        now (rf-now)]
+    (if (not (rf-clock-ballot-ok? now epoch)) ""
+      (let [token (lease-token (cp-str plan 0 "tokenFile"))]
+        (if (= token "") ""
+          (lease-round now node
+            (if previous (cp-text (cp-read (cp-str plan 0 "previousLease")))
+              (lease-text node task 0 epoch (+ now (lease-ttl)) (cp-num plan 0 "revision"))) ports token))))))
 
 ;; Restore and local writes can outlast the first lease observation. Relearn
 ;; the same epoch after restore, before inference. This is still not an atomic
@@ -87,7 +92,8 @@
                       :else result)))))))))
 
 (defn- rf-previous-value-status [previous :vector-i64 expected :vector-i64 node :string task :string epoch :i64 now :i64] :i64
-  (cond (not (= (cp-text previous) (cp-text expected))) -1
+  (cond (not (rf-clock-ballot-ok? now epoch)) -4
+        (not (= (cp-text previous) (cp-text expected))) -1
         (not (= (cp-num previous 0 "epoch") epoch)) -2
         (or (not (= (cp-str previous 0 "class") task)) (not (= (cp-num previous 0 "slot") 0))) -3
         (= (decide node (cp-num previous 0 "epoch") true
@@ -111,6 +117,7 @@
                   (cond (= status -1) "recovery/previous-lease-unavailable"
                         (= status -2) "recovery/previous-lease-epoch"
                         (= status -3) "recovery/previous-lease-task"
+                        (= status -4) "recovery/clock-or-epoch-unknown"
                         (= status 1) (rf-run plan true)
                         (>= waits 1800) "recovery/lease-wait-expired"
                         :else (let [z (pr-pause)] (recur (+ waits 1)))))))
