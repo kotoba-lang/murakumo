@@ -1,0 +1,20 @@
+;; Pure name vectors only. These do not execute tar staging or filesystem I/O.
+(ns murakumo.fleet-model-flint-oci-stage-test (:export [test-flint-asset-names]))
+
+(defn- ft-test-header [name :string] :vector-i64
+  (let [b (vector-i64-from-bytes (string-to-utf8 name))]
+    (loop [i 0 out (vector-alloc 512)]
+      (if (= i (vector-count b)) out
+        (recur (+ i 1) (vector-assoc! out i (vector-at b i)))))))
+
+(defn test-flint-asset-names [] :bool
+  (and (= (ft-id (ft-test-header "config.json")) 0)
+       (= (ft-id (ft-test-header "tokenizer.json")) 1)
+       (= (ft-id (ft-test-header "tokenizer_config.json")) 2)
+       (= (ft-id (ft-test-header "chat_template.jinja")) 3)
+       (= (ft-id (ft-test-header "generation_config.json")) 4)
+       (= (ft-id (ft-test-header "model.safetensors.index.json")) 5)
+       (= (ft-id (ft-test-header ".kapitsa/manifest.json")) 6)
+       (= (ft-id (ft-test-header "experts.safetensors")) -1)
+       (= (ft-id (ft-test-header "../config.json")) -1)
+       (= (ft-id (ft-test-header ".kapitsa/other.json")) -1)))

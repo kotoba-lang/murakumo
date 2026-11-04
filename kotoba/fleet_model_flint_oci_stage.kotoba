@@ -1,0 +1,84 @@
+;; Flint-specific metadata staging candidate. Compose after fleet_model_assets
+;; and fleet_model_flint_oci_seal. A trusted host owns source and stage paths,
+;; independently pins all digests and excludes aliases/concurrent mutation.
+;; Partial stages remain for explicit reconciliation and must not be loaded.
+(ns murakumo.fleet-model-flint-oci-stage (:export [model-flint-oci-stage-main]))
+
+(defn- ft-name [id :i64] :string
+  (case id 0 "config.json" 1 "tokenizer.json" 2 "tokenizer_config.json"
+    3 "chat_template.jinja" 4 "generation_config.json"
+    5 "model.safetensors.index.json" 6 ".kapitsa/manifest.json" ""))
+(defn- ft-id [b :vector-i64] :i64
+  (loop [i 0] (if (= i 7) -1 (if (ta-name? b (ft-name i)) i (recur (+ i 1))))))
+
+(defn- ft-walk [source :string stage :string size :i64 work :vector-i64] :bool
+  (let [k (s2-k) summary (vector-alloc 3)]
+    (loop [offset 0 seen 0 zeros 0]
+      (if (= offset size)
+        (and (>= zeros 2) (= (bit-and seen 127) 127) (md-pad work (vector-alloc 0) 0 0 size k))
+        (let [read-ok (arena-scope
+                        (let [header (ta-read source offset 512)]
+                          (if (not (= (vector-count header) 512)) false
+                            (let [hashed (md-blocks work header 512 k)
+                                  zero (ta-zero? header 0 512)
+                                  id (if zero -1 (ft-id header)) n (if zero 0 (ta-octal header 124 136))
+                                  valid (or zero (ta-header? header))
+                                  a (vector-assoc! summary 0 (if zero 0 1))
+                                  b (vector-assoc! summary 1 id) c (vector-assoc! summary 2 n)]
+                              (and hashed valid)))))
+              zero (= (vector-at summary 0) 0) id (vector-at summary 1) n (vector-at summary 2)
+              padded (if (and (> n 0) (<= n 16777216)) (* (quot (+ n 511) 512) 512) -1)
+              next (+ offset 512 padded)]
+          (cond (not read-ok) false
+                zero (recur (+ offset 512) seen (+ zeros 1))
+                (or (> zeros 0) (< id 0) (< padded 0) (> next size)
+                    (not (= (bit-and seen (i64-shift-left 1 id)) 0))) false
+                (ta-file source (str stage "/" (ft-name id)) (+ offset 512) n work k)
+                (recur next (bit-or seen (i64-shift-left 1 id)) 0)
+                :else false))))))
+
+;; Exact regular-file names only; tar directory entries and extra files are
+;; refused. This verifies bytes against the tar digest, not manifest semantics.
+(defn- ft-stage [source :string stage :string digest :string size :i64] :string
+  (let [entry (if (md-path? source) (typed-cap-call 35 :string :string (ol-frame "O" source "")) "")
+        meta (if (and (md-regular? entry) (= (ol-size entry 67108864) size))
+               (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")
+        metadata-dir (str stage "/.kapitsa")]
+    (if (or (not (md-path? source)) (not (md-path? stage)) (not (md-path? (str metadata-dir "/manifest.json")))
+            (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/")
+            (ta-overlap? source stage) (not (= (digest-problem digest) "oci/ok"))
+            (< size 1024) (> size 67108864) (not (= (rem size 512) 0))
+            (not (md-regular? entry)) (not (= (ol-size entry 67108864) size))
+            (not (md-regular? meta)) (not (= (ol-size meta 67108864) size)) (not (= (ta-fs "D" stage "") "0")))
+      "flint-assets/input-refused"
+      (if (not (and (= (ta-fs "I" stage "") "1") (= (ta-fs "H" stage "700") "1")
+                    (= (ta-fs "M" (ta-parent stage) "") "1")
+                    (= (ta-fs "I" metadata-dir "") "1") (= (ta-fs "H" metadata-dir "700") "1")
+                    (= (ta-fs "M" stage "") "1")))
+        "flint-assets/staging-unknown"
+        (let [work (s2-work (s2-iv 8)) ok (ft-walk source stage size work)
+              after (typed-cap-call 35 :string :string (ol-frame "F" source ""))
+              actual (if ok (str "sha256:" (hex (s2-out work 8))) "")]
+          (if (and ok (= after meta) (= actual digest) (= (ta-fs "M" metadata-dir "") "1")
+                   (= (ta-fs "M" stage "") "1"))
+            "flint-assets/staged" "flint-assets/staging-unknown"))))))
+
+;; Stage only, never publish or approve loading. The manifest semantic checks,
+;; independent directory inventory, publication and crash recovery are absent.
+(defn model-flint-oci-stage-main [] :i64
+  (let [layout (md-arg 0) manifest (md-arg 1) manifest-size (md-decimal (md-arg 2))
+        base (md-arg 3) base-size (md-decimal (md-arg 4)) experts (md-arg 5) experts-size (md-decimal (md-arg 6))
+        assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9)
+        valid (and (= (md-arg 10) "") (md-path? layout) (md-path? stage)
+                   (not (ta-overlap? layout stage)) (>= size 1024) (<= size 67108864) (= (rem size 512) 0)
+                   (= (ta-fs "D" stage "") "0"))
+        checked (if valid (mf-check layout manifest manifest-size base base-size experts experts-size assets size false) "")
+        result (if (not (= checked "flint-artifact/descriptors-observed")) "flint-artifact/input-refused"
+                 (let [staged (ft-stage (ol-blob-path layout assets) stage assets size)]
+                   (if (not (= staged "flint-assets/staged")) "flint-artifact/staging-unknown"
+                     (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
+                              (tw-copy (ol-blob-path layout experts) (str stage "/experts.safetensors") experts experts-size)
+                              (= (ta-fs "M" stage "") "1"))
+                       "flint-artifact/staged-unverified-manifest" "flint-artifact/staging-unknown"))))
+        x (md-out result)]
+    (if (= result "flint-artifact/staged-unverified-manifest") 0 1)))
