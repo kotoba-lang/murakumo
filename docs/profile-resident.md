@@ -574,6 +574,17 @@ outcome is reconciled by the host, never silently resubmitted. A cached count
 is useful only while the host binds it to the same authenticated process,
 model, tokenizer and template as the generation.
 
+Before generation, a separate durable marker in the private cache binds the
+prior state and turn to one exact generation request identity. Its key does
+not use the disposable checkout path. A different request for the same turn,
+an unreadable marker or failed synchronization refuses dispatch; a matching
+marker permits only the existing request's normal reconciliation. Markers are
+retained after completion. This is host-local crash evidence, not a lease,
+distributed fence or proof of process identity. The host must preserve and
+exclusively serialize the same cache across restarts; migration, lost cache,
+rollback and marker retention need explicit reconciliation. The marker does
+not by itself make a cached count valid after a server restart.
+
 Flint runtime and public-environment descriptions must now declare
 `reasoningMemory` as `disabled`. This declaration is not proof of the server's
 environment: the host must verify and maintain `NI_REASONING_MEMORY=0` and

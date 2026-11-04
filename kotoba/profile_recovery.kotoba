@@ -301,6 +301,20 @@
     (if (or (< input 1) (> input 8192) (< requested 64) (> requested 6144) (< available 64)) -1
       (if (< requested available) requested available))))
 
+;; A per-turn marker survives a changed count, budget, endpoint or request.
+;; It is keyed by the prior state, not the disposable checkout path. The host
+;; must retain and serialize this private cache, including across restarts;
+;; this is not a distributed fence or proof of the server process identity.
+(defn- pr-flint-turn-reserve [cache :string task :string next :i64 state :vector-i64 request-id :string] :bool
+  (let [turn (sha256-hex (cp-bytes (str "flint-turn/1\n" task "\n" next "\n" (cp-cid state) "\n")))
+        path (str cache "/turn-" turn ".intent") expected (cp-bytes (str "flint-turn/1\n" request-id "\n"))
+        status (cp-fs "D" path "")]
+    (and (cp-safe-absolute? cache) (cp-hex? request-id 64)
+         (cond (= status "0") (cp-write path expected)
+               (= status "1") (= (cp-cid (pr-read-bounded path 256)) (cp-cid expected))
+               :else false)
+         (= (cp-fs "M" path "") "1") (= (cp-fs "M" cache "") "1"))))
+
 ;; A crash can leave the output durable while state still points at this turn.
 ;; Only the exact completed response may be reused. Sync both the file and
 ;; its parent directory before state can refer to it.
@@ -442,6 +456,7 @@
                          (str (if (pr-local-flint? runtime) "local-flint\n" "local-mtp\n")
                            (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
                          body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
+                    reserved (if (pr-local-flint? runtime) (pr-flint-turn-reserve cache task next state id) true)
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
                     request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
@@ -452,13 +467,14 @@
                     present (= request-status "1") matches (if present (= (cp-cid (pr-read-bounded request (vector-count body-bytes))) (cp-cid body-bytes)) false)
                     marked (= marker-status "1")
                     marker-matches (if marked (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n") false)
-                    decision (if (and known (= pending-status "0"))
+                    decision (if (and reserved known (= pending-status "0"))
                                (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
                     submitted (cond (= decision "profile/reuse-unit") true
                                     (= decision "profile/new-unit")
                                     (and (pr-prepare-submit request marker body-bytes)
                                          (pr-submit unit request response seconds runtime))
                                     :else false)]
+                (if (not reserved) "profile/turn-intent-unknown"
                 (if (= pending-status "1")
                   (pr-reconcile-pending repo runtime next task state body-bytes unit request marker response)
                 (if (not (= pending-status "0")) "profile/state-publication-unknown"
@@ -476,7 +492,7 @@
                         rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs "M" repo "") "0")]
                     (if (not usable) "profile/response-not-replicable"
-                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))))))
+                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed")))))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
   (if (pr-local-flint? runtime) (cp-num runtime 0 "maxTokens")
