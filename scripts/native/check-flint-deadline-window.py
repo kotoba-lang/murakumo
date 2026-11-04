@@ -59,13 +59,17 @@ def main():
 (defn- pr-prepare-submit [request :string marker :string body :vector-i64] :bool true)
 (defn- pr-wall-ms [] :i64 106500)
 (defn- pr-submit-kind [unit :string request :string response :string seconds :i64 runtime :vector-i64 count :bool] :bool
-  (and count (= seconds 3)))
+  (let [a (vector-assoc! runtime 0 (+ (vector-at runtime 0) 1))
+        b (vector-assoc! runtime 1 seconds)] count))
 (defn- pr-count-wait [unit :string response :string] :i64 12)
 '''
     count_cases = '''
 (defn main [] :i64
- (if (and (= (pr-count [1] "/test" 10 [1] 100000 110000) 12)
-          (= (pr-count [1] "/test" 10 [1] 100000 105000) -1)) 0 1))
+ (let [normal (vector-alloc 2) expired (vector-alloc 2)
+       a (pr-count normal "/test" 10 [1] 100000 110000)
+       b (pr-count expired "/test" 10 [1] 100000 105000)]
+   (if (and (= a 12) (= (vector-at normal 0) 1) (= (vector-at normal 1) 3)
+            (= b -1) (= (vector-at expired 0) 0)) 0 1)))
 '''
     def limit():
         resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
@@ -89,6 +93,8 @@ def main():
                 ('rollback-mutant', window.replace(anchor, 'false') + cases, 1),
                 ('count-submit', window + count_stubs + count_source + count_cases, 0),
                 ('count-bypass-mutant', window + count_stubs + count_source.replace(count_guard, 'seconds') + count_cases, 1),
+                ('expired-bypass-mutant', window + count_stubs + count_source.replace(
+                    count_guard, '(if (> (pr-wall-ms) deadline) seconds ' + count_guard + ')') + count_cases, 1),
             ]
             for name, part, expected in fixtures:
                 text = '(ns flint-window-test (:export [main]))\n' + part

@@ -66,3 +66,19 @@ The signed count-seam and bypass-mutant images hashed respectively to
 This is a synthetic seam test, not an actual clock, systemd/curl, lease,
 generation, source-locked application or governor test. The lease refresh,
 atomic fence, wall-clock and workload-lifetime limitations above remain open.
+
+### Expired submission call counter
+
+A follow-up native fixture records calls and passed timeout values in a
+test-owned vector. The valid case recorded one call with three seconds; the
+expired case recorded zero submit calls. A separate mutant bypassing the
+deadline only after expiry failed this assertion, while the original full
+budget bypass also failed. This supersedes the preceding limitation that the
+expired-case submit call was not independently observed. The clock, unit,
+filesystem and submit operation remain stubs; the caveats above still apply.
+
+Updated script SHA-256:
+`b5070f271d4c4a630602686d8732f504e29d86a64f8bc5c1007d35f343fe5b09`.
+The signed count fixture and expired-only bypass mutant image SHA-256 values
+were `a651f0ea2458e333377f2e3fe2253644d3790170d977d88863289ee87fba8d81` and
+`44c7e7a6e4adafc30586a6a2db3566cb8d8936f6f171e699fe2a028067beb62d`.
