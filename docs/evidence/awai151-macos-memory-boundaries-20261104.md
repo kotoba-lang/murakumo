@@ -130,6 +130,33 @@ proof against path replacement by another process or other execution and IPC
 routes. The framework symlink and interpreter setup used by this test differ
 from Kapitsa. No Flint model was loaded.
 
+### Same-process spawn with a suspended target and limit
+
+On each host a non-root Python worker applied the sandbox with the temporary
+launch-path exception and invoked `posix_spawn` with `POSIX_SPAWN_SETEXEC |
+POSIX_SPAWN_START_SUSPENDED`. The outside parent observed a stopped status,
+removed the temporary hard link, then resumed the process. A separate root
+observer, before unlink and resume, read active/inactive memory properties
+`[64, 1, 64, 1]` for a fatal 64 MiB attribute and `[-1, 0, -1, 0]` for an
+unlimited control. The observer's `proc_pidpath` returned the original Python
+framework executable path, not the hard-link path, so it does not independently
+distinguish the worker image from the target image.
+
+After resume, on all three hosts the target printed its marker, fork and
+relink failed with `EPERM`, and exec of the removed path failed with `ENOENT`.
+The unlimited control allocated 128 MiB and exited 0; the limited process
+reported 48 MiB and then exited by signal 9. The kernel kill reason was not
+independently collected. This combines the previously separate mechanisms for
+a cooperative single-process diagnostic; it is not a qualified governor.
+
+This still lacks an independently proven no-instruction-before-unlink
+property, protection against a peer recreating the pathname, evaluation of
+other exec/IPC routes, aggregate accounting, admission and crash recovery,
+and target-specific Kapitsa/Flint and GPU tests. The process-wide policy
+also blocks the current multi-process Amu CLI, so it cannot be applied to all
+builds unchanged. The diagnostic script was temporary; its SHA-256 was
+`9a257afdf6d802f92be3416cdaccf91f216266cde3e70bb7508d4b74a144f993`.
+
 A production design still needs a native Kotoba/Amu host boundary, a trustworthy
 way to control all descendants and later execs, aggregate CPU/memory/GPU and
 other resource accounting, admission and reservation, FIFO and lock lifetime,
