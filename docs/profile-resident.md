@@ -596,16 +596,19 @@ does not authorize replay after a server restart: the host must rotate the
 server identifier and reconcile the prior turn marker. A changed count that
 would change an already reserved generation request is refused.
 
-The candidate also writes a server-instance busy marker before generation,
-binding both the turn and request identities. Another turn using the same
-instance and retained cache is refused until the first turn's verified response
-and state update have been synchronized, then the marker is moved aside and
-the cache synchronized. A failed or uncertain release remains unknown and
+The candidate writes a server-instance busy marker before token counting,
+binding the turn and exact count-request identities. The separate turn marker
+binds the generation request. Another turn using the same instance and retained
+cache is refused until the first turn's verified response and state update have
+been synchronized, then the busy marker is moved aside and the cache synced.
+A failed count, insufficient budget or uncertain release retains occupancy and
 requires host reconciliation. This cooperative marker assumes every caller
 uses the same exclusively serialized cache; it neither limits memory nor
 controls other clients. Before issuing a new server identifier, the host must
 independently establish that the previous process and its work have stopped.
-Power loss, concurrent callers and process replacement remain unqualified.
+The earlier `flint-busy/1` marker requires reconciliation; it is not silently
+upgraded. Power loss, concurrent callers and process replacement remain
+unqualified.
 
 Flint runtime and public-environment descriptions must now declare
 `reasoningMemory` as `disabled`. This declaration is not proof of the server's
