@@ -180,6 +180,25 @@ IPC attacks. The temporary scripts' SHA-256 values, in test order, were
 `ed184ddf7a3ea3fdea3aaaf1d32ea66868e59f89e4ffa1341cc34702bce48d62`, and
 `0b425ec7a0949083b8fdce9daa901740d5ba423392dc264d92dd6f6759f347da`.
 
+### Kapitsa version under the candidate launcher
+
+On each of the three hosts, a root parent made a temporary hard link to the
+existing Kapitsa binary inside a root-owned directory, then launched a UID 501
+worker. The worker applied the preceding sandbox and used same-process spawn
+with `SETEXEC | START_SUSPENDED`, with a 512 MiB fatal attribute in one case
+and no limit in a control. Before the parent unlinked the path and resumed it,
+an independent root observer's `proc_pidpath` returned that temporary Kapitsa
+path and its memory-property read returned `[512, 1, 512, 1]` or the control
+`[-1, 0, -1, 0]` on every host. A UID 501 peer without sudo could not recreate
+the path. After resume, every case printed `kapitsa 0.2.26 (6ef19b0)` and
+exited 0. Temporary links and directories were removed.
+
+This confirms only the `--version` path, not model loading, serving, actual
+memory enforcement by Kapitsa, or GPU use. It does not fix the sudo-capable
+peer replacement shown above, and does not qualify a governor. No model or
+service was started. The temporary diagnostic script SHA-256 was
+`868305947f193d6ca7a568f1bf9f8a0c76c2159fc419a53212f7d0eaff063f82`.
+
 A production design still needs a native Kotoba/Amu host boundary, a trustworthy
 way to control all descendants and later execs, aggregate CPU/memory/GPU and
 other resource accounting, admission and reservation, FIFO and lock lifetime,
