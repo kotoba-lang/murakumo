@@ -3,6 +3,9 @@
 
 (defn test-flint-response [] :bool
   (let [good (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"reasoning_content\":\"private\"}}],\"model\":\"flint\"}")
+        error-response (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\"}}],\"error\":{\"message\":\"failed\"},\"model\":\"flint\"}")
+        error-null (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\"}}],\"error\":null,\"model\":\"flint\"}")
+        wrong-choices (cp-bytes "{\"choices\":{},\"model\":\"flint\"}")
         unfinished (cp-bytes "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\"}}],\"model\":\"flint\"}")
         no-answer (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"private\"}}],\"model\":\"flint\"}")
         wrong-role (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"user\",\"content\":\"draft\"}}],\"model\":\"flint\"}")
@@ -17,6 +20,9 @@
         legacy-null (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"function_call\":null}}],\"model\":\"flint\"}")
         compact (flint-compact "flint" good)]
     (and (= (flint-response-problem "flint" good) "flint/ok")
+         (= (flint-response-problem "flint" error-response) "flint/error-response")
+         (= (flint-response-problem "flint" error-null) "flint/error-response")
+         (= (flint-response-problem "flint" wrong-choices) "flint/choices-refused")
          (= (flint-response-problem "" good) "flint/model-unpinned")
          (= (flint-response-problem "other" good) "flint/model-mismatch")
          (= (flint-response-problem "flint" (vector-alloc 0)) "flint/response-size")

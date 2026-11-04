@@ -565,6 +565,11 @@ change has not been qualified on a native runtime or production host.
 
 ## Flint token preflight candidate
 
+The Flint response contract refuses any top-level `error` member, including
+`null`, even if a completion is also present. It also requires a choices
+array containing exactly one object. A server that emits `error: null` on
+successful replies therefore requires compatibility qualification before use.
+
 Before a Flint generation the candidate sends the same system and conversation
 text to the local Kapitsa count endpoint, requires a valid positive integer,
 and caps output to `min(maxTokens, 8192 - inputTokens - 256)`. Less than 64
