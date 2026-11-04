@@ -121,3 +121,16 @@ Signed diagnostic FIFO SHA-256:
 The recovery state was manually constructed in a task-owned temporary
 directory; this is not a power-loss or production recovery test. Preserving
 all historic claims and authenticating the host remain necessary.
+
+The updated source-bound ticket-once diagnostic also passed on naphtali,
+benjamin and judah using `scripts/native/check-fifo-ticket-once-fleet.py` and
+the pinned compiler, packager and old FIFO above. The three hosts reported
+Darwin ARM64 macOS 26.7.2 build 25G332, built the current diagnostic image
+with the hash above, and reported their task-owned transfer directories
+removed. The observer exercises missing/corrupt markers, retained barriers,
+synthetic settle recovery, claim process kills and the guard-bypass controls.
+It is not a machine-crash, storage rollback, production provider or governor
+qualification. The fleet wrapper SHA-256 was
+`5934c846658039fff6966e5f1e3dc690cbdfa280061bc5b6e1bdf45bdcb8aa7b`;
+the updated observer SHA-256 was
+`f58e3d72fae1cb6dd155510ee7416ba6be0cef51b11a3a5f1add6fb52f2a8738`.
