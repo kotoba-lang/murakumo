@@ -352,8 +352,9 @@
         admission (rt-post-problem cfg head lease fresh now)
         budget (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") now)]
     (cond (not (= admission "resident/admission-held")) admission
-          (< budget 1) "profile/budget-refused"
-          :else (pr-step-resident dest (rt-runtime cfg) (cp-str cfg 0 "cache") next budget))))
+          (or (< budget 1) (not (rt-clock-window? now (* budget 1000)))) "profile/budget-refused"
+          :else (pr-step-resident dest (rt-runtime cfg) (cp-str cfg 0 "cache") next budget
+                                  now (+ now (* budget 1000))))))
 
 (defn- rt-turn [cfg :vector-i64 head :vector-i64 lease :vector-i64 request :string] :string
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") checkpoint (cp-load store root)

@@ -299,7 +299,24 @@
                              (cp-str runtime 0 "authorizationFile") "\n"
                              (cp-str runtime 0 "serverInstance") "\n" (cp-cid body)))))
 
-(defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64] :i64
+;; Wall time is supplied by the host capability. A reading before the initial
+;; sample, or a malformed, zero or out-of-range reading, is refused.
+;; This is not a lease revalidation or a receiver-side fence.
+(defn- pr-wall-ms [] :i64
+  (let [b (cp-bytes (typed-cap-call 7 :string :string "wall")) n (vector-count b)]
+    (if (or (= n 0) (> n 16)) -1
+      (loop [i 0 value 0]
+        (if (= i n) (if (and (> value 0) (<= value 9007199254740991)) value -1)
+          (let [c (vector-at b i)]
+            (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* value 10) (- c 48))) -1)))))))
+(defn- pr-window-seconds [started :i64 deadline :i64 now :i64 limit :i64] :i64
+  (if (or (< started 1) (> started 9007199254740991) (< now started)
+          (> now 9007199254740991) (<= deadline now) (> deadline 9007199254740991)
+          (< limit 1) (> limit 840)) -1
+    (let [remaining (quot (- deadline now) 1000)]
+      (if (< remaining 1) -1 (if (< remaining limit) remaining limit)))))
+
+(defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64 started :i64 deadline :i64] :i64
   (if (or (not (pr-local-flint? runtime)) (= (vector-count body) 0)) -1
     (let [id (pr-count-id runtime body)
           unit (str "itonami-count-" (string-substring id 0 24) ".service")
@@ -315,7 +332,8 @@
           decision (if known (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
           submitted (cond (= decision "profile/reuse-unit") true
                           (= decision "profile/new-unit") (and (pr-prepare-submit request marker body)
-                            (pr-submit-kind unit request response seconds runtime true))
+                            (let [remaining (pr-window-seconds started deadline (pr-wall-ms) seconds)]
+                              (and (> remaining 0) (pr-submit-kind unit request response remaining runtime true))))
                           :else false)]
       (if submitted (pr-count-wait unit response) -1))))
 
@@ -590,7 +608,7 @@
        (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
        (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
 
-(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64] :string
+(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64 started :i64 deadline :i64] :string
   (let [dir (str repo "/profile") meta (pr-read-bounded (str dir "/itonami.edn") 131072) role (pr-read-bounded (str dir "/SOUL.md") 131072)
         growth (= (cp-str runtime 0 "profile") "awai-growth-steward")
         work-path (str dir "/tasks/first-turn.md") context-path (str dir "/context.md")
@@ -632,7 +650,8 @@
                     turn (if (pr-local-flint? runtime) (pr-flint-turn-id task next state) "")
                     count-id (if (pr-local-flint? runtime) (pr-count-id runtime count-body) "")
                     occupied (if (pr-local-flint? runtime) (pr-flint-busy-reserve cache (cp-str runtime 0 "serverInstance") turn count-id) true)
-                    counted (if (pr-local-flint? runtime) (if occupied (pr-count runtime cache seconds count-body) -1) 0)
+                    counted (if (pr-local-flint? runtime) (if occupied (pr-count runtime cache seconds count-body started deadline) -1) 0)
+                    counted-at (if (pr-local-flint? runtime) (pr-wall-ms) 0)
                     budget (if (pr-local-flint? runtime) (pr-flint-output-budget counted tokens) tokens)]
               (if (not occupied) "profile/server-busy-or-unknown"
               (if (< budget 1)
@@ -659,7 +678,10 @@
                     submitted (cond (= decision "profile/reuse-unit") true
                                     (= decision "profile/new-unit")
                                     (and (pr-prepare-submit request marker body-bytes)
-                                         (pr-submit unit request response seconds runtime))
+                                         (let [remaining (if (pr-local-flint? runtime)
+                                                           (if (and (> counted-at 0) (>= counted-at started))
+                                                             (pr-window-seconds counted-at deadline (pr-wall-ms) seconds) -1) seconds)]
+                                           (and (> remaining 0) (pr-submit unit request response remaining runtime))))
                                     :else false)]
                 (if (not reserved) "profile/turn-intent-unknown"
                 (if (= pending-status "1")
@@ -692,10 +714,10 @@
     (if resident 256 32))))
 
 (defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false)))
+  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false) 0 0))
 
-(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true)))
+(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 started :i64 deadline :i64] :string
+  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true) started deadline))
 
 (defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
   (pr-step-bounded repo runtime cache next 840))
