@@ -387,7 +387,9 @@ The receipt is [evidence/lease-preemption-20261023.json](evidence/lease-preempti
 
 A voter with a topology follows changes to its topology file while it runs,
 as `replicated_topology`'s `accept!` does for a resident:
-- **Polling.** While idle, the voter looks at the file every 500 ms.
+- **Polling.** The voter checks after every handled connection and after each
+  empty wait slice (up to 500 ms). A request already in progress may still use
+  the previous topology; this is not an atomic revocation fence.
 - **Adopting.** A changed file is adopted only when all three hold:
   - it verifies against the trust (`topology-verdict`);
   - its revision is higher than the one held;
@@ -398,6 +400,15 @@ as `replicated_topology`'s `accept!` does for a resident:
 The log says `voter topology <revision>` or `voter kept <reason>`. The
 comparison and the verification run in `arena-scope`, so only an adopted
 or newly seen document stays allocated.
+
+Qualification of this candidate needs a continuous-traffic test: publish a
+valid higher revision that disables a member, keep authenticated requests
+arriving without an idle gap, and verify that requests after adoption are
+refused. Include unchanged and invalid-revision controls, and check the idle
+exit behavior. Source check alone does not establish that behavior. The
+per-connection file read and its effect on throughput have not been measured;
+the host must provision and bound the topology file. Requests already being
+handled and independent voters are not atomically fenced by this check.
 
 The voters start on revision 7 (b70 enabled, k16 not) and keep running
 while `live.json` is replaced:
