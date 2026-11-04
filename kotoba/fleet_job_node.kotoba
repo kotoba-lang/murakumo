@@ -177,7 +177,9 @@
 
 ;; Only a trusted composed adapter may pass a source it has already verified.
 ;; The public run entry passes the exact CID-checked input.
-(defn- jn-run-with-source [source :string source-admitted :bool] :i64
+;; A trusted adapter may supply the exact bytes it already read and verified.
+;; The ordinary entry retains its existing file-read behavior.
+(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool] :i64
   (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
         node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
         now (jn-int (typed-cap-call 7 :string :string "wall"))
@@ -185,8 +187,9 @@
         ports (jn-arg 13) t (jn-int (jn-arg 14)) mode (jn-arg 15)
         ipath (jn-arg 16) token (jn-token 17) attempts (jn-arg 18)
         capture-arg (jn-arg 23) capture (and source-admitted (= capture-arg "capture-output"))
-        has-input (and (not (= ipath "")) (= (typed-cap-call 35 :string :string (string-concat ipath "EXISTS_SEP")) "1"))
-        itext (if has-input (typed-cap-call 35 :string :string ipath) "")
+        has-input (and (not (= ipath "")) (if use-verified-input source-admitted
+                         (= (typed-cap-call 35 :string :string (string-concat ipath "EXISTS_SEP")) "1")))
+        itext (if use-verified-input verified-input (if has-input (typed-cap-call 35 :string :string ipath) ""))
         jp (job-problem profile input policy rail)]
     (cond (not (= jp "job/ok")) (let [x (jn-say (string-concat "job " jp))] 1)
           (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
@@ -240,6 +243,9 @@
                                 d (jn-say (string-concat "signature " (sign-statement seed text)))
                                 e (if capture (jn-say (str "output-base64url " (string-substring r (+ nl 1) (string-length r)))) 0)]
                             0))))))))))))))))
+
+(defn- jn-run-with-source [source :string source-admitted :bool] :i64
+  (jn-run-with-verified-input source source-admitted "" false))
 
 (defn- jn-run [] :i64 (jn-run-with-source "" false))
 
