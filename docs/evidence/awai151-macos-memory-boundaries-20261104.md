@@ -108,6 +108,28 @@ ad-hoc signed with hardened-runtime flags; its entitlements command did not
 print an entitlement payload. This is descriptive, not an injection or
 integrity test.
 
+### Removed launch-path experiment
+
+On each host a parent made a temporary hard link to the existing Python.app
+executable and launched it with `sandbox-exec`, using a policy that denies
+fork, denies exec except for that exact temporary path, and denies writes to
+that path. After the child printed a ready marker and waited on a pipe, the
+unsandboxed parent unlinked the path and released it. The child then observed
+`EPERM` trying to relink the original executable to the path and `ENOENT`
+trying to exec that missing path. The temporary link and directory were removed.
+In a separate run the child retained an inheritable open descriptor for the
+executable across the unlink; `execv` via `/dev/fd/<fd>` returned `EACCES`.
+There was no unsandboxed fd-exec positive control, so that error is not proof
+that the sandbox caused the failure.
+
+This cooperative Python experiment suggests an avenue for removing the
+permitted launch name, but does not establish a production boundary. The
+child ran code before the unlink; there was no suspended final target, no
+memory cap in the same trial, no arbitrary or adversarial target, and no
+proof against path replacement by another process or other execution and IPC
+routes. The framework symlink and interpreter setup used by this test differ
+from Kapitsa. No Flint model was loaded.
+
 A production design still needs a native Kotoba/Amu host boundary, a trustworthy
 way to control all descendants and later execs, aggregate CPU/memory/GPU and
 other resource accounting, admission and reservation, FIFO and lock lifetime,
