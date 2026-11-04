@@ -56,3 +56,17 @@ native fixture, source/image SHA-256:
 `123e786487551df1dfad8ac997969373c062a99fb0bd864a6cd1c7c9a3435a94`.
 Each native process had a three-second CPU cap. The compiler and provider pins
 and the scope limitations are unchanged; no live inference was run.
+
+## Choice index validation
+
+The candidate accepts an absent choice index for compatibility with existing
+compact records, but if present requires an integer zero. The selected current
+response validator and cases passed a locally compiled Darwin ARM64 diagnostic
+using the previously pinned compiler/FS2 packager; index zero was accepted,
+and one or string zero were refused. Removing the index guard caused the same
+case suite to fail. The assembled selected-source fixture SHA-256 was
+`ceae17d63ca8eb4d458255f9de3295ab9c815e6e7ba5891eea6ad47fdb9e7ea0`,
+and its signed image SHA-256 was
+`a8e040d5f5dc66fff7ef43a2ccaec30cd7bac7309c62e959e7617b9b5374e705`.
+Other assembled dependencies are historical. This does not exercise a live
+server, authenticate its model, validate a bot turn, or qualify the governor.
