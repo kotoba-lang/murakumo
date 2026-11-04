@@ -23,3 +23,21 @@ This is not a production provider qualification or a full FIFO test: short
 reads, metadata races, injected faults, concurrency, recovery, CPU or memory
 limits, process-tree termination, reservations and distributed fencing were not
 tested here. An unavailable or trapping provider remains an unknown outcome.
+
+## FIFO operations and journal reconciliation
+
+The extended harness also compiled the current FIFO entry point and, in a new
+private root on the same Mac, exercised empty, ordered enqueue, duplicate
+refusal, front, wrong-front dequeue refusal, front-cancel refusal, non-front
+cancel, dequeue, and pending-marker refusal. A separately held flock returned
+`fifo/busy`. A synthetic valid intent with the old queue was reconciled as
+`fifo/aborted`; the same intent with the new queue was reconciled as
+`fifo/recovered`. Eight concurrent enqueue invocations all returned enqueued
+and their tickets matched the independently read queue, with zero busy results
+in this run. This does not establish scheduler fairness or all race outcomes.
+
+Extended harness SHA-256:
+`3448fccc6c62aae2b2c2f1404ebce5539568d3925427700e038092e0571e7807`.
+These are synthetic journal states, not killed-process or power-loss recovery;
+provider faults, short reads, adversarial replacement, resource limits and
+whole-workload termination remain unqualified.
