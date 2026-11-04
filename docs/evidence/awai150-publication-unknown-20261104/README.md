@@ -222,3 +222,26 @@ absent-unit run confirmed the same final state. The compiler and fixture used
 3/4-second soft/hard CPU limits, an 8 GiB virtual address cap for sparse runtime
 mappings and 50 ms sampling with a 200 MiB RSS termination threshold (sampling
 is not a hard limit). Task-owned temporary diagnostic directories were retained.
+
+### Real native spawn isolation controls
+
+Using the same source-derived F3 compiler and Xavier host, a separate small
+Kotoba guest (source SHA-256
+`f77655e5546cc022c8d2dcf79384d71e9c7d8a527a26b09941a49b4ee92e4c56`)
+was compiled to Linux ARM64 static image SHA-256
+`1a4de8b2105a92b24c59f0a3e911a65e8f5151c83aa3e9681e61c453e1c2fa45`.
+Its real native wire-20 helper used `/bin/sh` in a private scope. FDs 50 and
+200 were deliberately inherited by the guest; the spawned shell verified
+both were absent, its cwd matched the scope and NoNewPrivs was set, then
+created a test-only marker. The guest returned `0\nok`.
+
+With a granted but nonexistent executable, the guest returned exit 126 and
+`spawn/exec-failed`; no marker appeared. With an outer test-only seccomp filter
+returning EPERM for `close_range` flags 0, the old kernel still returned EINVAL
+for flags 4, and the generated runtime returned exit 126 and
+`spawn/isolation-unavailable`; no marker appeared. The filter was installed
+only in the owned test process. This verifies selected real runtime behavior on
+one host, not all descriptors, all failure stages, parent/descendant lifetime,
+resource limits, production credentials, or a qualified governor. Each native
+process had the same bounded diagnostic limits described above; 50 ms memory
+sampling is not a hard RSS cap. Synthetic temporary artifacts were retained.
