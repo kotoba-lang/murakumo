@@ -72,6 +72,22 @@
     (is (= accel/unmeasured (accel/usable-bytes {:vram-total 100 :gtt-total 0} 0)))
     (is (= accel/unmeasured (accel/usable-bytes {:vram-total 100 :gtt-total 0} 1001)))))
 
+#?(:cljs
+   (deftest bigint-oracle-results-are-normalized-exactly
+     (with-redefs [oracle/require-ready! (fn [_] true)
+                   oracle/call (fn [_ export args]
+                                 (case export
+                                   "aperture-bytes" (js/BigInt "100")
+                                   "usable-bytes" (js/BigInt "100")
+                                   "admit-code" (if (= args [0 76 100 20 5]) (js/BigInt "3") (js/BigInt "0"))
+                                   "granted-bytes" (if (= args [0 100 20 5]) (js/BigInt "75") (js/BigInt "100"))
+                                   "code-name" "admitted"))]
+       (let [probe {:vram-total 100 :gtt-total 0 :claims [] :unreadable-claims 0}
+             d (accel/admit probe {} :resident 1 0)]
+         (is (= 100 (accel/aperture-bytes probe)))
+         (is (:admitted? d))
+         (is (= 100 (:granted d)))))))
+
 (deftest unmeasured-refuses-and-never-admits
   (testing "a probe that read nothing yields an unmeasured aperture"
     (doseq [broken [{:vram-total accel/unmeasured :gtt-total (gb 23.3) :claims []}

@@ -190,3 +190,25 @@ and selected program SHA-256 was
 `9f16fe4d42681f4561ef84e292d81d6ee818eac6844040326ed8ca9b1a254e38`.
 This validates selected host-source behavior with a synthetic oracle, not the
 real provider, full host suite, resource admission or governor qualification.
+
+## Actual shipped oracle returns BigInt
+
+A local, read-only ClojureScript diagnostic loaded the actual consumer and
+shipped KIR `8990876d9868005ca6ca79bab40ff90673febd92b8f2cdd318957240e7507baa`
+through the product-shell resource loader. The KIR returned JS BigInt for
+integer exports; the previous consumer compared these values to host numbers
+and incorrectly treated a valid 100-byte aperture as unknown. The consumer
+now normalizes only exact signed safe-integer results, rejects strings and
+out-of-range BigInt, and applies the existing checks after normalization.
+
+With the corrected consumer, the real pinned KIR reported aperture 100 for
+inputs 100 and 0. Its known stale admission sentinel returned 0 and grant 80
+for the overcommit counterexample, so the consumer returned
+`oracle-unqualified`, refused and granted zero. Selected-source diagnostics
+also used BigInt synthetic results and covered out-of-range conversion. The
+real-consumer script is `scripts/native/check-accelerator-shipped-oracle-cljs.py`.
+The diagnostic used local, unpinned Kotoba dependency checkouts and Node/nbb,
+with CPU limit 3 seconds; it did not run a real probe, corrected production KIR,
+full host suite, native supervisor or governor. A first attempt from the repo
+root tried to resolve project dependencies and failed because Java was absent;
+the successful run used a private working directory and explicit classpaths.

@@ -31,9 +31,10 @@ def main():
 (def classes {:resident 0 :opportunistic 1})
 (def oracle-usable (atom 100))
 (def oracle-aperture (atom nil))
-(defn o [op args] (case op "aperture-bytes" (or @oracle-aperture (apply + args)) "headroom-default-milli" 0
+(defn o [op args] (let [v (case op "aperture-bytes" (or @oracle-aperture (apply + args)) "headroom-default-milli" 0
                        "usable-bytes" @oracle-usable "admit-code" (if (= args [0 76 100 20 5]) 3 0)
-                       "granted-bytes" (if (= args [0 100 20 5]) 75 100) "code-name" "admitted"))
+                       "granted-bytes" (if (= args [0 100 20 5]) 75 100) "code-name" "admitted")]
+                    (if (and (number? v) (js/Number.isSafeInteger v)) (js/BigInt v) v)))
 '''
     cases = r'''
 (let [p (parse-probe "vram-total\t100\ngtt-total\t0\nclaim\t1\t42garbage\tw\nclaim\t2\t9007199254740992\tw\nclaim\t3\t-1\tw\n")
@@ -42,6 +43,9 @@ def main():
            (assoc good :claims [{:pid "1" :comm "w" :bytes -1}])
            (assoc good :claims [{:pid "1" :comm "w" :bytes 9007199254740991} {:pid "2" :comm "w" :bytes 1}]) p]]
   (assert (= 3 (:unreadable-claims p)))
+  (assert (= 100 (exact-oracle-int (js/BigInt "100"))))
+  (assert (nil? (exact-oracle-int (js/BigInt "9007199254740992"))))
+  (assert (nil? (exact-oracle-int "100")))
   (assert (= 9007199254740991 (aperture-bytes {:vram-total 9007199254740990 :gtt-total 1})))
   (doseq [x [{:vram-total 9007199254740991 :gtt-total 1} {:vram-total 1.5 :gtt-total 0}
              {:vram-total "1" :gtt-total 0} {:vram-total 0}]]
@@ -73,7 +77,8 @@ def main():
              (committed {:claims [{:pid "9" :comm "w" :bytes 80}]} {"9" :unknown})))
   (println "PASS selected ClojureScript admission diagnostic"))
 '''
-    program = (prelude + section('(defn- parse-long*', ';; ── budget')
+    program = (prelude + section('(defn- exact-oracle-int', '(def unmeasured')
+               + section('(defn- parse-long*', ';; ── budget')
                + section('(defn aperture-bytes', '(defn committed')
                + section('(defn committed', ';; ── demand') + cases)
 
@@ -97,7 +102,10 @@ def main():
     total_guard = '(<= vram-total (- 9007199254740991 gtt-total))'
     if program.count(total_guard) != 1:
         raise ValueError('aperture total mutation anchor changed')
-    mutant = program.replace(total_guard, 'true', 1)
+    # Oracle-result normalization independently refuses the overflow, so
+    # remove both protections to exercise the shared failure path.
+    mutant = program.replace(total_guard, 'true', 1).replace(
+        '(js/Number.isSafeInteger n)', '(js/Number.isInteger n)', 1)
     control = subprocess.run([str(node), str(nbb), '-e', mutant], cwd='/private/tmp',
                              capture_output=True, text=True, timeout=15, preexec_fn=limit)
     if control.returncode == 0 or 'Assert failed' not in control.stderr:

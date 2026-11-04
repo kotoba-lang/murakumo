@@ -31,6 +31,17 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- exact-oracle-int [value]
+  ;; The CLJS KIR interpreter returns integer values as JS BigInt. Normalize
+  ;; only exact, safely representable integers; never coerce strings or nil.
+  #?(:clj (when (and (integer? value) (<= -9007199254740991 value 9007199254740991)) value)
+     :cljs (when (or (number? value)
+                     (= "[object BigInt]" (.call (.-toString (.-prototype js/Object)) value)))
+             (let [n (js/Number value)]
+               (when (js/Number.isSafeInteger n) n)))))
+
+(defn- oi [export args] (exact-oracle-int (o export args)))
+
 (def unmeasured
   "What a probe returns when it could not read the device.
 
@@ -109,12 +120,12 @@
            (<= 0 vram-total 9007199254740991)
            (<= 0 gtt-total 9007199254740991)
            (<= vram-total (- 9007199254740991 gtt-total)))
-    (let [aperture (o "aperture-bytes" [vram-total gtt-total])]
+    (let [aperture (oi "aperture-bytes" [vram-total gtt-total])]
       ;; The oracle is not trusted to invent capacity beyond the inputs.
       (if (= aperture (+ vram-total gtt-total)) aperture unmeasured))
     unmeasured))
 
-(defn headroom-default-milli [] (o "headroom-default-milli" []))
+(defn headroom-default-milli [] (oi "headroom-default-milli" []))
 
 (defn usable-bytes
   ([probe] (usable-bytes probe (headroom-default-milli)))
@@ -128,7 +139,7 @@
              remainder (- aperture (* whole 1000))
              expected (- aperture (+ (* whole headroom-milli)
                                      (quot (* remainder headroom-milli) 1000)))
-             usable (o "usable-bytes" [aperture headroom-milli])]
+             usable (oi "usable-bytes" [aperture headroom-milli])]
          (if (and (integer? usable) (= usable expected)) usable unmeasured))
        unmeasured))))
 
@@ -178,14 +189,14 @@
         ;; known overcommit counterexample before trusting an admission or
         ;; a grant. This check detects that specific stale oracle; it is not
         ;; a general qualification or a substitute for regeneration.
-        oracle-current? (and (= 3 (o "admit-code" [0 76 100 20 5]))
-                             (= 75 (o "granted-bytes" [0 100 20 5])))
+        oracle-current? (and (= 3 (oi "admit-code" [0 76 100 20 5]))
+                             (= 75 (oi "granted-bytes" [0 100 20 5])))
         unreadable (:unreadable-claims probe)
         observed? (and valid-claims? (integer? unreadable) (zero? unreadable))
         measured? (and (integer? usable) (<= 0 usable 9007199254740991))
         code (cond (not (and oracle-current? observed?)) 7
                    (not measured?) 1
-                   :else (o "admit-code" [k request-bytes usable res opp]))
+                   :else (or (oi "admit-code" [k request-bytes usable res opp]) 7))
         reason (cond (not oracle-current?) :oracle-unqualified
                      (not observed?) :invalid-observation
                      (not measured?) :unmeasured
@@ -193,7 +204,7 @@
     {:admitted? (zero? code)
      :code code
      :reason reason
-     :granted (if (and oracle-current? observed? measured?) (o "granted-bytes" [k usable res opp]) 0)
+     :granted (if (and oracle-current? observed? measured?) (or (oi "granted-bytes" [k usable res opp]) 0) 0)
      :usable usable
      :resident res
      :opportunistic opp}))
