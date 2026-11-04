@@ -162,3 +162,18 @@ null and a string. Each was refused with zero grant. A mutation bypassing the
 usable-value guard failed these cases. Program SHA-256 was
 `a1b9000a4a575fce187b4a3e648d34cbff2a1cfc8dbd1bd31c1feaaf74c9c9bb`;
 the real oracle and full host suite remain untested.
+
+A subsequent consumer change checks that the oracle aperture exactly equals
+the two host inputs, and that the usable result is an integer between zero
+and that aperture. Wrong synthetic aperture and over-aperture usable values
+were refused by the selected ClojureScript diagnostic; removing each check
+caused its corresponding case to fail. Because the new usable-output check also
+blocks the previously tested unknown-propagation fault, that older negative
+control now removes both guards to exercise the shared failure path. Likewise,
+the admission measurement control removes the upstream bound as well.
+Source SHA-256 was
+`1642d8e23643973d71a095630e7ab83e66b88cfd663e9a1935d66bc82e9cb313`
+and selected program SHA-256 was
+`873bb1f77cd12ad5dc696cb51a0f995c24c553999595c59745beed0ed9c71bd5`.
+A usable value within the aperture can still be wrong for the configured
+headroom; this is not full oracle qualification or a real probe test.

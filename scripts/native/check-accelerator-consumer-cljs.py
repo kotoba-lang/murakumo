@@ -30,7 +30,8 @@ def main():
 (def unmeasured -1)
 (def classes {:resident 0 :opportunistic 1})
 (def oracle-usable (atom 100))
-(defn o [op args] (case op "aperture-bytes" (apply + args) "headroom-default-milli" 0
+(def oracle-aperture (atom nil))
+(defn o [op args] (case op "aperture-bytes" (or @oracle-aperture (apply + args)) "headroom-default-milli" 0
                        "usable-bytes" @oracle-usable "admit-code" (if (= args [0 76 100 20 5]) 3 0)
                        "granted-bytes" (if (= args [0 100 20 5]) 75 100) "code-name" "admitted"))
 '''
@@ -46,12 +47,15 @@ def main():
              {:vram-total "1" :gtt-total 0} {:vram-total 0}]]
     (assert (= -1 (aperture-bytes x))))
   (assert (:admitted? (admit good {} :resident 1 1)))
+  (reset! oracle-aperture 101)
+  (assert (= -1 (aperture-bytes good)))
+  (reset! oracle-aperture nil)
   ;; The deliberately fail-open synthetic oracle returns usable 100 even for
   ;; unknown inputs; the host must refuse before it can produce a grant.
   (let [d (admit (assoc good :vram-total 9007199254740991 :gtt-total 1) {} :resident 1 0)]
     (assert (= :unmeasured (:reason d))) (assert (false? (:admitted? d)))
     (assert (= 0 (:granted d))))
-  (doseq [bad-value [-1 1.5 9007199254740992 nil "100"]]
+  (doseq [bad-value [-1 1.5 101 9007199254740992 nil "100"]]
     (reset! oracle-usable bad-value)
     (let [d (admit good {} :resident 1 0)]
       (assert (= :unmeasured (:reason d))) (assert (false? (:admitted? d)))
@@ -96,7 +100,9 @@ def main():
     propagation_guard = '(and (integer? aperture) (<= 0 aperture 9007199254740991))'
     if program.count(propagation_guard) != 1:
         raise ValueError('unknown propagation mutation anchor changed')
-    mutant = program.replace(propagation_guard, 'true', 1)
+    # The usable-output bound is an independent guard for this same fault.
+    mutant = program.replace(propagation_guard, 'true', 1).replace(
+        '(and (integer? usable) (<= 0 usable aperture))', 'true', 1)
     control = subprocess.run([str(node), str(nbb), '-e', mutant], cwd='/private/tmp',
                              capture_output=True, text=True, timeout=15, preexec_fn=limit)
     if control.returncode == 0 or 'Assert failed' not in control.stderr:
@@ -105,12 +111,26 @@ def main():
     measurement_guard = 'measured? (and (integer? usable) (<= 0 usable 9007199254740991))'
     if program.count(measurement_guard) != 1:
         raise ValueError('usable measurement mutation anchor changed')
-    mutant = program.replace(measurement_guard, 'measured? true', 1)
+    # Remove the upstream output bound too, to exercise the admission guard.
+    mutant = program.replace(measurement_guard, 'measured? true', 1).replace(
+        '(and (integer? usable) (<= 0 usable aperture))', 'true', 1)
     control = subprocess.run([str(node), str(nbb), '-e', mutant], cwd='/private/tmp',
                              capture_output=True, text=True, timeout=15, preexec_fn=limit)
     if control.returncode == 0 or 'Assert failed' not in control.stderr:
         raise RuntimeError(('usable guard-removal control not detected', control.returncode,
                             control.stdout[-1000:], control.stderr[-1000:]))
+    for guard, replacement in [
+        ('(= aperture (+ vram-total gtt-total))', 'true'),
+        ('(and (integer? usable) (<= 0 usable aperture))', 'true'),
+    ]:
+        if program.count(guard) != 1:
+            raise ValueError('oracle capacity mutation anchor changed')
+        mutant = program.replace(guard, replacement, 1)
+        control = subprocess.run([str(node), str(nbb), '-e', mutant], cwd='/private/tmp',
+                                 capture_output=True, text=True, timeout=15, preexec_fn=limit)
+        if control.returncode == 0 or 'Assert failed' not in control.stderr:
+            raise RuntimeError(('oracle capacity guard-removal not detected', guard,
+                                control.returncode, control.stdout[-1000:], control.stderr[-1000:]))
     if SOURCE.read_bytes() != raw:
         raise RuntimeError('source changed during diagnostic')
     print(json.dumps({'sourceSha256': hashlib.sha256(raw).hexdigest(),

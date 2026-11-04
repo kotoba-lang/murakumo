@@ -109,7 +109,9 @@
            (<= 0 vram-total 9007199254740991)
            (<= 0 gtt-total 9007199254740991)
            (<= vram-total (- 9007199254740991 gtt-total)))
-    (o "aperture-bytes" [vram-total gtt-total])
+    (let [aperture (o "aperture-bytes" [vram-total gtt-total])]
+      ;; The oracle is not trusted to invent capacity beyond the inputs.
+      (if (= aperture (+ vram-total gtt-total)) aperture unmeasured))
     unmeasured))
 
 (defn headroom-default-milli [] (o "headroom-default-milli" []))
@@ -120,7 +122,8 @@
    (let [aperture (aperture-bytes probe)]
      ;; Do not rely on an unqualified oracle to propagate an unknown input.
      (if (and (integer? aperture) (<= 0 aperture 9007199254740991))
-       (o "usable-bytes" [aperture headroom-milli])
+       (let [usable (o "usable-bytes" [aperture headroom-milli])]
+         (if (and (integer? usable) (<= 0 usable aperture)) usable unmeasured))
        unmeasured))))
 
 (defn committed

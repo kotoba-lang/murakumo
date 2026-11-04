@@ -59,6 +59,14 @@
       (is (false? (:admitted? result)))
       (is (= 0 (:granted result))))))
 
+(deftest oracle-cannot-invent-aperture-or-usable-capacity
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export _] (if (= export "aperture-bytes") 101 100))]
+    (is (= accel/unmeasured (accel/aperture-bytes {:vram-total 100 :gtt-total 0}))))
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export _] (if (= export "aperture-bytes") 100 101))]
+    (is (= accel/unmeasured (accel/usable-bytes {:vram-total 100 :gtt-total 0} 0)))))
+
 (deftest unmeasured-refuses-and-never-admits
   (testing "a probe that read nothing yields an unmeasured aperture"
     (doseq [broken [{:vram-total accel/unmeasured :gtt-total (gb 23.3) :claims []}
