@@ -20,13 +20,28 @@
           (= (string-substring s i (+ i 1)) " ")
           (if (= field wanted) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ field 1)))
           :else (recur (+ i 1) start field))))
-(defn- rq-size [path :string] :i64
-  (let [meta (rq-fs "O" path "") s (rq-field meta 1) n (string-length s)]
-    (if (or (not (= (rq-field meta 3) "0")) (= n 0) (> n 5)) -1
+(defn- rq-digits? [s :string maximum :i64] :bool
+  (let [n (string-length s)]
+    (and (> n 0) (<= n maximum)
+         (loop [i 0]
+           (if (= i n) true
+             (let [c (string-code-point-at s i)]
+               (and (>= c 48) (<= c 57) (recur (+ i 1)))))))))
+(defn- rq-decimal [s :string] :i64
+  (loop [i 0 value 0]
+    (if (= i (string-length s)) value
+      (recur (+ i 1) (+ (* value 10) (- (string-code-point-at s i) 48))))))
+(defn- rq-meta-size [meta :string] :i64
+  (let [mode (rq-field meta 0) s (rq-field meta 1) blocks (rq-field meta 2)
+        kind (rq-field meta 3) n (string-length s)]
+    (if (or (not (= meta (str mode " " s " " blocks " " kind)))
+            (not (rq-digits? mode 3)) (> (rq-decimal mode) 511) (not (rq-digits? blocks 20))
+            (not (= kind "0")) (= n 0) (> n 5)) -1
       (loop [i 0 size 0]
         (if (= i n) size
           (let [c (string-code-point-at s i)]
             (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* size 10) (- c 48))) -1)))))))
+(defn- rq-size [path :string] :i64 (rq-meta-size (rq-fs "O" path "")))
 (defn- rq-read-bounded [path :string maximum :i64] :string
   (let [size (rq-size path)]
     (if (or (< size 1) (> size maximum)) ""

@@ -2,7 +2,19 @@
 ;; ASCII files: small = "RGQ1\n", queue-limit = 4165 bytes, queue-over = 4166
 ;; bytes, journal-limit = 8340 bytes, journal-over = 8341 bytes, empty = zero
 ;; bytes, and no file named missing. These cases have not been executed.
-(ns murakumo.resource-fifo-bounded-cases (:export [test-fifo-bounded-reads]))
+(ns murakumo.resource-fifo-bounded-cases (:export [test-fifo-bounded-reads test-fifo-meta-size]))
+
+(defn test-fifo-meta-size [] :bool
+  (and (= (rq-meta-size "384 5 8 0") 5)
+       (= (rq-meta-size "384 4165 8 0") 4165)
+       (= (rq-meta-size "bad 5 8 0") -1)
+       (= (rq-meta-size "512 5 8 0") -1)
+       (= (rq-meta-size "384 5 bad 0") -1)
+       (= (rq-meta-size "384 5 8 0 extra") -1)
+       (= (rq-meta-size "384 5 8 0 ") -1)
+       (= (rq-meta-size "384 5 8 1") -1)
+       (= (rq-meta-size "384 5 8 2") -1)
+       (= (rq-meta-size "") -1)))
 
 (defn test-fifo-bounded-reads [root :string] :bool
   (and (= (rq-read-bounded (str root "/small") 4165) "RGQ1\n")
