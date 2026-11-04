@@ -1,0 +1,16 @@
+;; Source cases: execution requires the qualified runtime and FS2 host.
+(ns murakumo.profile-flint-integration-test (:export [test-flint-profile-integration]))
+
+(defn test-flint-profile-integration [] :bool
+  (let [runtime (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"socket\":\"/private/socket\"}")
+        bad-context (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":16384,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"socket\":\"/private/socket\"}")
+        bad-budget (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":8192,\"model\":\"flint\",\"socket\":\"/private/socket\"}")
+        done (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"done\",\"role\":\"assistant\"}}],\"model\":\"flint\"}")
+        incomplete (cp-bytes "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\",\"role\":\"assistant\"}}],\"model\":\"flint\"}")
+        compact (pr-local-compact runtime done)]
+    (and (pr-local-flint? runtime) (pr-local? runtime) (not (pr-local-mtp? runtime))
+         (not (pr-local-flint? bad-context)) (not (pr-local-flint? bad-budget))
+         (= (pr-token-budget runtime true) 6144)
+         (pr-local-response? runtime done) (not (pr-local-response? runtime incomplete))
+         (> (vector-count compact) 0) (pr-local-response? runtime compact)
+         (= (vector-count (pr-local-compact runtime compact)) 0))))

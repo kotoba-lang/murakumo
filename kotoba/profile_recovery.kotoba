@@ -78,6 +78,19 @@
        (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
        (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))))
 
+;; Host authentication, model identity and context configuration remain
+;; independent prerequisites for this distinct Flint runtime kind.
+(defn- pr-local-flint? [runtime :vector-i64] :bool
+  (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-flint/1")
+       (= (cp-str runtime 0 "endpoint") "http://localhost/v1/chat/completions")
+       (cp-safe-absolute? (cp-str runtime 0 "socket"))
+       (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
+       (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))
+       (= (cp-num runtime 0 "contextTokens") 8192)
+       (>= (cp-num runtime 0 "maxTokens") 64) (<= (cp-num runtime 0 "maxTokens") 6144)))
+(defn- pr-local? [runtime :vector-i64] :bool
+  (or (pr-local-mtp? runtime) (pr-local-flint? runtime)))
+
 ;; Paths and the content-addressed unit name are host-supplied. curl ignores
 ;; ~/.curlrc and redirects. The local variant cannot use a TCP proxy or select
 ;; a network URL: it sends only through the explicitly pinned Unix socket.
@@ -91,7 +104,7 @@
     (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
     (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%" (cp-a) "--property=LimitAS=128M"
     (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1"
-    (if (pr-local-mtp? runtime)
+    (if (pr-local? runtime)
       (str (cp-a) "--noproxy" (cp-a) "*"
            (cp-a) "--unix-socket" (cp-a) (cp-str runtime 0 "socket")
            (cp-a) "--header" (cp-a) (str "@" (cp-str runtime 0 "authorizationFile"))
@@ -101,7 +114,7 @@
     (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
     (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
     (cp-a) "--output" (cp-a) response (cp-a)
-    (if (pr-local-mtp? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions")))))
+    (if (pr-local? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions")))))
 
 (defn- pr-answer [b :vector-i64] :string
   (if (not (json-valid? b)) ""
@@ -138,6 +151,16 @@
         ",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":"
         (cp-num b stats "mtp_forward_calls") ",\"runtime_mtp_enabled\":true},\"rawResponseDigest\":\"sha256:"
         (sha256-hex b) "\"}")))))
+
+;; Apply the same response contract to fresh, recovered and prior output.
+(defn- pr-local-response? [runtime :vector-i64 b :vector-i64] :bool
+  (cond (pr-local-flint? runtime) (= (flint-response-problem (cp-str runtime 0 "model") b) "flint/ok")
+        (pr-local-mtp? runtime) (pr-mtp-response? runtime b)
+        :else true))
+(defn- pr-local-compact [runtime :vector-i64 b :vector-i64] :vector-i64
+  (cond (pr-local-flint? runtime) (flint-compact (cp-str runtime 0 "model") b)
+        (pr-local-mtp? runtime) (pr-mtp-compact runtime b)
+        :else b))
 
 (defn- pr-replicable? [b :vector-i64] :bool
   (and (> (vector-count b) 0) (<= (vector-count b) 16384)))
@@ -180,8 +203,8 @@
                    (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n"))]
     (if (not ready) "profile/state-publication-unknown"
       (let [raw (pr-read-response response) completed (and (not (= (pr-answer raw) ""))
-                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime raw)))
-            answer (if completed (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw) (vector-alloc 0))
+                        (pr-local-response? runtime raw))
+            answer (if completed (pr-local-compact runtime raw) (vector-alloc 0))
             cid (cp-cid answer) expected (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
             valid (and completed (pr-replicable? answer) (= (cp-cid (cp-read output)) cid)
                        (= (cp-cid (cp-read tmp)) (cp-cid expected))
@@ -199,7 +222,7 @@
             (and (cp-exists? response)
                  (let [b (pr-read-response response)]
                    (and (not (= (pr-answer b) ""))
-                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime b)))))
+                        (pr-local-response? runtime b))))
             (or (= state -1) (> i 900)) false
             :else (let [z (pr-pause)] (if z (recur (+ i 1)) false))))))
 
@@ -207,7 +230,7 @@
   (and (json-canonical? runtime)
        (or (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime/1")
                 (= (cp-str runtime 0 "endpoint") "https://api.murakumo.cloud/v1/chat/completions"))
-           (pr-local-mtp? runtime))
+           (pr-local? runtime))
        (= (cp-str runtime 0 "rail") "murakumo")
        (= (str "sha256:" (sha256-hex meta)) (cp-str runtime 0 "profileDigest"))
        (= (str "sha256:" (sha256-hex role)) (cp-str runtime 0 "roleDigest"))
@@ -225,9 +248,10 @@
 ;; The host selects and pins both the work order and the bounded source
 ;; snapshot; neither is a live observation or an authorization.
 (defn- pr-growth-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64 work :vector-i64 context :vector-i64] :bool
-  (and (json-canonical? runtime) (pr-local-mtp? runtime)
+  (and (json-canonical? runtime) (pr-local? runtime)
        (let [i (json-member runtime 0 "maxTokens")]
-         (or (< i 0) (and (json-int-ok? runtime i) (>= (json-int runtime i) 64) (<= (json-int runtime i) 768))))
+         (if (pr-local-flint? runtime) (and (>= i 0) (json-int-ok? runtime i))
+           (or (< i 0) (and (json-int-ok? runtime i) (>= (json-int runtime i) 64) (<= (json-int runtime i) 768)))))
        (= (cp-str runtime 0 "rail") "murakumo") (= (cp-str runtime 0 "tools") "none")
        (= (cp-str runtime 0 "profile") "awai-growth-steward")
        (not (= (cp-str runtime 0 "model") ""))
@@ -259,7 +283,7 @@
                 prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
                 linked (if (= next 1) (= previous "none")
                          (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))
-                              (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime prior))))]
+                              (pr-local-response? runtime prior)))]
             (if (not linked) "profile/previous-output-mismatch"
               (let [instruction (if growth
                        (str "Read-only AWAI growth steward task " task ", step " next ".\n"
@@ -277,13 +301,15 @@
                          " State one concrete next verification and what evidence would decide it."
                          " You have no current external observations; do not invent progress or completion."
                          " All tools are denied. Do not change files, publish, merge or contact anyone.")))
-                    body (str "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":" tokens ",\"messages\":["
+                    body (str (if (pr-local-flint? runtime) "{\"max_tokens\":" "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":") tokens ",\"messages\":["
                       "{\"content\":" (pr-json-quote (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))) ",\"role\":\"system\"},"
                       (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
                       "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
-                      ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}")
-                    id (sha256-hex (cp-bytes (if (pr-local-mtp? runtime)
-                         (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
+                      (if (pr-local-flint? runtime) ",\"stream\":false,\"temperature\":1,\"top_k\":20,\"top_p\":0.95}"
+                        ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}"))
+                    id (sha256-hex (cp-bytes (if (pr-local? runtime)
+                         (str (if (pr-local-flint? runtime) "local-flint\n" "local-mtp\n")
+                           (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
                          body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
@@ -307,7 +333,7 @@
                 (if (not (= pending-status "0")) "profile/state-publication-unknown"
                 (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
                   (let [raw (pr-read-response response)
-                        answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
+                        answer (pr-local-compact runtime raw)
                         cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
                         newstate (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
@@ -322,9 +348,10 @@
                       (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
+  (if (pr-local-flint? runtime) (cp-num runtime 0 "maxTokens")
   (if (= (cp-str runtime 0 "profile") "awai-growth-steward")
     (let [limit (cp-num runtime 0 "maxTokens")] (if (and (>= limit 64) (<= limit 768)) limit 768))
-    (if resident 256 32)))
+    (if resident 256 32))))
 
 (defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
   (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false)))

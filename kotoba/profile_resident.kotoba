@@ -152,8 +152,10 @@
 ;; Pins describe operator-selected artifacts; they do not attest the peer.
 (defn- rt-public-environment? [cfg :vector-i64 runtime :vector-i64 env :vector-i64] :bool
   (and (json-canonical? env) (= (json-kind env 0) 1) (= (json-count env 0) 14)
-       (= (cp-str env 0 "kind") "itonami.profile-environment-public/2")
-       (json-canonical? runtime) (pr-local-mtp? runtime) (= (cp-str runtime 0 "profile") "awai-growth-steward")
+       (or (and (pr-local-mtp? runtime) (= (cp-str env 0 "kind") "itonami.profile-environment-public/2"))
+           (and (pr-local-flint? runtime) (= (cp-str env 0 "kind") "itonami.profile-environment-public-flint/1")
+                (= (cp-num env 0 "contextTokens") 8192)))
+       (json-canonical? runtime) (= (cp-str runtime 0 "profile") "awai-growth-steward")
        (= (cp-str env 0 "profile") (cp-str runtime 0 "profile"))
        (= (digest-problem (cp-str env 0 "profileDigest")) "oci/ok")
        (= (cp-str env 0 "profileDigest") (cp-str cfg 0 "profile"))
@@ -162,7 +164,8 @@
        (= (cp-str env 0 "workDigest") (cp-str runtime 0 "workDigest"))
        (= (cp-str env 0 "contextDigest") (cp-str runtime 0 "contextDigest"))
        (= (cp-str env 0 "source") (cp-str runtime 0 "source")) (cp-hex? (cp-str env 0 "source") 40)
-       (>= (cp-num env 0 "maxTokens") 64) (<= (cp-num env 0 "maxTokens") 768)
+       (>= (cp-num env 0 "maxTokens") 64)
+       (<= (cp-num env 0 "maxTokens") (if (pr-local-flint? runtime) 6144 768))
        (= (cp-num env 0 "maxTokens") (cp-num runtime 0 "maxTokens"))
        (= (cp-str env 0 "model") (cp-str runtime 0 "model")) (not (= (cp-str env 0 "model") ""))
        (= (field-problem (cp-str env 0 "model")) "enroll/ok")
@@ -173,9 +176,10 @@
        (= (digest-problem (cp-str env 0 "workDigest")) "oci/ok")
        (= (digest-problem (cp-str env 0 "contextDigest")) "oci/ok")
        (= (digest-problem (cp-str env 0 "modelArtifactDigest")) "oci/ok")
-       (= (digest-problem (cp-str env 0 "mtpArtifactDigest")) "oci/ok")
        (= (cp-str env 0 "modelArtifactDigest") (cp-str cfg 0 "modelArtifactDigest"))
-       (= (cp-str env 0 "mtpArtifactDigest") (cp-str cfg 0 "mtpArtifactDigest"))))
+       (or (pr-local-flint? runtime)
+           (and (= (digest-problem (cp-str env 0 "mtpArtifactDigest")) "oci/ok")
+                (= (cp-str env 0 "mtpArtifactDigest") (cp-str cfg 0 "mtpArtifactDigest"))))))
 
 (defn- rt-runtime [cfg :vector-i64] :vector-i64
   (cp-read (if (= (cp-str cfg 0 "archiveAck") "")
