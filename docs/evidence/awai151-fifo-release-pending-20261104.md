@@ -144,3 +144,30 @@ This one direct child does not cover grandchildren, daemonization, missed
 fork/exec events, crashes, restart, authenticated resource accounting, memory
 or GPU limits, distributed fencing or real workloads. The test therefore does
 not qualify a governor or authorize persistent deployment.
+
+### RGQ4 settle process-kill boundaries
+
+On one local Darwin ARM64 host, the stored diagnostic
+`scripts/native/check-fifo-settle-crash.py` (SHA-256
+`20a24c7de6c2f052eebd3955871d7b45ec4bb420bb07e8388325ac0d76ca4305`)
+built the current source and three source-instrumented pause variants with
+the pinned diagnostic compiler/provider. A task-owned native FIFO process
+was SIGKILLed separately just after release-marker rename, just after the
+receipt write, and just after consumption of the receipt for the next reserve.
+After rename or consumption, uninstrumented front returned unknown; the exact
+prior ticket then reconciled, and the next reservation succeeded. After the
+receipt write, uninstrumented front re-read and synced the visible receipt
+before admitting the next ticket. A separate source-injected receipt-sync
+failure returned unknown in that case. All three test children were reaped;
+each native process had a three-second CPU cap.
+
+The good image SHA-256 was
+`abd117f8a18503fd3404bc94ea765683d928a4b25239285076f1a273f6374d51`;
+rename, receipt, consume and receipt-sync-fault diagnostic image hashes were
+`73fb4a53bbbe840fbcaf999972d4b08b469b61dcbb020cba278ed0b71250a857`,
+`8b1b7cc66ed9a40518180c4a6572dfbfa0c7dcdb63e08149217328ca62903078`,
+`616c95c8bc6ef6bf1189b109883b24b41c604df3994db7aad08d742682e90915`, and
+`6f3adc8042a4529dbc97948a3a5dd299b9fe29b7d3d73522fbc0bd688091d6cb`.
+The pause and failure are injected into source and the checks observe process
+death on one running OS. This does not simulate kernel I/O faults, power loss,
+real workloads, descendants, multi-host coordination or a qualified governor.
