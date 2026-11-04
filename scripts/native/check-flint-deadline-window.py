@@ -106,6 +106,35 @@ def main():
    (if (and (= expired -1) (= before "\u0000FS2\u00000")
             (= valid 12) (= after "\u0000FS2\u00001")) 0 1)))
 '''
+    gen_wait_start = source.index('(defn- pr-wait ')
+    gen_wait_end = source.index('(defn- pr-runtime? ', gen_wait_start)
+    gen_wait = source[gen_wait_start:gen_wait_end]
+    gen_wait_guard = '(and (pr-local-flint? runtime) (< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1))'
+    if gen_wait.count(gen_wait_guard) != 1:
+        raise ValueError('generation wait deadline guard anchor changed')
+    gen_wait_stubs = r'''
+(defn- pr-wall-ms [] :i64 106500)
+(defn- pr-local-flint? [runtime :vector-i64] :bool (= (vector-at runtime 0) 1))
+(defn- pr-unit-code [unit :string] :i64
+ (let [created (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Igen-" unit "\u0000"))] 1))
+(defn- cp-exists? [path :string] :bool true)
+(defn- pr-read-response [path :string] :vector-i64 [1])
+(defn- pr-answer [b :vector-i64] :string "answer")
+(defn- pr-local-response? [runtime :vector-i64 b :vector-i64] :bool true)
+(defn- pr-pause [] :bool false)
+'''
+    gen_wait_cases = r'''
+(defn main [] :i64
+ (let [flint [1] other [0]
+       expired (pr-wait "expired" "r" flint 100000 105000 10)
+       absent (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Dgen-expired\u0000"))
+       valid (pr-wait "valid" "r" flint 100000 110000 10)
+       valid-seen (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Dgen-valid\u0000"))
+       mtp (pr-wait "mtp" "r" other 0 0 10)
+       mtp-seen (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Dgen-mtp\u0000"))]
+   (if (and (not expired) (= absent "\u0000FS2\u00000")
+            valid (= valid-seen "\u0000FS2\u00001") mtp (= mtp-seen "\u0000FS2\u00001")) 0 1)))
+'''
     resident = (ROOT / 'kotoba/profile_resident.kotoba').read_text()
     resident_start = resident.index('(defn- rt-dispatch ')
     resident_end = resident.index('(defn- rt-turn ', resident_start)
@@ -191,6 +220,8 @@ def main():
                 ('count-reuse-mutant', window + reuse_stubs + count_source.replace(reuse_decision, 'false') + reuse_cases, 1),
                 ('count-wait-deadline', window + wait_stubs + count_wait + wait_cases, 0),
                 ('count-wait-deadline-mutant', window + wait_stubs + count_wait.replace(wait_guard, 'false') + wait_cases, 1),
+                ('generation-wait-deadline', window + gen_wait_stubs + gen_wait + gen_wait_cases, 0),
+                ('generation-wait-deadline-mutant', window + gen_wait_stubs + gen_wait.replace(gen_wait_guard, 'false') + gen_wait_cases, 1),
                 ('resident-refresh', window + resident_stubs + dispatch + resident_cases, 0),
                 ('resident-refresh-mutant', window + resident_stubs + dispatch.replace(refresh, 'again lease') + resident_cases, 1),
                 ('pre-refresh-deadline-mutant', window + resident_stubs + dispatch.replace(recheck_guard, 'false') + resident_cases, 1),
@@ -211,6 +242,8 @@ def main():
                 subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(image)], check=True, capture_output=True)
                 shutil.rmtree(root / 'step-time', ignore_errors=True)
                 shutil.rmtree(root / 'poll-seen', ignore_errors=True)
+                for marker_name in ('gen-expired', 'gen-valid', 'gen-mtp'):
+                    shutil.rmtree(root / marker_name, ignore_errors=True)
                 run([image], expected)
                 print(name, 'source-sha256', hashlib.sha256(text.encode()).hexdigest(), 'image-sha256', digest(image))
         finally:

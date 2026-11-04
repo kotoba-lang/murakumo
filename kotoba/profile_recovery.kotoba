@@ -559,16 +559,19 @@
           (str "profile/count-reconciled " next)
           "profile/count-reconciliation-unknown")))))
 
-(defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
+(defn- pr-wait [unit :string response :string runtime :vector-i64 started :i64 deadline :i64 seconds :i64] :bool
   (loop [i 0]
-    (let [state (pr-unit-code unit)]
-      (cond (= state 1)
-            (and (cp-exists? response)
-                 (let [b (pr-read-response response)]
-                   (and (not (= (pr-answer b) ""))
-                        (pr-local-response? runtime b))))
-            (or (= state -1) (> i 900)) false
-            :else (let [z (pr-pause)] (if z (recur (+ i 1)) false))))))
+    ;; An expired Flint deadline does not prove that the unit has stopped.
+    ;; Preserve the request, dispatch marker and occupancy for reconciliation.
+    (if (and (pr-local-flint? runtime) (< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1)) false
+      (let [state (pr-unit-code unit)]
+        (cond (= state 1)
+              (and (cp-exists? response)
+                   (let [b (pr-read-response response)]
+                     (and (not (= (pr-answer b) ""))
+                          (pr-local-response? runtime b))))
+              (or (= state -1) (> i 900)) false
+              :else (let [z (pr-pause)] (if z (recur (+ i 1)) false)))))))
 
 (defn- pr-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64] :bool
   (and (json-canonical? runtime)
@@ -696,7 +699,7 @@
                 (if (= pending-status "1")
                   (pr-flint-finish runtime cache turn count-id (pr-reconcile-pending repo runtime next task state body-bytes unit request marker response))
                 (if (not (= pending-status "0")) "profile/state-publication-unknown"
-                (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
+                (if (or (not submitted) (not (pr-wait unit response runtime started deadline seconds))) "profile/inference-unavailable-state-retained"
                   (let [raw (pr-read-response response)
                         answer (pr-local-compact runtime raw)
                         cid (cp-cid answer)

@@ -136,3 +136,47 @@ patches; the mutant patches apply after the guarded `count-wait` patches.
 Voters and count response were synthetic, generation was stubbed, and no
 model or GitHub publication ran. Clock monotonicity, operation interruption,
 process containment, receiver fencing and governor qualification remain open.
+
+## Stop Flint generation polling after the shared deadline
+
+The selected Flint generation wait now checks the shared deadline before each
+unit state query and returns false on an expired or unknown sample. Its caller
+retains the request, dispatch marker and busy state; this check does not stop
+an existing unit or interrupt a query or sleep already in progress. The
+non-Flint path keeps its earlier behavior.
+
+On local Darwin ARM64, selected native fixtures with a mock clock and unit
+verified that an expired Flint request did not query the unit, an unexpired
+Flint request did, and a non-Flint control with no deadline retained its
+previous behavior. A separately built guard-bypass mutant failed the expired
+case. The other deadline fixtures passed; an assembled source with historical
+dependencies and the current generation wait and caller passed pinned Amu
+`check`. This non-Flint fixture is not a full MTP integration test.
+
+On Xavier, the selected generation wait used the actual host clock and
+systemd queries against a task-owned `sleep 4` unit. With a two-second
+synthetic deadline, the wait returned false while the unit still showed
+`start`; a guard-bypass mutant returned true only after the unit was `exited`.
+Both operators then confirmed a completed-unit control. Response checks and
+response bytes were stubbed, and this was a direct `pr-wait` fixture rather
+than the full resident, so retained markers and real generation were not
+exercised. The unit was stopped and independently observed `not-found` /
+`inactive` after the tests. A first compilation attempt failed on an outdated
+fixture caller before any unit was started; the successful fixture substituted
+the current caller as well.
+
+Compiler sampled peaks were 61,076 KiB and 64,516 KiB; the guarded and mutant
+timed guests each sampled at 624 KiB. The original CPU/address-space limits
+and sampled RSS policy apply. Remote synthetic artifact directories are
+`/tmp/awai-lease-loopback-sy6div22` and `/tmp/awai-lease-loopback-28upkflf`.
+The guarded fixture, ELF and operator SHA-256 values were
+`b3e7aed5fa3d8e11b08d7ded7757e85f71ba873a8e6df266fe3baffa5129a13f`,
+`4c09012489ee158df281346f9bca5b8e48c9f170638167118fc8d0c2e6fe3b4b`, and
+`56b287e04159e894b52c0cc42b816575abe58bbfcaca57e172adcc28792c116e`;
+the corresponding mutant values were
+`ff330679bf2343c1bc624a42839f113fb93aad317bfea664055450fadb785425`,
+`4be66a9735bd3df0420b62fe1883e4e453ddda4a14373b729d61221c35a42562`, and
+`1706363cb428f970aa2e97336e1f077d2208e147d605fb45cc2a22e84ad127d7`.
+The `generation-wait` patches follow the guarded `count-wait` patches;
+the mutant patches apply on top. No model, real quorum, full resident,
+GitHub publication or qualified governor was tested.

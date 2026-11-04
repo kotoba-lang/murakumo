@@ -1,0 +1,87 @@
+--- awai-flint-count-wait-expired.kotoba
++++ awai-flint-count-wait-expired.kotoba
+@@ -3087 +3087 @@
+-(defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
++(defn- cp-exists? [path :string] :bool true)
+@@ -3640,8 +3640 @@
+-(defn- pr-answer [b :vector-i64] :string
+-  (if (not (json-valid? b)) ""
+-    (let [cs (json-member b 0 "choices") c (if (>= cs 0) (json-element b cs 0) -1)
+-          m (if (>= c 0) (json-member b c "message") -1)]
+-      ;; A nonempty prefix is not a completed turn. Refuse truncated,
+-      ;; tool-call, missing and unknown finish reasons rather than checkpointing
+-      ;; them as a completed profile step.
+-      (if (and (>= m 0) (= (cp-str b c "finish_reason") "stop")) (cp-str b m "content") ""))))
++(defn- pr-answer [b :vector-i64] :string "answer")
+@@ -3689 +3682 @@
+-(defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
++(defn- pr-wait [unit :string response :string runtime :vector-i64 started :i64 deadline :i64 seconds :i64] :bool
+@@ -3691,8 +3684,11 @@
+-    (let [state (pr-unit-code unit)]
+-      (cond (= state 1)
+-            (and (cp-exists? response)
+-                 (let [b (pr-read-response response)]
+-                   (and (not (= (pr-answer b) ""))
+-                        (pr-local-response? runtime b))))
+-            (or (= state -1) (> i 900)) false
+-            :else (let [z (pr-pause)] (if z (recur (+ i 1)) false))))))
++    ;; An expired Flint deadline does not prove that the unit has stopped.
++    ;; Preserve the request, dispatch marker and occupancy for reconciliation.
++    (if (and (pr-local-flint? runtime) (< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1)) false
++      (let [state (pr-unit-code unit)]
++        (cond (= state 1)
++              (and (cp-exists? response)
++                   (let [b (pr-read-response response)]
++                     (and (not (= (pr-answer b) ""))
++                          (pr-local-response? runtime b))))
++              (or (= state -1) (> i 900)) false
++              :else (let [z (pr-pause)] (if z (recur (+ i 1)) false)))))))
+@@ -3791 +3787 @@
+-                (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
++                (if (or (not submitted) (not (pr-wait unit response runtime started deadline seconds))) "profile/inference-unavailable-state-retained"
+@@ -5374,30 +5370,5 @@
+- (let [mode (cp-arg 0) root (cp-arg 1) token (cp-arg 2) ports (cp-arg 3) repo (str root "/repo") cache (str root "/cache")
+-       cfg (cp-bytes (str "{\"cache\":\"" cache "\",\"node\":\"node-a\",\"task\":\"task\",\"tokenFile\":" (pr-json-quote token) ",\"voters\":" (pr-json-quote ports) "}"))
+-       old (cp-bytes "{\"next\":1,\"previous\":\"none\",\"task\":\"task\"}")
+-       id "7a655439725342cfa889212cc956bc6a02a30bfb9d17e34b240b023f401a13ac"
+-       instruction (str "Resident accountability-steward proposal turn " 1 ", task " "task"
+-         ". Follow the profile's propose-only goal and continue from the preceding proposal."
+-         " State one concrete next verification and what evidence would decide it."
+-         " You have no current external observations; do not invent progress or completion."
+-         " All tools are denied. Do not change files, publish, merge or contact anyone.")
+-       system-text "This invocation is a model-only read-only proposal. All tools are denied.\nrole"
+-       history (str "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}")
+-       body (cp-bytes (str "{\"messages\":[" history "],\"model\":" (pr-json-quote "flint")
+-                       ",\"system\":" (pr-json-quote system-text) ",\"thinking\":{\"type\":\"enabled\"}}"))
+-       setup (and (cp-mkdir repo) (cp-mkdir (str repo "/profile")) (cp-mkdir cache)
+-                  (cp-write (str repo "/profile/itonami.edn") (cp-bytes "profile"))
+-                  (cp-write (str repo "/profile/SOUL.md") (cp-bytes "role"))
+-                  (cp-write (str repo "/state.json") old)
+-                  (cp-write (str cache "/" id ".count-request.json") body)
+-                  (cp-write (str cache "/" id ".count-dispatch") (cp-bytes "itonami.inference-dispatch/1\n"))
+-                  (cp-write (str cache "/" id ".count-response.json") (cp-bytes "{\"input_tokens\":2231}")))
+-       initial (if setup (rt-lease cfg 1) (vector-alloc 0))
+-       now (rt-now) head (cp-bytes (str "{\"until\":" (+ now (if (= mode "expired-count") 12000 600000)) "}"))
+-       result (if (and setup (> (vector-count initial) 0)) (rt-dispatch cfg head initial repo 1) "fixture/setup-failed")
+-       called (cp-fs "D" (str cache "/generation-called") "")
+-       busy (cp-fs "D" (str cache "/server-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.busy") "")]
+-  (if (= mode "expired-count")
+-    (if (and (= result "profile/context-budget-unknown-or-insufficient") (= called "0") (= busy "1")) 0 3)
+-    (if (= mode "same")
+-    (if (and (= result "profile/inference-unavailable-state-retained") (= called "1") (= busy "1")) 0 1)
+-    (if (and (= result "resident/lease-lost") (= called "0") (= busy "1")) 0 2)))))
++ (let [mode (cp-arg 0)
++       runtime (cp-bytes "{\"authorizationFile\":\"/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"reasoningMemory\":\"disabled\",\"serverInstance\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"socket\":\"/sock\",\"task\":\"task\"}")
++       now (pr-wall-ms) deadline (+ now (if (= mode "expired-count") 2000 10000))
++       ready (pr-wait "itonami-count-7a655439725342cfa889212c.service" "/response" runtime now deadline 10)]
++  (if (and (> now 0) (pr-local-flint? runtime) (if (= mode "expired-count") (not ready) ready)) 0 1)))
+@@ -5599,4 +5570 @@
+-(defn- pr-local-response? [runtime :vector-i64 b :vector-i64] :bool
+-  (cond (pr-local-flint? runtime) (= (flint-response-problem (cp-str runtime 0 "model") b) "flint/ok")
+-        (pr-local-mtp? runtime) (pr-mtp-response? runtime b)
+-        :else true))
++(defn- pr-local-response? [runtime :vector-i64 b :vector-i64] :bool true)
+@@ -5629,2 +5597 @@
+-(defn- pr-read-response [path :string] :vector-i64
+-  (pr-read-bounded path 262144))
++(defn- pr-read-response [path :string] :vector-i64 [1])
