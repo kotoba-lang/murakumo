@@ -101,3 +101,23 @@ Processes had three-second CPU limits, without an independently enforced
 whole-host memory cap. No model or persistent service was started. This does
 not test machine crash, power loss, storage rollback, descendant termination,
 production provider, authenticated release or a qualified governor.
+
+## Preserve the barrier when a claim is lost
+
+The current candidate also validates the exact claim before release, dequeue,
+settle and settle recovery. In a local source-bound diagnostic, removing a
+claim after reserve refused release and retained the hold; corrupting it
+after release refused dequeue and retained the release barrier. Removing it
+after dequeue refused both settle and a synthetic settle-recovery state;
+restoring it allowed the matching recovery to finish. The adapted bounded
+FIFO regression and ticket-once diagnostics passed locally with the same
+compiler and packager pins. The prior three-Mac observation above used the
+earlier image, not this source revision.
+
+Current source SHA-256:
+`7d48c9bccab640d20791f452650260aefb6b6d885f36803014e3c359ec680f50`.
+Signed diagnostic FIFO SHA-256:
+`6557d0f1bc716c1ddfacd6cc96857e4d0229fd788cb025297204254f727f0085`.
+The recovery state was manually constructed in a task-owned temporary
+directory; this is not a power-loss or production recovery test. Preserving
+all historic claims and authenticating the host remain necessary.

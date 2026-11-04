@@ -51,11 +51,11 @@ def main():
     if source.count(guard) != 1:
         raise ValueError('claim guard mutation anchor changed')
     bypass = source.replace(guard, '(cond false "fifo/ticket-used"\n          false "fifo/ticket-unknown"')
-    reserve_guard = ('(not (= (rq-read-bounded (str root "/queue.used." ticket) 70)\n'
-                     '                          (str "RGU1\\n" ticket "\\n"))) "fifo/ticket-unknown"')
+    reserve_guard = ('(not (= (string-substring state 5 69) ticket)) "fifo/not-front"\n'
+                     '                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"')
     if source.count(reserve_guard) != 1:
         raise ValueError('reserve marker guard mutation anchor changed')
-    reserve_bypass = source.replace(reserve_guard, 'false "fifo/ticket-unknown"')
+    reserve_bypass = source.replace(reserve_guard, reserve_guard.replace('(not (rq-claimed? root ticket))', 'false'))
     pause_helper = ('(defn- rq-claim-test-pause [] :bool\n'
                     '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
                     '        sent (typed-cap-call 37 :string :string s)] true))\n')
@@ -123,11 +123,33 @@ def main():
                     op(image, 'reserve', 'fifo/ticket-unknown', ticket, 1)
                     marker.write_text(content)
                 op(image, 'reserve', 'fifo/reserved', ticket)
+                if ticket == a:
+                    marker.unlink()
+                    op(image, 'release', 'fifo/ticket-unknown', ticket, 1)
+                    if not (q / 'queue.reservation').exists():
+                        raise ValueError('missing claim released hold')
+                    marker.write_text(content)
                 if ticket == b:
                     op(image, 'release', 'fifo/reservation-unknown', a, 1)
                 op(image, 'release', 'fifo/release-pending', ticket)
+                if ticket == a:
+                    marker.write_text('bad')
+                    op(image, 'dequeue', 'fifo/ticket-unknown', ticket, 1)
+                    if not (q / 'queue.release.pending').exists():
+                        raise ValueError('corrupt claim removed release barrier')
+                    marker.write_text(content)
                 op(image, 'dequeue', 'fifo/dequeued', ticket)
-                op(image, 'settle', 'fifo/settled', ticket)
+                if ticket == a:
+                    marker.unlink()
+                    op(image, 'settle', 'fifo/ticket-unknown', ticket, 1)
+                    (q / 'queue.release.pending').rename(q / 'queue.reservation.last')
+                    op(image, 'settle-recover', 'fifo/reservation-unknown', ticket, 1)
+                    if (q / 'queue.reservation.settled').exists():
+                        raise ValueError('missing claim settled recovery')
+                    marker.write_text(content)
+                    op(image, 'settle-recover', 'fifo/settled', ticket)
+                else:
+                    op(image, 'settle', 'fifo/settled', ticket)
             op(image, 'enqueue', 'fifo/ticket-used', a, 1)
             op(failed_claim, 'enqueue', 'fifo/ticket-unknown', c, 1)
             op(image, 'enqueue', 'fifo/ticket-used', c, 1)

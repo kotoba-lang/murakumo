@@ -107,6 +107,8 @@
           (and (rq-write? path (str "RGU1\n" ticket "\n"))
                (= (rq-fs "M" path "") "1") (= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"
           :else "fifo/ticket-unknown")))
+(defn- rq-claimed? [root :string ticket :string] :bool
+  (= (rq-read-bounded (str root "/queue.used." ticket) 70) (str "RGU1\n" ticket "\n")))
 (defn- rq-hold-valid? [s :string] :bool
   (and (= (string-length s) 70) (= (string-substring s 0 5) "RGH1\n")
        (= (string-substring s 69 70) "\n") (rq-ticket? (string-substring s 5 69))))
@@ -197,7 +199,7 @@
         expected-hold (str "RGH1\n" ticket "\n")
         old (str "RGQ5\n" ticket "\n" (string-substring state 5 (string-length state)))
         expected-journal (str "RGI1\n" old "NEXT\n" state)]
-    (if (and (rq-ticket? ticket) (= pending "0") (= intent "0")
+    (if (and (rq-ticket? ticket) (rq-claimed? root ticket) (= pending "0") (= intent "0")
              (= (rq-fs "D" last "") "1") (= (rq-read-bounded last 70) expected-hold)
              (< (string-index-of state (str ticket "\n")) 0)
              (= (rq-read-bounded journal 8340) expected-journal)
@@ -226,6 +228,7 @@
                   (= op "release") "fifo/reservation-unknown"
                   (not (or (= op "dequeue") (= op "settle"))) "fifo/release-pending"
                   (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
                   (not (= (rq-read-bounded release 70) (str "RGH1\n" ticket "\n"))) "fifo/reservation-unknown"
                   (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
                   (= op "dequeue")
@@ -247,6 +250,7 @@
           (= op "release")
             (cond (not (rq-ticket? ticket)) "fifo/ticket-invalid"
                   (not (= hold-status "1")) "fifo/reservation-unknown"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
                   (not (= (rq-read-bounded hold 70) (str "RGH1\n" ticket "\n"))) "fifo/reservation-unknown"
                   (or (= state "RGQ5\n") (not (= (string-substring state 5 69) ticket))) "fifo/reservation-unknown"
                   (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
@@ -263,8 +267,7 @@
           (= op "reserve")
             (cond (= state "RGQ5\n") "fifo/empty"
                   (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
-                  (not (= (rq-read-bounded (str root "/queue.used." ticket) 70)
-                          (str "RGU1\n" ticket "\n"))) "fifo/ticket-unknown"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
                   (and (rq-consume-history? root) (rq-write? hold (str "RGH1\n" ticket "\n"))
                        (= (rq-fs "M" hold "") "1") (= (rq-fs "M" root "") "1")) "fifo/reserved"
                   :else "fifo/reservation-unknown")

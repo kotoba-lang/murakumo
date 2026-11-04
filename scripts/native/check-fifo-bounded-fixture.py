@@ -436,6 +436,7 @@ def main():
                 (case / 'queue.lock').write_text('')
                 (case / 'queue').write_text('RGQ5\n' + first + '\n')
                 (case / 'queue.release.pending').write_text('RGH1\n' + first + '\n')
+                (case / ('queue.used.' + first)).write_text('RGU1\n' + first + '\n')
                 path = '/release-kill-' + phase
                 child = subprocess.Popen([str(variant), path, 'dequeue', first], cwd=root, pass_fds=(3,),
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={'PATH':'/nonexistent'})
