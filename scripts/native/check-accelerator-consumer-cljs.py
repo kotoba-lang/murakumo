@@ -55,12 +55,18 @@ def main():
   (let [d (admit (assoc good :vram-total 9007199254740991 :gtt-total 1) {} :resident 1 0)]
     (assert (= :unmeasured (:reason d))) (assert (false? (:admitted? d)))
     (assert (= 0 (:granted d))))
-  (doseq [bad-value [-1 1.5 101 9007199254740992 nil "100"]]
+  (doseq [bad-value [-1 1.5 99 101 9007199254740992 nil "100"]]
     (reset! oracle-usable bad-value)
     (let [d (admit good {} :resident 1 0)]
       (assert (= :unmeasured (:reason d))) (assert (false? (:admitted? d)))
       (assert (= 0 (:granted d)))))
   (reset! oracle-usable 100)
+  (reset! oracle-usable 90)
+  (assert (= 90 (usable-bytes good 100)))
+  (reset! oracle-usable 8998192055486251)
+  (assert (= 8998192055486251 (usable-bytes {:vram-total 9007199254740991 :gtt-total 0} 1)))
+  (reset! oracle-usable 100)
+  (assert (= -1 (usable-bytes good 1001)))
   (doseq [x bad] (let [d (admit x {} :resident 1 1)]
                    (assert (= :invalid-observation (:reason d))) (assert (= 0 (:granted d)))))
   (assert (= {:resident 0 :opportunistic 80}
@@ -97,12 +103,13 @@ def main():
     if control.returncode == 0 or 'Assert failed' not in control.stderr:
         raise RuntimeError(('aperture guard-removal control not detected', control.returncode,
                             control.stdout[-1000:], control.stderr[-1000:]))
-    propagation_guard = '(and (integer? aperture) (<= 0 aperture 9007199254740991))'
+    propagation_guard = ('(and (integer? aperture) (<= 0 aperture 9007199254740991)\n'
+                         '              (integer? headroom-milli) (<= 0 headroom-milli 1000))')
     if program.count(propagation_guard) != 1:
         raise ValueError('unknown propagation mutation anchor changed')
     # The usable-output bound is an independent guard for this same fault.
     mutant = program.replace(propagation_guard, 'true', 1).replace(
-        '(and (integer? usable) (<= 0 usable aperture))', 'true', 1)
+        '(and (integer? usable) (= usable expected))', 'true', 1)
     control = subprocess.run([str(node), str(nbb), '-e', mutant], cwd='/private/tmp',
                              capture_output=True, text=True, timeout=15, preexec_fn=limit)
     if control.returncode == 0 or 'Assert failed' not in control.stderr:
@@ -113,7 +120,7 @@ def main():
         raise ValueError('usable measurement mutation anchor changed')
     # Remove the upstream output bound too, to exercise the admission guard.
     mutant = program.replace(measurement_guard, 'measured? true', 1).replace(
-        '(and (integer? usable) (<= 0 usable aperture))', 'true', 1)
+        '(and (integer? usable) (= usable expected))', 'true', 1)
     control = subprocess.run([str(node), str(nbb), '-e', mutant], cwd='/private/tmp',
                              capture_output=True, text=True, timeout=15, preexec_fn=limit)
     if control.returncode == 0 or 'Assert failed' not in control.stderr:
@@ -121,7 +128,7 @@ def main():
                             control.stdout[-1000:], control.stderr[-1000:]))
     for guard, replacement in [
         ('(= aperture (+ vram-total gtt-total))', 'true'),
-        ('(and (integer? usable) (<= 0 usable aperture))', 'true'),
+        ('(and (integer? usable) (= usable expected))', 'true'),
     ]:
         if program.count(guard) != 1:
             raise ValueError('oracle capacity mutation anchor changed')

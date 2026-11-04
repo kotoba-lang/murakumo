@@ -121,9 +121,15 @@
   ([probe headroom-milli]
    (let [aperture (aperture-bytes probe)]
      ;; Do not rely on an unqualified oracle to propagate an unknown input.
-     (if (and (integer? aperture) (<= 0 aperture 9007199254740991))
-       (let [usable (o "usable-bytes" [aperture headroom-milli])]
-         (if (and (integer? usable) (<= 0 usable aperture)) usable unmeasured))
+     (if (and (integer? aperture) (<= 0 aperture 9007199254740991)
+              (integer? headroom-milli) (<= 0 headroom-milli 1000))
+       ;; Split before multiplication so every intermediate stays exact in JS.
+       (let [whole (quot aperture 1000)
+             remainder (- aperture (* whole 1000))
+             expected (- aperture (+ (* whole headroom-milli)
+                                     (quot (* remainder headroom-milli) 1000)))
+             usable (o "usable-bytes" [aperture headroom-milli])]
+         (if (and (integer? usable) (= usable expected)) usable unmeasured))
        unmeasured))))
 
 (defn committed

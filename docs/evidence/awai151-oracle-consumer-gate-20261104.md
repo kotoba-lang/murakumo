@@ -177,3 +177,16 @@ and selected program SHA-256 was
 `873bb1f77cd12ad5dc696cb51a0f995c24c553999595c59745beed0ed9c71bd5`.
 A usable value within the aperture can still be wrong for the configured
 headroom; this is not full oracle qualification or a real probe test.
+
+The consumer now also validates headroom as an integer in 0..1000 and checks
+that the oracle usable value equals the configured split-arithmetic formula,
+not merely that it fits under the aperture. Selected ClojureScript diagnostics
+with a synthetic oracle accepted matching 10% headroom, refused a mismatched
+result and invalid headroom, and checked a 1/1000 headroom calculation at the
+maximum exact integer using an independently calculated expected result.
+Mutation controls passed. Source SHA-256 was
+`959d1686eadb835eacb5c8916c3e7cf004a2606b278df9d82e8a4532c7ebc36e`
+and selected program SHA-256 was
+`9f16fe4d42681f4561ef84e292d81d6ee818eac6844040326ed8ca9b1a254e38`.
+This validates selected host-source behavior with a synthetic oracle, not the
+real provider, full host suite, resource admission or governor qualification.
