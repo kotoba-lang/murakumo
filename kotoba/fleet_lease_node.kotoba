@@ -256,11 +256,14 @@
           :else (ln-reply false st))))
 
 ;; one connection, or none within ms: 0 when one was answered, else 1
-(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string permitted :bool] :i64
+(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string permitted :bool topology-path :string] :i64
   (arena-scope
     (let [c (ln-accept (str l " " ms))]
       (if (< (ln-int c) 1) 1
-        (if (not permitted) (let [z (ln-write c)] 0)
+        ;; A document may change while accept waits. Recheck after accepting
+        ;; and before processing; later changes still require a real fence.
+        (if (not (and permitted (or (= topology-path "") (= (ln-doc-state topology-path topo) 0))))
+          (let [z (ln-write c)] 0)
         (let [raw (ln-line (ln-recv c true))
               line (if (= token "") raw (ln-rest raw))
               ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))]
@@ -324,14 +327,14 @@
         (if (= state 1)
           (let [d (ln-load-doc path)]
             (cond (= (vector-count d) 0)
-                    (let [r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token false)]
+                    (let [r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token false path)]
                       (if (and (not (= r 0)) (<= left 500)) n
                         (recur (if (= r 0) (+ n 1) n) (if (= r 0) idle (- left 500)) cur seen false)))
                   (ln-doc-equal? d cur) (recur n left cur d true)
                   (= (arena-scope (ln-rotate d cur trust threshold)) 0) (recur n left d d true)
                   :else (recur n left cur d false)))
           (let [permitted (or (= path "") (and (= state 0) seen-ok))
-                r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token permitted)
+                r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token permitted path)
                 next-n (if (= r 0) (+ n 1) n)
                 next-left (if (= r 0) idle (- left 500))]
             (if (and (not (= r 0)) (<= left 500)) n
