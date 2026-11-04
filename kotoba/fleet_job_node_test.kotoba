@@ -16,6 +16,10 @@
   (let [now 1792500000000 jid "job-one" until (+ now 60000)
         valid (lease-text "node-a" jid 0 1 until 0)]
     (and (= (jn-lease-problem valid "node-a" jid now) "job/lease-ok")
+         (jn-clock-ballot-ok? 1 1)
+         (not (jn-clock-ballot-ok? 0 1))
+         (not (jn-clock-ballot-ok? -1 1))
+         (not (jn-clock-ballot-ok? 1 0))
          (= (jn-lease-problem valid "node-b" jid now) "job/lease-holder")
          (= (jn-lease-problem valid "node-a" "job-two" now) "job/lease-binding")
          (= (jn-lease-problem (lease-text "node-a" jid 1 1 until 0) "node-a" jid now) "job/lease-binding")
@@ -27,6 +31,7 @@
          (= (jn-lease-problem "{}" "node-a" jid now) "job/lease-invalid")
          (= (jn-lease-problem "{\"class\":\"job-one\",\"epoch\":1,\"node\":\"node-a\",\"revision\":0,\"slot\":0,\"until\":1792500060000,\"untrusted\":1}" "node-a" jid now) "job/lease-invalid")
          (= (jn-lease-problem valid "" jid now) "job/lease-invalid")
+         (= (jn-lease-problem (lease-text "node-a" jid 0 1 1000 0) "node-a" jid 0) "job/lease-invalid")
          (= (jn-lease-problem valid "node-a" jid -1) "job/lease-invalid"))))
 
 
