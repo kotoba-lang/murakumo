@@ -2,7 +2,7 @@
 ;; raw-CID-named bytes "abc" and the empty raw-CID block. These definitions
 ;; are not execution evidence; fault injection must also cover failed A/E/O
 ;; reads and sync, including a failed A for an empty write.
-(ns murakumo.checkpoint-materialize-read-cases (:export [test-checkpoint-materialize-read test-checkpoint-empty-write test-checkpoint-empty-write-refuses test-checkpoint-closure-index-refuses]))
+(ns murakumo.checkpoint-materialize-read-cases (:export [test-checkpoint-materialize-read test-checkpoint-empty-write test-checkpoint-empty-write-refuses test-checkpoint-closure-index-refuses test-checkpoint-bundle-index test-checkpoint-assemble-refuses]))
 
 (defn test-checkpoint-materialize-read [store :string] :bool
   (let [abc (cp-bytes "abc") empty (vector-alloc 0)
@@ -25,3 +25,17 @@
 ;; The harness must also verify no closure-complete line was emitted.
 (defn test-checkpoint-closure-index-refuses [store :string cid :string checkpoint :vector-i64] :bool
   (= (cp-closure-list store cid checkpoint) 1))
+
+;; Pure index cases cover malformed input, a wrong chunk count and CID shape.
+(defn test-checkpoint-bundle-index [] :bool
+  (let [cid (cp-cid (cp-bytes "abc"))
+        valid (cp-bytes (str "{\"chunks\":[\"" cid "\"],\"kind\":\"itonami.git-bundle/1\",\"size\":3}"))
+        too-few (cp-bytes (str "{\"chunks\":[\"" cid "\"],\"kind\":\"itonami.git-bundle/1\",\"size\":131073}"))
+        bad-cid (cp-bytes "{\"chunks\":[\"bad\"],\"kind\":\"itonami.git-bundle/1\",\"size\":3}")]
+    (and (cp-bundle-index? valid) (not (cp-bundle-index? (vector-alloc 0)))
+         (not (cp-bundle-index? too-few)) (not (cp-bundle-index? bad-cid)))))
+
+;; A fault fixture makes the index or one chunk unreadable after preflight;
+;; the harness checks refusal and that no destination was published.
+(defn test-checkpoint-assemble-refuses [store :string cid :string] :bool
+  (not (cp-assemble-bundle store cid)))
