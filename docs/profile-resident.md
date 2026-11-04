@@ -574,6 +574,15 @@ outcome is reconciled by the host, never silently resubmitted. A cached count
 is useful only while the host binds it to the same authenticated process,
 model, tokenizer and template as the generation.
 
+The private Flint runtime must provide a 64-character lowercase hexadecimal
+`serverInstance` identifier. The trusted host must assign a fresh identifier
+to each server start, bind it to the authenticated process and socket, and
+keep the process unchanged between count and generation. The count request
+identity includes that identifier, so a correctly rotated identifier cannot
+reuse an earlier count. The identifier's syntax is checked, but its freshness
+and binding are not established by this component. It is host-local and is
+not placed in the public checkpoint environment.
+
 Before generation, a separate durable marker in the private cache binds the
 prior state and turn to one exact generation request identity. Its key does
 not use the disposable checkout path. A different request for the same turn,
@@ -583,7 +592,9 @@ retained after completion. This is host-local crash evidence, not a lease,
 distributed fence or proof of process identity. The host must preserve and
 exclusively serialize the same cache across restarts; migration, lost cache,
 rollback and marker retention need explicit reconciliation. The marker does
-not by itself make a cached count valid after a server restart.
+does not authorize replay after a server restart: the host must rotate the
+server identifier and reconcile the prior turn marker. A changed count that
+would change an already reserved generation request is refused.
 
 Flint runtime and public-environment descriptions must now declare
 `reasoningMemory` as `disabled`. This declaration is not proof of the server's

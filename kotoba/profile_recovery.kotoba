@@ -88,6 +88,7 @@
        (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
        (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))
        (= (cp-str runtime 0 "reasoningMemory") "disabled")
+       (cp-hex? (cp-str runtime 0 "serverInstance") 64)
        (= (cp-num runtime 0 "contextTokens") 8192)
        (>= (cp-num runtime 0 "maxTokens") 64) (<= (cp-num runtime 0 "maxTokens") 6144)))
 (defn- pr-local? [runtime :vector-i64] :bool
@@ -275,10 +276,14 @@
             (or (= state -1) (> i 900)) -1
             :else (let [z (pr-pause)] (if z (recur (+ i 1)) -1))))))
 
+(defn- pr-count-id [runtime :vector-i64 body :vector-i64] :string
+  (sha256-hex (cp-bytes (str "local-flint-count/2\n" (cp-str runtime 0 "socket") "\n"
+                             (cp-str runtime 0 "authorizationFile") "\n"
+                             (cp-str runtime 0 "serverInstance") "\n" (cp-cid body)))))
+
 (defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64] :i64
   (if (or (not (pr-local-flint? runtime)) (= (vector-count body) 0)) -1
-    (let [id (sha256-hex (cp-bytes (str "local-flint-count\n" (cp-str runtime 0 "socket") "\n"
-                                    (cp-str runtime 0 "authorizationFile") "\n" (cp-cid body))))
+    (let [id (pr-count-id runtime body)
           unit (str "itonami-count-" (string-substring id 0 24) ".service")
           request (str cache "/" id ".count-request.json") response (str cache "/" id ".count-response.json")
           marker (str cache "/" id ".count-dispatch")
