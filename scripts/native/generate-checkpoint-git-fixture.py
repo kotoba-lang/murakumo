@@ -2,12 +2,13 @@
 """Stage the current checkpoint component in the prior privileged test fixture.
 
 This source assembler does not build or run native code. The template's Git
-adapter is privileged, restricted to its hard-coded disposable fixture path,
+adapter is privileged, restricted to a supplied disposable fixture path,
 not a production isolation boundary; never use the result on untrusted input.
 """
 import argparse
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 
@@ -34,7 +35,13 @@ def spans(source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--fixture-parent', required=True, type=Path)
     args = parser.parse_args()
+    parent = args.fixture_parent.resolve(strict=True)
+    if (args.fixture_parent.is_symlink() or not parent.is_dir() or parent.stat().st_uid != os.getuid() or
+            parent.stat().st_mode & 0o077 or parent.parent != Path('/private/tmp') or
+            not re.fullmatch(r'awai150-checkpoint-[a-z0-9_]+', parent.name)):
+        raise ValueError('expected an owned, private temporary fixture parent')
     raw_template, raw_component = TEMPLATE.read_bytes(), COMPONENT.read_bytes()
     if sha(raw_template) != PIN:
         raise ValueError('diagnostic template changed')
@@ -52,6 +59,10 @@ def main():
         raise ValueError('fixture anchor changed')
     component_forms = '\n'.join(component[a:b].rstrip() for n, (a, b) in current.items() if n != 'cp-spawn')
     staged = staged.replace(anchor, component_forms + '\n\n' + anchor, 1)
+    old_parent = '/private/tmp/awai154-fs2-darwin-gate'
+    if staged.count(old_parent) != 3:
+        raise ValueError('diagnostic adapter paths changed')
+    staged = staged.replace(old_parent, str(parent))
     final = spans(staged)
     if any(n not in final for n in current):
         raise ValueError('incomplete composed source')
