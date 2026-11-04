@@ -41,9 +41,13 @@ def main():
     p.add_argument('--compiler', required=True, type=Path); p.add_argument('--compiler-sha256', required=True)
     p.add_argument('--packager', required=True, type=Path); p.add_argument('--packager-sha256', required=True)
     p.add_argument('--artifact-dir', type=Path, help='optional new directory for the diagnostic FIFO image')
+    p.add_argument('--legacy-fifo', type=Path, help='optional pinned old FIFO negative control')
+    p.add_argument('--legacy-sha256', help='SHA-256 of the old FIFO')
     a = p.parse_args()
+    if bool(a.legacy_fifo) != bool(a.legacy_sha256): p.error('both legacy arguments are required')
     if (platform.system(), platform.machine()) != ('Darwin', 'arm64'): raise ValueError('Mac ARM64 required')
     compiler, packager = verify(a.compiler, a.compiler_sha256), verify(a.packager, a.packager_sha256)
+    legacy = verify(a.legacy_fifo, a.legacy_sha256) if a.legacy_fifo else None
     raw_component, raw_cases = COMPONENT.read_bytes(), CASES.read_bytes()
     component, cases = raw_component.decode(), raw_cases.decode()
     if component.count(ANCHOR) != 1: raise ValueError('negative control anchor changed')
@@ -53,7 +57,7 @@ def main():
              '\n(defn main [] :i64 (if (and (test-fifo-meta-size) (test-fifo-bounded-reads "/cases")) 0 1))\n')
     with tempfile.TemporaryDirectory(prefix='awai151-fifo-boundary-', dir='/private/tmp') as tmp:
         root = Path(tmp); scope = root / 'cases'; scope.mkdir(mode=0o700)
-        for name, data in [('small', b'RGQ1\n'), ('queue-limit', b'x'*4165), ('queue-over', b'x'*4166),
+        for name, data in [('small', b'RGQ2\n'), ('queue-limit', b'x'*4165), ('queue-over', b'x'*4166),
                            ('journal-limit', b'x'*8340), ('journal-over', b'x'*8341), ('empty', b'')]:
             (scope / name).write_bytes(data)
         (root / 'fixture.kotoba').write_text(unity)
@@ -61,6 +65,11 @@ def main():
         (root / 'fifo.kotoba').write_text('(ns fifo-contract-fixture (:export [main]))\n' + component +
                                          '\n(defn main [] :i64 (resource-fifo-main))\n')
         plain = (root / 'fifo.kotoba').read_text()
+        hold_guard = '(= hold-status "1") "fifo/reservation-held"'
+        if plain.count(hold_guard) != 1:
+            raise ValueError('reservation guard mutation anchor changed')
+        (root / 'reserve-bypass.kotoba').write_text(plain.replace(
+            hold_guard, '(= hold-status "never") "fifo/reservation-held"'))
         pause = '(rq-test-pause)'
         helper = ('(defn- rq-test-pause [] :bool\n'
                   '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
@@ -79,6 +88,11 @@ def main():
             instrumented = anchor[:cut] + ' ' + pause + anchor[cut:]
             (root / (phase + '.kotoba')).write_text(plain.replace('(defn- rq-commit ', helper + '(defn- rq-commit ')
                                                     .replace(anchor, instrumented))
+        reserve_anchor = '(= (rq-fs "M" hold "") "1") (= (rq-fs "M" root "") "1")) "fifo/reserved"'
+        if plain.count(reserve_anchor) != 1:
+            raise ValueError('reservation pause anchor changed')
+        (root / 'reserve-pause.kotoba').write_text(plain.replace('(defn- rq-commit ', helper + '(defn- rq-commit ')
+            .replace(reserve_anchor, reserve_anchor.replace(')) "fifo/reserved"', ') ' + pause + ') "fifo/reserved"')))
         recovery_start = plain.index('(defn- rq-recover ')
         recovery_end = plain.index('(defn- rq-commit ', recovery_start)
         recovery_source = plain[recovery_start:recovery_end]
@@ -123,8 +137,14 @@ def main():
             image, mutant = build('fixture'), build('mutant')
             run([image], 0); run([mutant], 1)
             fifo = build('fifo')
+            reserve_bypass = build('reserve-bypass')
             queue = root / 'queuecase'; queue.mkdir(mode=0o700)
-            (queue / 'queue.lock').write_text(''); (queue / 'queue').write_text('RGQ1\n')
+            (queue / 'queue.lock').write_text(''); (queue / 'queue').write_text('RGQ2\n')
+            if legacy:
+                old = subprocess.run([str(legacy), '/queuecase', 'front'], cwd=root, pass_fds=(3,),
+                                     capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
+                if old.returncode != 1 or old.stdout != b'fifo/state-invalid\n' or old.stderr:
+                    raise ValueError(('old FIFO did not refuse RGQ2', old.returncode, old.stdout, old.stderr))
             first, second, third = 'a'*64, 'b'*64, 'c'*64
             def op(action, ticket=None):
                 args = [str(fifo), '/queuecase', action] + ([ticket] if ticket else [])
@@ -135,11 +155,52 @@ def main():
             def expect(action, result, ticket=None):
                 actual = op(action, ticket)
                 if actual != result: raise RuntimeError((action, result, actual))
+            (queue / 'queue').write_text('RGQ1\n')
+            expect('front', (1, 'fifo/state-invalid'))
+            (queue / 'queue').write_text('RGQ2\n')
             expect('front', (0, 'fifo/empty'))
             expect('enqueue', (0, 'fifo/enqueued'), first)
             expect('enqueue', (0, 'fifo/enqueued'), second)
             expect('enqueue', (1, 'fifo/already-queued'), first)
+            expect('reserve', (1, 'fifo/not-front'), second)
+            expect('reserve', (0, 'fifo/reserved'), first)
+            if (queue / 'queue.reservation').read_text() != 'RGH1\n' + first + '\n':
+                raise ValueError('reservation bytes mismatch')
+            expect('front', (1, 'fifo/reservation-held'))
+            bypass = subprocess.run([str(reserve_bypass), '/queuecase', 'front'], cwd=root, pass_fds=(3,),
+                                    capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
+            if bypass.returncode != 0 or bypass.stdout.decode().strip() != 'fifo/front ' + first or bypass.stderr:
+                raise ValueError('reservation bypass negative control did not reach the held front')
+            expect('dequeue', (1, 'fifo/reservation-held'), first)
+            expect('enqueue', (1, 'fifo/reservation-held'), third)
+            expect('reserve', (1, 'fifo/reservation-held'), first)
+            expect('release', (1, 'fifo/reservation-unknown'), second)
+            expect('release', (0, 'fifo/released'), first)
+            expect('release', (1, 'fifo/reservation-unknown'), first)
+            (queue / 'queue.reservation').write_text('partial')
+            expect('front', (1, 'fifo/reservation-held'))
+            expect('release', (1, 'fifo/reservation-unknown'), first)
+            (queue / 'queue.reservation').unlink()
             expect('front', (0, 'fifo/front '+first))
+            reserved_variant = build('reserve-pause')
+            killed = subprocess.Popen([str(reserved_variant), '/queuecase', 'reserve', first], cwd=root,
+                                      pass_fds=(3,), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env={'PATH':'/nonexistent'})
+            try:
+                if not select.select([killed.stdout], [], [], 10)[0] or os.read(killed.stdout.fileno(), 1) != b'\0':
+                    raise RuntimeError('reservation pause not reached')
+                if killed.poll() is not None:
+                    raise RuntimeError('reservation owner exited before kill')
+                killed.kill()
+                if killed.wait(timeout=3) != -9:
+                    raise RuntimeError('reservation owner was not killed')
+            finally:
+                if killed.poll() is None:
+                    killed.kill(); killed.wait(timeout=3)
+                killed.stdout.close(); killed.stderr.close()
+            expect('front', (1, 'fifo/reservation-held'))
+            expect('dequeue', (1, 'fifo/reservation-held'), first)
+            expect('release', (0, 'fifo/released'), first)
             expect('dequeue', (1, 'fifo/not-front'), second)
             expect('cancel', (1, 'fifo/cancel-front-refused'), first)
             expect('cancel', (0, 'fifo/cancelled'), second)
@@ -148,7 +209,7 @@ def main():
             (queue / 'queue.pending').write_text('partial')
             expect('enqueue', (1, 'fifo/pending-unknown'), third)
             (queue / 'queue.pending').unlink()
-            old = 'RGQ1\n'; new = old + first + '\n'
+            old = 'RGQ2\n'; new = old + first + '\n'
             (queue / 'queue.intent').write_text('RGI1\n' + old + 'NEXT\n' + new)
             expect('front', (1, 'fifo/pending-unknown'))
             expect('recover', (0, 'fifo/aborted'))
@@ -168,7 +229,7 @@ def main():
                 raise ValueError(('unexpected concurrent outcome', outcomes))
             accepted = [ticket for ticket, outcome in zip(tickets, outcomes) if outcome == (0, 'fifo/enqueued')]
             lines = (queue / 'queue').read_text().splitlines()
-            if lines[0] != 'RGQ1' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
+            if lines[0] != 'RGQ2' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
                 raise ValueError('concurrent state mismatch')
             killed_phases = []; variants = {}
             for phase in anchors:

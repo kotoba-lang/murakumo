@@ -1,7 +1,13 @@
 ;; Durable local FIFO primitive for a future resource governor (AWAI-151).
 ;; It never dispatches work or decides that a workload has stopped. Only a
-;; trusted host may invoke dequeue after separately verifying the whole
-;; workload's termination. Root, files and all callers must be host-owned.
+;; trusted host may release a reservation and invoke dequeue after separately
+;; verifying the whole workload's termination. Root, files and all callers
+;; must be host-owned. The hold is not an authorization or process monitor.
+;; RGQ2 is intentionally incompatible with the old RGQ1 queue: the host must
+;; reconcile and migrate offline, exclude older writers and existing workloads,
+;; and never dispatch without a successful durable reservation. A release
+;; requires independent proof that the entire workload stopped; ambiguous
+;; release outcomes require host reconciliation before any further dispatch.
 (ns murakumo.resource-fifo (:export [resource-fifo-main]))
 
 (defn- rq-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
@@ -87,7 +93,7 @@
                (recur (+ i 1)) false))))))
 (defn- rq-valid? [s :string] :bool
   (let [n (string-length s)]
-    (and (>= n 5) (<= n 4165) (= (string-substring s 0 5) "RGQ1\n")
+    (and (>= n 5) (<= n 4165) (= (string-substring s 0 5) "RGQ2\n")
          (= (mod (- n 5) 65) 0)
          (loop [i 5]
            (if (= i n) true
@@ -147,22 +153,41 @@
          (= (rq-fs "M" root "") "1"))))
 (defn- rq-apply [root :string op :string ticket :string] :string
   (let [state-path (str root "/queue") pending (str state-path ".pending") intent (str state-path ".intent")
+        hold (str root "/queue.reservation") hold-status (rq-fs "D" hold "")
         exists (rq-fs "D" state-path "") pending-status (rq-fs "D" pending "") intent-status (rq-fs "D" intent "")
         state (if (= exists "1") (rq-read-bounded state-path 4165) "")]
     (cond (or (not (= exists "1")) (not (rq-valid? state))) "fifo/state-invalid"
+          (not (or (= hold-status "0") (= hold-status "1"))) "fifo/reservation-unknown"
+          (= op "release")
+            (cond (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+                  (not (= hold-status "1")) "fifo/reservation-unknown"
+                  (not (= (rq-read-bounded hold 70) (str "RGH1\n" ticket "\n"))) "fifo/reservation-unknown"
+                  (or (= state "RGQ2\n") (not (= (string-substring state 5 69) ticket))) "fifo/reservation-unknown"
+                  (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
+                  (and (= (rq-fs "M" hold "") "1")
+                       (= (rq-fs "L" hold (str root "/queue.reservation.last")) "1")
+                       (= (rq-fs "M" root "") "1")) "fifo/released"
+                  :else "fifo/reservation-unknown")
+          (= hold-status "1") "fifo/reservation-held"
           (= op "recover") (rq-recover root state pending-status intent-status)
           (or (not (= pending-status "0")) (not (= intent-status "0"))) "fifo/pending-unknown"
-          (= op "front") (if (= state "RGQ1\n") "fifo/empty" (str "fifo/front " (string-substring state 5 69)))
+          (= op "front") (if (= state "RGQ2\n") "fifo/empty" (str "fifo/front " (string-substring state 5 69)))
           (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+          (= op "reserve")
+            (cond (= state "RGQ2\n") "fifo/empty"
+                  (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
+                  (and (rq-write? hold (str "RGH1\n" ticket "\n"))
+                       (= (rq-fs "M" hold "") "1") (= (rq-fs "M" root "") "1")) "fifo/reserved"
+                  :else "fifo/reservation-unknown")
           (= op "enqueue")
             (cond (not (< (string-index-of state (str ticket "\n")) 0)) "fifo/already-queued"
                   (>= (string-length state) 4165) "fifo/full"
                   (rq-commit root state (str state ticket "\n")) "fifo/enqueued"
                   :else "fifo/write-unknown")
           (= op "dequeue")
-            (cond (= state "RGQ1\n") "fifo/empty"
+            (cond (= state "RGQ2\n") "fifo/empty"
                   (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
-                  (rq-commit root state (str "RGQ1\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
+                  (rq-commit root state (str "RGQ2\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
                   :else "fifo/write-unknown")
           (= op "cancel")
             (let [i (string-index-of state (str ticket "\n"))]
@@ -175,7 +200,8 @@
 (defn resource-fifo-main [] :i64
   (let [root (rq-arg 0) op (rq-arg 1) ticket (rq-arg 2) lock (str root "/queue.lock")]
     (if (or (not (rq-root? root)) (not (= (rq-arg 3) ""))
-            (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "cancel") (= op "recover")))
+            (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "cancel") (= op "recover")
+                     (= op "reserve") (= op "release")))
             (and (or (= op "front") (= op "recover")) (not (= ticket ""))))
       (let [z (rq-out "fifo/input-invalid")] 2)
       (if (not (= (rq-fs "D" lock "") "1")) (let [z (rq-out "fifo/lock-unavailable")] 2)
@@ -185,5 +211,6 @@
                 released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
                 z (rq-out (if released result "fifo/unlock-unknown"))]
             (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued") (= result "fifo/cancelled")
+                                  (= result "fifo/reserved") (= result "fifo/released")
                                   (= result "fifo/empty") (= result "fifo/recovered") (= result "fifo/aborted")
                                   (= (string-index-of result "fifo/front ") 0))) 0 1)))))))

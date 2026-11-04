@@ -45,7 +45,7 @@ def main():
         variants[phase] = path
     with tempfile.TemporaryDirectory(prefix='awai151-fifo-target-') as tmp:
         root = Path(tmp); q = root / 'case'; q.mkdir(mode=0o700)
-        (q/'queue.lock').write_text(''); (q/'queue').write_text('RGQ1\n')
+        (q/'queue.lock').write_text(''); (q/'queue').write_text('RGQ2\n')
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY); saved = None
         if fd != 3:
             try: saved = os.dup(3)
@@ -62,6 +62,11 @@ def main():
             expect('front', (0, 'fifo/empty'))
             expect('enqueue', (0, 'fifo/enqueued'), x)
             expect('enqueue', (0, 'fifo/enqueued'), y)
+            expect('reserve', (0, 'fifo/reserved'), x)
+            expect('front', (1, 'fifo/reservation-held'))
+            expect('dequeue', (1, 'fifo/reservation-held'), x)
+            expect('release', (1, 'fifo/reservation-unknown'), y)
+            expect('release', (0, 'fifo/released'), x)
             expect('front', (0, 'fifo/front '+x))
             expect('dequeue', (1, 'fifo/not-front'), y)
             expect('dequeue', (0, 'fifo/dequeued'), x)
@@ -69,7 +74,7 @@ def main():
             (q/'queue.pending').write_text('partial')
             expect('front', (1, 'fifo/pending-unknown'))
             (q/'queue.pending').unlink()
-            old, new = 'RGQ1\n', 'RGQ1\n'+x+'\n'
+            old, new = 'RGQ2\n', 'RGQ2\n'+x+'\n'
             (q/'queue').write_text(old); (q/'queue.intent').write_text('RGI1\n'+old+'NEXT\n'+new)
             expect('recover', (0, 'fifo/aborted'))
             if (q/'queue').read_text() != old: raise ValueError('old state changed')
@@ -114,7 +119,7 @@ def main():
                 if saved is None: os.close(3)
                 else: os.dup2(saved, 3); os.close(saved)
             os.close(fd)
-    print(json.dumps({'build':build, 'fifoSha256':a.sha256, 'contractPassed':True,
+    print(json.dumps({'build':build, 'fifoSha256':a.sha256, 'contractPassed':True, 'reservationPassed':True,
                       'manifestSha256':a.manifest_sha256, 'syntheticRecoveryPassed':True,
                       'ownedChildKillPhases':killed, 'governorQualified':False}))
 
