@@ -244,18 +244,21 @@
 ;; into the resident arena. The private cache is exclusively host-owned; these
 ;; separate path operations do not establish identity against a concurrent writer.
 ;; This bound does not limit bytes written to disk during curl execution.
-(defn- pr-read-response [path :string] :vector-i64
+(defn- pr-read-bounded [path :string maximum :i64] :vector-i64
   (let [size (cp-size path)]
-    (if (or (< size 1) (> size 262144)) (vector-alloc 0)
+    (if (or (< size 1) (> size maximum)) (vector-alloc 0)
       (let [b (cp-range path 0 size)]
         (if (and (= (vector-count b) size) (= (cp-size path) size)) b (vector-alloc 0))))))
+
+(defn- pr-read-response [path :string] :vector-i64
+  (pr-read-bounded path 262144))
 
 ;; A crash can leave the output durable while state still points at this turn.
 ;; Only the exact completed response may be reused. Sync both the file and
 ;; its parent directory before state can refer to it.
 (defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
   (let [status (cp-fs "D" path "")]
-    (and (cond (= status "1") (and (= (cp-cid (cp-read path)) cid) (= (cp-fs "M" path "") "1"))
+    (and (cond (= status "1") (and (= (cp-cid (pr-read-bounded path 16384)) cid) (= (cp-fs "M" path "") "1"))
                (= status "0") (cp-write path answer)
                :else false)
          (= (cp-fs "M" (cp-parent-dir path) "") "1"))))
@@ -273,16 +276,16 @@
                    (= (cp-fs "D" tmp "") "1") (= (cp-fs "D" request "") "1")
                    (= (cp-fs "D" marker "") "1") (= (cp-fs "D" response "") "1")
                    (= (cp-fs "D" output "") "1")
-                   (= (cp-cid (cp-read request)) (cp-cid body))
-                   (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n"))]
+                   (= (cp-cid (pr-read-bounded request (vector-count body))) (cp-cid body))
+                   (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n"))]
     (if (not ready) "profile/state-publication-unknown"
       (let [raw (pr-read-response response) completed (and (not (= (pr-answer raw) ""))
                         (pr-local-response? runtime raw))
             answer (if completed (pr-local-compact runtime raw) (vector-alloc 0))
             cid (cp-cid answer) expected (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
-            valid (and completed (pr-replicable? answer) (= (cp-cid (cp-read output)) cid)
-                       (= (cp-cid (cp-read tmp)) (cp-cid expected))
-                       (= (cp-cid (cp-read statepath)) (cp-cid state)))
+            valid (and completed (pr-replicable? answer) (= (cp-cid (pr-read-bounded output 16384)) cid)
+                       (= (cp-cid (pr-read-bounded tmp 16384)) (cp-cid expected))
+                       (= (cp-cid (pr-read-bounded statepath 16384)) (cp-cid state)))
             durable (and valid (= (cp-fs "M" output "") "1") (= (cp-fs "M" outdir "") "1")
                          (= (cp-fs "M" tmp "") "1") (= (cp-fs "M" repo "") "1"))
             renamed (and durable (= (cp-fs "L" tmp statepath) "1"))
@@ -342,19 +345,19 @@
        (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
 
 (defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64] :string
-  (let [dir (str repo "/profile") meta (cp-read (str dir "/itonami.edn")) role (cp-read (str dir "/SOUL.md"))
+  (let [dir (str repo "/profile") meta (pr-read-bounded (str dir "/itonami.edn") 131072) role (pr-read-bounded (str dir "/SOUL.md") 131072)
         growth (= (cp-str runtime 0 "profile") "awai-growth-steward")
         work-path (str dir "/tasks/first-turn.md") context-path (str dir "/context.md")
-        work (if (and growth (cp-exists? work-path)) (cp-read work-path) (vector-alloc 0))
-        context (if (and growth (cp-exists? context-path)) (cp-read context-path) (vector-alloc 0))
-        state (cp-read (str repo "/state.json")) task (cp-str runtime 0 "task")]
+        work (if (and growth (cp-exists? work-path)) (pr-read-bounded work-path 8192) (vector-alloc 0))
+        context (if (and growth (cp-exists? context-path)) (pr-read-bounded context-path 8192) (vector-alloc 0))
+        state (pr-read-bounded (str repo "/state.json") 16384) task (cp-str runtime 0 "task")]
     (cond (or (< seconds 1) (> seconds 840)) "profile/budget-refused"
           (not (or (pr-runtime? runtime meta role) (pr-growth-runtime? runtime meta role work context))) "profile/runtime-refused"
           (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
           :else
           (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
-                prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
+                prior (if (= next 1) (vector-alloc 0) (pr-read-bounded prior-file 16384))
                 linked (if (= next 1) (= previous "none")
                          (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))
                               (pr-local-prior-response? runtime prior)))]
@@ -392,9 +395,9 @@
                     known (and (or (= request-status "0") (= request-status "1"))
                                (or (= marker-status "0") (= marker-status "1"))
                                (or (= response-status "0") (= response-status "1")))
-                    present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    present (= request-status "1") matches (if present (= (cp-cid (pr-read-bounded request (vector-count body-bytes))) (cp-cid body-bytes)) false)
                     marked (= marker-status "1")
-                    marker-matches (if marked (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n") false)
+                    marker-matches (if marked (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n") false)
                     decision (if (and known (= pending-status "0"))
                                (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
                     submitted (cond (= decision "profile/reuse-unit") true
@@ -472,7 +475,7 @@
 
 (defn profile-recovery-main [] :i64
   (cond (= (cp-arg 0) "step")
-        (cp-say (pr-step (cp-arg 1) (cp-read (cp-arg 2)) (cp-arg 3) (cp-int (cp-arg 4))))
+        (cp-say (pr-step (cp-arg 1) (pr-read-bounded (cp-arg 2) 131072) (cp-arg 3) (cp-int (cp-arg 4))))
         (= (cp-arg 0) "hold") (pr-hold (cp-arg 1))
         (= (cp-arg 0) "watch")
         (let [requested (cp-int (cp-arg 7)) limit (if (and (> requested 0) (<= requested 1800)) requested 1800)]
@@ -481,7 +484,7 @@
             (if (and alive (not seen)) (cp-say "profile/producer-observed") 0)
             (cond (and seen (>= misses 2))
                   (let [v (cp-say "profile/producer-lost")]
-                    (cp-say (pr-resume (cp-arg 2) (cp-arg 3) (cp-read (cp-arg 4)) (cp-arg 5) (cp-arg 6))))
+                    (cp-say (pr-resume (cp-arg 2) (cp-arg 3) (pr-read-bounded (cp-arg 4) 131072) (cp-arg 5) (cp-arg 6))))
                   (>= i limit) (cp-say "profile/watch-expired")
                   :else (let [z (pr-pause)] (recur (+ i 1) (or seen alive) misses))))))
         :else (cp-say "profile/command")))

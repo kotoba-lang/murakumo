@@ -549,3 +549,16 @@ This entry point is a draft: the existing cron controller does not call it,
 work-directory retention is not automated, and production use requires the
 full process/credential/governor gates described in
 [native-github-checkpoint-archive.md](native-github-checkpoint-archive.md).
+
+## Bounded local profile reads
+
+The recovery candidate checks regular-file sizes before range-reading profile
+metadata, role, work order, context, profile state, prior output, dispatch
+marker and request. Profile metadata, role, and explicit runtime/contract
+inputs are limited to 131072 bytes; work and context to 8192; state and
+replicable output to 16384. A saved request is bounded by the exact expected
+request length. Empty, oversized, short or size-changing reads are refused.
+These are component limits and may reject larger previously accepted inputs.
+The FS2 host must enforce the range bound and own these paths exclusively;
+metadata and range reads do not establish a same-FD snapshot. This source
+change has not been qualified on a native runtime or production host.
