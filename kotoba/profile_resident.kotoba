@@ -187,13 +187,20 @@
   (cp-read (if (= (cp-str cfg 0 "archiveAck") "")
              (cp-str cfg 0 "environmentFile") (cp-str cfg 0 "runtimeFile"))))
 
+;; Flint residents require the archive gate. In the legacy no-archive mode,
+;; environmentFile itself is the runtime; reject the Flint kind even when its
+;; other fields are malformed rather than treating it as an unrelated runtime.
+(defn- rt-flint-archive-required? [runtime :vector-i64] :bool
+  (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-flint/1"))
+
 (defn- rt-pins-ok? [cfg :vector-i64] :bool
   (let [env (cp-read (cp-str cfg 0 "environmentFile")) policy (cp-read (cp-str cfg 0 "policyFile"))]
     (and (= (cp-cid env) (cp-str cfg 0 "environment")) (= (cp-cid policy) (cp-str cfg 0 "policy"))
-         (or (= (cp-str cfg 0 "archiveAck") "")
-             (and (cp-safe-absolute? (cp-str cfg 0 "runtimeFile"))
-                  (= (cp-cid (rt-runtime cfg)) (cp-str cfg 0 "runtime"))
-                  (rt-public-environment? cfg (rt-runtime cfg) env))))))
+         (if (= (cp-str cfg 0 "archiveAck") "")
+           (not (rt-flint-archive-required? env))
+           (and (cp-safe-absolute? (cp-str cfg 0 "runtimeFile"))
+                (= (cp-cid (rt-runtime cfg)) (cp-str cfg 0 "runtime"))
+                (rt-public-environment? cfg (rt-runtime cfg) env))))))
 
 (defn- rt-refresh [cfg :vector-i64] :string
   (let [path (cp-str cfg 0 "head") head (rt-read-head cfg path)

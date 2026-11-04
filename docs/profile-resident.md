@@ -248,7 +248,7 @@ projection and runtime contract. Missing, malformed,
 acknowledgement before the resident starts the next turn. Missing, malformed,
 mismatched or expired acknowledgement yields `resident/archive-pending`.
 A present but empty, non-string, unsafe or colliding configuration path is
-refused. Omitting `archiveAck` preserves the earlier behavior. The ack path and
+refused. Omitting `archiveAck` preserves the earlier behavior for existing non-Flint runtimes. A Flint resident must configure the GitHub archive acknowledgement gate before a cycle can proceed; the host must archive the bootstrap checkpoint first and provide the verified acknowledgement. The ack path and
 its parent must be private and writable only by the trusted host components;
 this local file is not a signed receipt or a distributed lease.
 
