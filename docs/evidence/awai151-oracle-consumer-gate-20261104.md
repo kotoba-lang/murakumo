@@ -212,3 +212,12 @@ with CPU limit 3 seconds; it did not run a real probe, corrected production KIR,
 full host suite, native supervisor or governor. A first attempt from the repo
 root tried to resolve project dependencies and failed because Java was absent;
 the successful run used a private working directory and explicit classpaths.
+
+A follow-up using the actual consumer and the same pinned shipped KIR also
+observed default headroom 120, usable capacity 88 for aperture 100 at 120/1000
+headroom, and unmeasured (-1) for an inexact total and an unknown input. The
+real-consumer diagnostic now checks these cases and verifies that the consumer
+source and KIR bytes did not change during the call. Consumer SHA-256 was
+`92d24b3953efb030e131bba45e8370fdf47f20f322867ccf505277e598e94766`.
+This does not pin the complete Kotoba dependency closure or qualify the stale
+oracle, live probe, corrected KIR or native governor.
