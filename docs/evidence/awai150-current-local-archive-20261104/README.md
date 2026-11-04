@@ -37,3 +37,19 @@ file remote and synthetic data. It does not exercise real GitHub transport,
 credentials, hostile config races, a release provider, a governor, crash
 recovery or bot inference. Configuration validation does not replace a trusted
 host's environment, executable, filesystem, credential and egress controls.
+
+## Additional configuration refusal cases
+
+The extended native fixture accepted a clean repository and a benign local
+`user.name`, refused a nonexistent repository, and individually refused ten
+synthetic local settings: credential helper, include, conditional include, URL
+rewrite, disabled TLS verification, SSH command, hooks path, clean filter,
+commit signing and GPG program. Each setting was removed before the next test.
+The local archive/restore and checkpoint controls then passed again. No secret
+or user configuration values were printed. This is a finite local sample, not
+proof of every Git configuration or environment interaction.
+
+The extended harness SHA-256 was
+`919658dae885576c2ef380291424af9ad89e9e435e34a999e3816225ec70e9a0`;
+the composed fixture SHA-256 for this run, including its unique temporary
+path, was `0e4e5d70ae2d374f41669f79a60489311688024456684c350a4e949fcb9e439d`.
