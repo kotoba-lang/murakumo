@@ -84,6 +84,11 @@
 ;; exact safety-margin boundary without performing replication or inference.
 (defn test-profile-retention-refresh [] :bool
   (and (= (rt-refresh-decision false 2000000 100000) "resident/head-refused")
+       (not (rt-clock-window? 0 172800000))
+       (not (rt-clock-window? -1 172800000))
+       (not (rt-clock-window? 9007199254740991 172800000))
+       (rt-clock-window? 9007199081940991 172800000)
+       (not (rt-clock-window? 9007199081940992 172800000))
        (= (rt-refresh-decision true 2000000 0) "resident/clock-unknown")
        (= (rt-refresh-decision true 2000000 -1) "resident/clock-unknown")
        (= (rt-refresh-decision true 9007199254740991 9007199254740991) "resident/clock-unknown")

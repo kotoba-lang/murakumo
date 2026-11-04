@@ -5,6 +5,9 @@
   (:export [profile-resident-main]))
 
 (defn- rt-now [] :i64 (ln-now "clock"))
+(defn- rt-clock-window? [now :i64 margin :i64] :bool
+  (and (>= margin 0) (<= margin 9007199254740991)
+       (> now 0) (<= now (- 9007199254740991 margin))))
 (defn- rt-save [path :string b :vector-i64] :bool
   (and (cp-absent? (str path ".tmp"))
     (cp-write (str path ".tmp") b)
@@ -112,17 +115,19 @@
   (if (cp-exists? path) (rt-open-head cfg (pr-read-bounded path 16384)) (vector-alloc 0)))
 
 (defn- rt-replicate [cfg :vector-i64 root :string next-at :i64 request :string] :bool
-  (let [store (cp-str cfg 0 "store") until (+ (rt-now) 172800000)
-        address (cp-str cfg 0 "peer") token (lease-token (cp-str cfg 0 "tokenFile"))
-        sent (peer-upload store root address token)
-        a (if sent (peer-retain store root address token until) "")
-        r (if (not (= a "")) (retention-attest store root (cp-str cfg 0 "key") (cp-str cfg 0 "domainB") (cp-str cfg 0 "task") until) "")
-        b (if (= (ln-field r 0) "retention/recorded") (ln-field r 1) "")
-        envelope (rt-sign-head cfg (rt-head root a b until next-at request))]
-    (and (not (= a "")) (not (= b ""))
-      (= (retention-pair-problem (cp-load store a) (cp-load store b) (rt-pins cfg root until)) "retention/pair-verified")
-      (> (vector-count envelope) 0)
-      (rt-save (cp-str cfg 0 "candidateHead") envelope))))
+  (let [now (rt-now)]
+    (if (not (rt-clock-window? now 172800000)) false
+      (let [store (cp-str cfg 0 "store") until (+ now 172800000)
+            address (cp-str cfg 0 "peer") token (lease-token (cp-str cfg 0 "tokenFile"))
+            sent (peer-upload store root address token)
+            a (if sent (peer-retain store root address token until) "")
+            r (if (not (= a "")) (retention-attest store root (cp-str cfg 0 "key") (cp-str cfg 0 "domainB") (cp-str cfg 0 "task") until) "")
+            b (if (= (ln-field r 0) "retention/recorded") (ln-field r 1) "")
+            envelope (rt-sign-head cfg (rt-head root a b until next-at request))]
+        (and (not (= a "")) (not (= b ""))
+          (= (retention-pair-problem (cp-load store a) (cp-load store b) (rt-pins cfg root until)) "retention/pair-verified")
+          (> (vector-count envelope) 0)
+          (rt-save (cp-str cfg 0 "candidateHead") envelope))))))
 
 (defn- rt-intact-head? [cfg :vector-i64 head :vector-i64] :bool
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") until (cp-num head 0 "until")]
@@ -135,7 +140,8 @@
 ;; dispatching inference. A safety margin avoids expiring between refresh and
 ;; the controller's subsequent archive/prepare/once steps.
 (defn- rt-admitted-head? [cfg :vector-i64 head :vector-i64] :bool
-  (and (rt-intact-head? cfg head) (> (cp-num head 0 "until") (rt-now))))
+  (let [now (rt-now)]
+    (and (rt-clock-window? now 0) (rt-intact-head? cfg head) (> (cp-num head 0 "until") now))))
 
 ;; Read once and validate before publishing: candidateHead is an intermediate
 ;; file, not authority to change the accepted checkpoint or consumed request.
@@ -149,7 +155,7 @@
 
 (defn- rt-refresh-decision [intact :bool until :i64 now :i64] :string
   (cond (not intact) "resident/head-refused"
-        (or (<= now 0) (> now (- 9007199254740991 900000))) "resident/clock-unknown"
+        (not (rt-clock-window? now 900000)) "resident/clock-unknown"
         (> until (+ now 900000)) "resident/retention-ready"
         :else "resident/retention-refresh-needed"))
 
@@ -222,7 +228,7 @@
 ;; next turn on confirmed GitHub archival of the current admitted checkpoint.
 ;; The file is a local trust boundary, not a remote lease or a signed receipt.
 (defn- rt-archive-ack-valid? [ack :vector-i64 root :string now :i64] :bool
-  (and (> now 0) (<= now (- 9007199254740991 900000))
+  (and (rt-clock-window? now 900000)
        (json-canonical? ack) (= (json-kind ack 0) 1) (= (json-count ack 0) 4)
        (= (cp-str ack 0 "kind") "itonami.github-archive-ack/1")
        (= (cp-str ack 0 "checkpoint") root) (cp-hex? (cp-str ack 0 "tree") 40)
@@ -307,7 +313,7 @@
                        (= result (str "archive/stored " root " " tree " " outcome)))
             now (rt-now) current (= (rt-archive cfg) descriptor)
             tmp (str ack ".tmp")
-            until (if (and (> now 0) (<= now 9223372036853875807)) (+ now 900000) 0)
+            until (if (rt-clock-window? now 900000) (+ now 900000) 0)
             body (cp-bytes (str "{\"checkpoint\":\"" root "\",\"kind\":\"itonami.github-archive-ack/1\",\"tree\":\""
                                 tree "\",\"until\":" until "}"))
             prepared (and valid current (> until 0)

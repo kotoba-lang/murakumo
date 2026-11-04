@@ -44,3 +44,43 @@ packager SHA-256:
 `f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`.
 This is a diagnostic fixture, not a full source-locked selfhost build, actual
 clock failure, production FS2 qualification, GitHub archive or bot run.
+
+## Head admission and replication follow-up
+
+A related entry point, `rt-admitted-head?`, formerly accepted any intact head
+with positive expiry if the clock returned zero. This head decision is used by
+archive and publication as well as normal cycles. `rt-replicate` also formed a
+replica expiry from the clock and began peer upload before checking that the
+clock was usable. We did not establish that either condition caused an actual
+GitHub publication or inference.
+
+Head admission now requires one positive, representable clock observation.
+Replication checks the same clock and the full two-day expiry margin before
+calling the peer. The archive acknowledgement writer, reader, and retention
+refresh use a common bound so a written acknowledgement cannot be rejected
+solely because its deadline is outside the safe integer range. An unavailable
+clock leaves replication refused; it does not authorize another workload.
+
+A signed local native fixture used actual `rt-admitted-head?`, `rt-replicate`
+and current retention boundary tests, replacing the clock with zero, head
+integrity with a known-true stub, and peer upload with a file marker. The
+head was not admitted and no upload marker was written. A separately built
+mutant removing the positive-clock check failed and did write the marker.
+With a positive test clock, the head passed the stubbed integrity check and
+the upload stub was reached. This verifies branch ordering with test doubles,
+not real head signatures, peer transport or external side effects. Existing
+acknowledgement and retention native fixtures were also rerun with the common
+clock guard and their guard-bypass mutants failed.
+
+Current resident source SHA-256:
+`4fc4f3a4df86f67400ac8f4cd5bbf77c61509b00f3079e2db58fdebdef32cdcb`.
+Test source SHA-256:
+`62a1b87fc88747386711b4ba0f3410a5f4daa5e5e170cf08543e1161d060a7d7`.
+Clock-zero head/replication fixture source and signed image SHA-256:
+`fab2f2997a26c960b38db75182be83d344537087e7eb0e7d44b7ea62ac867463` /
+`833dab799b0e7e093724ed094062bdd6ffdda8411251d3aef9421e8ea550097c`.
+Positive-clock fixture source and signed image SHA-256:
+`65c2b204c935bc8529f42188033bbc6a26d603950ac8ade034b20a75ce5f57f8` /
+`f181c2be3b539dda3a83a24e3d71bfcea54e8d762383c4cd7f1d176efe2769d6`.
+Historical dependencies, diagnostic compiler/provider and test host remain
+unqualified; no GitHub, inference, production replica or bot was run.
