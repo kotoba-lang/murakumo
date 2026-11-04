@@ -95,6 +95,36 @@ real lease or governor. Darwin clock capability and the complete resident
 runtime closure must be independently qualified before using the deadline
 path; do not infer that the arithmetic-only diagnostic exercised wire 7.
 
+## Source-derived Linux clock observation on Xavier
+
+On 2026-11-04, a Tailscale SSH session to Xavier checked the peer's advertised
+host key with strict verification and used the source-derived Linux ARM64 F3
+compiler from Actions run 41833823850, SHA-256
+`46fce6f620a73d91c7ec482687856a3354646f416e05085a6fa61022d37a5e0b`.
+It compiled a short-lived guest containing the actual `pr-wall-ms` source and
+a stdout print. Guest source and ELF SHA-256 were respectively
+`c6e0175c4c6196b2e322d293f9e7be9bda26632563733a179ac6770b7bc244ab` and
+`a46db7c74ae4fb45631b65152ead118fea46eb7bd78c21d74c8be2eca881946c`.
+With wire 7 permitted, the guest exited zero, printed an integer, and the
+observer checked that it lay between the same host's Python wall-clock samples
+with a five-second tolerance. An unpredictable in-band result marker was
+required; SSH exit status alone was not treated as proof. The temporary
+observer script SHA-256 was
+`261eaeb4c1d34bcab37e4068083ab911f0d5eaca9d1d029cbff3d316706599b0`.
+
+The owned compiler and guest processes had 3/4-second soft/hard CPU limits,
+8 GiB virtual-address limits and 50 ms RSS sampling with termination above
+200 MiB. Observed sampled peaks were 16,512 KiB and 360 KiB respectively;
+sampling is not a hard memory cap. The task-owned remote diagnostic directory
+was retained. No systemd unit, model, bot, persistent service or existing
+workload was started or stopped.
+
+This is one successful point sample on a source-derived Linux diagnostic,
+not the pinned public compiler, a Darwin clock test, an independent clock
+authority, a monotonicity/rollback test, an end-to-end deadline test, lease
+revalidation or governor qualification. The separate Darwin SIGTRAP
+observation remains unchanged.
+
 ### Expired submission call counter
 
 A follow-up native fixture records calls and passed timeout values in a
