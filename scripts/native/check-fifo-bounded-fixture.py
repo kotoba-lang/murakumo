@@ -40,6 +40,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--compiler', required=True, type=Path); p.add_argument('--compiler-sha256', required=True)
     p.add_argument('--packager', required=True, type=Path); p.add_argument('--packager-sha256', required=True)
+    p.add_argument('--artifact-dir', type=Path, help='optional new directory for the diagnostic FIFO image')
     a = p.parse_args()
     if (platform.system(), platform.machine()) != ('Darwin', 'arm64'): raise ValueError('Mac ARM64 required')
     compiler, packager = verify(a.compiler, a.compiler_sha256), verify(a.packager, a.packager_sha256)
@@ -247,9 +248,16 @@ def main():
                 raise ValueError('source changed during run')
             if sha(compiler.read_bytes()) != a.compiler_sha256 or sha(packager.read_bytes()) != a.packager_sha256:
                 raise ValueError('tool changed during run')
+            if a.artifact_dir:
+                a.artifact_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
+                artifact = a.artifact_dir / 'fifo.macho'
+                shutil.copyfile(fifo, artifact); artifact.chmod(0o700)
+                if sha(artifact.read_bytes()) != sha(fifo.read_bytes()):
+                    raise ValueError('artifact copy mismatch')
             print(json.dumps({'componentSha256':sha(raw_component), 'casesSha256':sha(raw_cases),
                               'fixtureSha256':sha(unity.encode()), 'compilerSha256':a.compiler_sha256,
-                              'packagerSha256':a.packager_sha256, 'positiveExit':0, 'boundRemovalMutantExit':1,
+                              'packagerSha256':a.packager_sha256, 'fifoSha256':sha(fifo.read_bytes()),
+                              'positiveExit':0, 'boundRemovalMutantExit':1,
                               'fifoContractPassed':True, 'oldAndNewJournalRecoveryPassed':True,
                               'concurrentAccepted':len(accepted), 'concurrentBusy':8-len(accepted),
                               'ownedChildKillPhases':killed_phases,
