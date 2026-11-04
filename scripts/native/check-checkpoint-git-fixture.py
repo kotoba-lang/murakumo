@@ -104,12 +104,22 @@ def main():
                 return command([image, *args], expected, timeout=45, stderr_ok=True).decode()
             if a.local_archive:
                 guest(['config-test', '/fixture3/repo'])
-                git('repo', 'config', '--local', 'credential.helper', 'synthetic-helper')
-                try: guest(['config-test', '/fixture3/repo'], 1)
-                finally: git('repo', 'config', '--local', '--unset-all', 'credential.helper')
-                git('repo', 'config', '--local', 'include.path', '/nonexistent/synthetic')
-                try: guest(['config-test', '/fixture3/repo'], 1)
-                finally: git('repo', 'config', '--local', '--unset-all', 'include.path')
+                git('repo', 'config', '--local', 'user.name', 'synthetic fixture')
+                try: guest(['config-test', '/fixture3/repo'])
+                finally: git('repo', 'config', '--local', '--unset-all', 'user.name')
+                unsafe = [('credential.helper', 'synthetic-helper'),
+                          ('include.path', '/nonexistent/synthetic'),
+                          ('includeIf.gitdir:/never/.path', '/nonexistent/synthetic'),
+                          ('url.https://synthetic.invalid/.insteadOf', 'https://github.com/'),
+                          ('http.sslVerify', 'false'), ('core.sshCommand', 'synthetic-command'),
+                          ('core.hooksPath', '/nonexistent/synthetic'),
+                          ('filter.synthetic.clean', 'synthetic-command'),
+                          ('commit.gpgSign', 'true'), ('gpg.program', 'synthetic-command')]
+                for key, value in unsafe:
+                    git('repo', 'config', '--local', key, value)
+                    try: guest(['config-test', '/fixture3/repo'], 1)
+                    finally: git('repo', 'config', '--local', '--unset-all', key)
+                guest(['config-test', '/fixture3/missing'], 1)
             before = snapshot('repo')
             captured = guest(['capture', '/fixture3/repo', '/fixture3/store', '/fixture3/input/seed',
                               '/fixture3/input/profile', '/fixture3/input/policy', '/fixture3/input/environment',
