@@ -89,6 +89,25 @@ whether Flint functions under it. It does not provide aggregate CPU, GPU or
 memory accounting, reservation, a queue, or crash recovery. Kernel API
 availability and behavior must also be qualified for the supported OS versions.
 
+### Launcher-applied sandbox and same-path exec
+
+On each of the same hosts, `/usr/bin/sandbox-exec` launched the staged Kapitsa
+0.2.26 binary with `--version` under `(allow default)`, `(deny process-fork)`
+and a `process-exec` denial for every path except that binary's literal path.
+Each printed `kapitsa 0.2.26 (6ef19b0)` and exited 0. This checks only command
+startup, not model loading or inference.
+
+A separate control used the same policy shape with the final Python.app
+executable as its allowed literal path. On all three hosts Python could `execv`
+the same executable and print a post-exec marker. Thus the path exception
+needed for the launch also permits later same-path exec; this policy alone
+does not close the earlier observed exec-related footprint-limit escape. The
+control did not combine sandboxing with a memory limit or use Kapitsa itself to
+re-exec. On naphtali, `codesign -dv` reported the Kapitsa executable as
+ad-hoc signed with hardened-runtime flags; its entitlements command did not
+print an entitlement payload. This is descriptive, not an injection or
+integrity test.
+
 A production design still needs a native Kotoba/Amu host boundary, a trustworthy
 way to control all descendants and later execs, aggregate CPU/memory/GPU and
 other resource accounting, admission and reservation, FIFO and lock lifetime,
