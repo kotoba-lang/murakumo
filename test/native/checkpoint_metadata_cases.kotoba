@@ -1,0 +1,17 @@
+;; Append after git_checkpoint. Metadata is an FS2 O response without its frame.
+(ns murakumo.checkpoint-metadata-cases (:export [test-checkpoint-metadata]))
+
+(defn test-checkpoint-metadata [] :bool
+  (and (= (cp-meta-size "420 0 0 0") 0)
+       (= (cp-meta-size "420 16384 32 0") 16384)
+       (= (cp-meta-size "511 999999999 18446744073709551615 0") 999999999)
+       (= (cp-meta-size "512 5 1 0") -1)
+       (= (cp-meta-size "x 5 1 0") -1)
+       (= (cp-meta-size "420 -1 1 0") -1)
+       (= (cp-meta-size "420 1000000000 1 0") -1)
+       (= (cp-meta-size "420 5 x 0") -1)
+       (= (cp-meta-size "420 5 1 1") -1)
+       (= (cp-meta-size "420 5 1 0 extra") -1)
+       (= (cp-meta-size "420  5 1 0") -1)
+       (= (cp-meta-size "420 5 1 0 ") -1)
+       (= (cp-meta-size "") -1)))

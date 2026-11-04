@@ -188,9 +188,21 @@
             (= (vector-at b i) 32) (if (= field wanted) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ field 1)))
             :else (recur (+ i 1) start field)))))
 (defn- cp-kind [p :string] :string (cp-meta-field (cp-fs "O" p "") 3))
+(defn- cp-meta-digits? [s :string limit :i64] :bool
+  (let [b (cp-bytes s) n (vector-count b)]
+    (and (> n 0) (<= n limit)
+         (loop [i 0] (if (= i n) true
+           (let [c (vector-at b i)]
+             (and (>= c 48) (<= c 57) (recur (+ i 1)))))))))
+(defn- cp-meta-size [m :string] :i64
+  (let [mode (cp-meta-field m 0) size (cp-meta-field m 1)
+        blocks (cp-meta-field m 2) kind (cp-meta-field m 3)]
+    (if (and (= m (str mode " " size " " blocks " " kind))
+             (cp-meta-digits? mode 3) (<= (cp-int mode) 511)
+             (cp-meta-digits? size 9) (cp-meta-digits? blocks 20) (= kind "0"))
+      (cp-int size) -1)))
 (defn- cp-size [p :string] :i64
-  (let [m (cp-fs "O" p "")]
-    (if (= (cp-meta-field m 3) "0") (cp-int (cp-meta-field m 1)) -1)))
+  (cp-meta-size (cp-fs "O" p "")))
 (defn- cp-mkdir [p :string] :bool
   (or (= (cp-fs "I" p "") "1") (= (cp-kind p) "1")))
 
