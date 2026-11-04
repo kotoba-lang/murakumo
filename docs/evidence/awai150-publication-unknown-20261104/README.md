@@ -50,3 +50,27 @@ negative control. The positive and control source/image SHA-256 values were
 The actual command entry and candidate passed a selected source-unity Amu
 check. This is not a real filesystem or systemd recovery, authenticated process,
 crash test, qualified native provider, source-locked build or live bot run.
+
+## Local native FS2 exercise
+
+A follow-up on one local Apple Silicon Mac used the actual current reconciliation,
+response validation, turn intent and busy-marker functions with the pinned
+Darwin FS2 diagnostic provider. It created separate task-owned directories and
+synthetic requests, responses, outputs and state. The `pr-unit-state` function
+alone was replaced with a test stub reporting `exited`; there was no systemd
+unit, network request or inference. Each native process had a three-second CPU
+cap.
+
+In the matching case the operation returned `profile/publication-reconciled`;
+an independent filesystem check found no busy marker and one `.last` marker.
+Four separate cases with a mismatched state, an existing `state.json.tmp`, a
+missing response, or a mismatched count ID each returned
+`profile/state-publication-unknown` and retained the busy marker without a
+`.last` marker. Source/image SHA-256:
+`935cf3f1ef93843788b073da24857b7658f4233af943da2fa10c4c0635ac42b8` /
+`f119560e61989302c7c69537f0a1c2aa3e3262876c894848c526cf17795128ba`.
+Compiler/provider pins are the diagnostic pins in the preceding evidence.
+The test does not exercise real systemd, production credentials, lock
+ownership, response loss after marker rename, provider I/O errors, a crash,
+power loss or the full source-locked application. Its synthetic directories
+are retained for inspection; no user workload or service was changed.
