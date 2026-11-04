@@ -90,12 +90,16 @@ def main():
     refresh = 'again (rt-lease cfg (cp-num lease 0 "epoch"))'
     if dispatch.count(refresh) != 1:
         raise ValueError('resident lease refresh mutation anchor changed')
-    resident_stubs = '''
+    recheck_guard = '(< (pr-window-seconds now deadline (rt-now) budget) 1)'
+    if dispatch.count(recheck_guard) != 1:
+        raise ValueError('pre-refresh deadline guard anchor changed')
+    resident_stubs = r'''
 (defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
   (let [n (+ (vector-at cfg 0) 1) x (vector-assoc! cfg 0 n)]
     (cond (and (= n 2) (= (vector-at cfg 3) 1)) [2]
           (and (= n 2) (= (vector-at cfg 3) 3)) [3] :else [1])))
-(defn- rt-now [] :i64 106500)
+(defn- rt-now [] :i64
+ (if (= (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Dstep-time\u0000")) "\u0000FS2\u00001") 116500 106500))
 (defn- rt-post-problem [cfg :vector-i64 head :vector-i64 lease :vector-i64 fresh :vector-i64 now :i64] :string
   (cond (= (vector-at fresh 0) 1) "resident/admission-held"
         (= (vector-at fresh 0) 3) "resident/retention-expired-proposal-retained"
@@ -109,17 +113,21 @@ def main():
 (defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 start :i64 deadline :i64 phase :i64] :string
   (if (= phase 1)
     (let [x (vector-assoc! runtime 1 (+ (vector-at runtime 1) 1))]
-      (if (= (vector-at runtime 3) 2) "profile/context-budget-unknown-or-insufficient" "profile/flint-count-ready"))
+      (if (= (vector-at runtime 3) 2) "profile/context-budget-unknown-or-insufficient"
+        (if (= (vector-at runtime 3) 4)
+          (let [created (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Istep-time\u0000"))] "profile/flint-count-ready")
+          "profile/flint-count-ready")))
     (let [x (vector-assoc! runtime 2 (+ (vector-at runtime 2) 1))] "profile/step-completed")))
 '''
     resident_cases = '''
 (defn main [] :i64
- (let [good (vector-alloc 4) changed (vector-alloc 4) unavailable (vector-alloc 4) expired (vector-alloc 4)
-       x (vector-assoc! changed 3 1) y (vector-assoc! unavailable 3 2) z (vector-assoc! expired 3 3)
+ (let [good (vector-alloc 4) changed (vector-alloc 4) unavailable (vector-alloc 4) expired (vector-alloc 4) timed (vector-alloc 4)
+       x (vector-assoc! changed 3 1) y (vector-assoc! unavailable 3 2) z (vector-assoc! expired 3 3) t (vector-assoc! timed 3 4)
        a (rt-dispatch good [1] [1] "/test" 1)
        b (rt-dispatch changed [1] [1] "/test" 1)
        c (rt-dispatch unavailable [1] [1] "/test" 1)
-       d (rt-dispatch expired [1] [1] "/test" 1)]
+       d (rt-dispatch expired [1] [1] "/test" 1)
+       e (rt-dispatch timed [1] [1] "/test" 1)]
   (if (and (= a "profile/step-completed") (= (vector-at good 0) 2)
            (= (vector-at good 1) 1) (= (vector-at good 2) 1)
            (= b "resident/lease-lost") (= (vector-at changed 0) 2)
@@ -127,7 +135,9 @@ def main():
            (= c "profile/context-budget-unknown-or-insufficient") (= (vector-at unavailable 0) 1)
            (= (vector-at unavailable 1) 1) (= (vector-at unavailable 2) 0)
            (= d "resident/retention-expired-proposal-retained") (= (vector-at expired 0) 2)
-           (= (vector-at expired 1) 1) (= (vector-at expired 2) 0)) 0 1)))
+           (= (vector-at expired 1) 1) (= (vector-at expired 2) 0)
+           (= e "profile/budget-refused") (= (vector-at timed 0) 1)
+           (= (vector-at timed 1) 1) (= (vector-at timed 2) 0)) 0 1)))
 '''
     def limit():
         resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
@@ -158,6 +168,7 @@ def main():
                 ('count-reuse-mutant', window + reuse_stubs + count_source.replace(reuse_decision, 'false') + reuse_cases, 1),
                 ('resident-refresh', window + resident_stubs + dispatch + resident_cases, 0),
                 ('resident-refresh-mutant', window + resident_stubs + dispatch.replace(refresh, 'again lease') + resident_cases, 1),
+                ('pre-refresh-deadline-mutant', window + resident_stubs + dispatch.replace(recheck_guard, 'false') + resident_cases, 1),
             ]
             for name, part, expected in fixtures:
                 text = '(ns flint-window-test (:export [main]))\n' + part
@@ -173,6 +184,7 @@ def main():
                 image.chmod(0o700)
                 subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(image)], check=True, capture_output=True)
                 subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(image)], check=True, capture_output=True)
+                shutil.rmtree(root / 'step-time', ignore_errors=True)
                 run([image], expected)
                 print(name, 'source-sha256', hashlib.sha256(text.encode()).hexdigest(), 'image-sha256', digest(image))
         finally:

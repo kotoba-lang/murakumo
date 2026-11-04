@@ -362,12 +362,16 @@
                 (pr-step-resident dest runtime cache next budget now deadline 0)
                 (let [counted (pr-step-resident dest runtime cache next budget now deadline 1)]
                   (if (not (= counted "profile/flint-count-ready")) counted
-                    (let [again (rt-lease cfg (cp-num lease 0 "epoch")) after (rt-now)
-                          admitted (rt-post-problem cfg head lease again after)
-                          remaining (pr-window-seconds now deadline after budget)]
-                      (cond (not (= admitted "resident/admission-held")) admitted
-                            (< remaining 1) "profile/budget-refused"
-                            :else (pr-step-resident dest runtime cache next budget now deadline 2))))))))))
+                    ;; Do not start a new quorum round once the shared budget
+                    ;; is already exhausted or the clock sample is unknown.
+                    ;; This check cannot bound the duration of the round.
+                    (if (< (pr-window-seconds now deadline (rt-now) budget) 1) "profile/budget-refused"
+                      (let [again (rt-lease cfg (cp-num lease 0 "epoch")) after (rt-now)
+                            admitted (rt-post-problem cfg head lease again after)
+                            remaining (pr-window-seconds now deadline after budget)]
+                        (cond (not (= admitted "resident/admission-held")) admitted
+                              (< remaining 1) "profile/budget-refused"
+                              :else (pr-step-resident dest runtime cache next budget now deadline 2)))))))))))
 
 (defn- rt-turn [cfg :vector-i64 head :vector-i64 lease :vector-i64 request :string] :string
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") checkpoint (cp-load store root)

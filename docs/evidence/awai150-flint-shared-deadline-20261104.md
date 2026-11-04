@@ -346,6 +346,42 @@ The compiler had a sampled peak of 61,588 KiB; the three guests sampled at
 address-space ceiling and RSS sampling with termination above 200 MiB;
 sampling is not a hard memory limit.
 
+## Refuse an already-expired budget before the post-count quorum round
+
+The resident now samples the host clock after count and refuses before calling
+`rt-lease` if the shared deadline has less than one whole second left or the
+sample fails the existing window checks. Previously it would still initiate a
+quorum round and only test the remaining budget after that round returned.
+The existing post-round lease and budget checks remain necessary: this new
+check does not bound the quorum round or atomically fence generation.
+
+On one local Darwin ARM64 host, the selected current `rt-dispatch` was
+compiled and executed in the signed diagnostic fixture from
+`scripts/native/check-flint-deadline-window.py`. A mock clock changed when a
+test-only FS2 directory was created during the count stub. At the deadline the
+resident returned `profile/budget-refused`, made only the initial lease call,
+and did not enter generation. The normal, changed-lease, expired-retention and
+unavailable-count controls passed. A built mutant bypassing the new guard
+failed because it made the extra lease call; a separate existing refresh
+mutant also failed. Other deadline and count fixture cases passed as well.
+
+The selected assembled source, with the current `rt-dispatch` substituted
+into historical dependencies, passed the existing Amu CLI `check`. The
+resident source and test script SHA-256 values were
+`b63ac3e1871af8407af98266a2326f2c5979eadd72f757cd91d9253081d0f4b6` and
+`5c24e5880b050c3cf25b18d5d7828160d55e54cc8e269dc3312be4b81b689d71`.
+The passing resident fixture source and signed image SHA-256 values were
+`153758be2f6d9ce9424c907677cb89da62821805f8bba498a9710d66631c43b8` and
+`f21d801ac9ec3bcab5f603cb7056e18f6ee5ff6501db5f480232fbc640d4d8af`;
+the guard-bypass mutant values were
+`4fc04e95cfc373b0c6d7ddc1fdadff483932fe2cc76fe52501a7c5b4d62fbfb5` and
+`f9975763b1c5dd861b4e44bec427e102e9f2e3c8ebea5d0cefdcb2bd4a14399a`.
+Compiler and packager were the pinned diagnostics described above; each
+compiler and native process had a three-second CPU limit, without a hard
+memory limit. The clock and lease were test stubs and no voter or model was
+contacted. This is not a monotonic-clock, source-locked product, live quorum,
+receiver-fencing or governor qualification.
+
 The servers were scripted mocks, not the actual native voter implementation;
 all ran on one machine and the changed value was deliberately injected. This
 tests the selected native client's loopback/HMAC and lease comparison, not a
