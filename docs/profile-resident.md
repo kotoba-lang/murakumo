@@ -582,9 +582,9 @@ model, tokenizer and template as the generation.
 The private Flint runtime must provide a 64-character lowercase hexadecimal
 `serverInstance` identifier. The trusted host must assign a fresh identifier
 to each server start, bind it to the authenticated process and socket, and
-keep the process unchanged between count and generation. The count request
-identity includes that identifier, so a correctly rotated identifier cannot
-reuse an earlier count. The identifier's syntax is checked, but its freshness
+keep the process unchanged between count and generation. Both the count and Flint
+generation request identities include that identifier, so a correctly rotated
+identifier cannot reuse an earlier count, generation unit or response. The identifier's syntax is checked, but its freshness
 and binding are not established by this component. It is host-local and is
 not placed in the public checkpoint environment.
 
@@ -599,7 +599,9 @@ exclusively serialize the same cache across restarts; migration, lost cache,
 rollback and marker retention need explicit reconciliation. The marker does
 not authorize replay after a server restart: the host must rotate the
 server identifier and reconcile the prior turn marker. A changed count that
-would change an already reserved generation request is refused.
+would change an already reserved generation request is refused. Generation
+identities use the `local-flint/2` domain: existing markers or units from the
+older identity format require reconciliation and are not silently migrated.
 
 The candidate writes a server-instance busy marker before token counting,
 binding the turn and exact count-request identities. The separate turn marker

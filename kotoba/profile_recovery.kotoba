@@ -279,6 +279,19 @@
             (or (= state -1) (> i 900)) -1
             :else (let [z (pr-pause)] (if z (recur (+ i 1)) -1))))))
 
+;; Flint generation must be bound to the same host-pinned process instance as
+;; its count. Rotation creates a different request identity; a retained turn
+;; marker then requires explicit reconciliation instead of reusing an old
+;; unit or response. The trusted host still authenticates the instance.
+(defn- pr-generation-id [runtime :vector-i64 body :string] :string
+  (sha256-hex (cp-bytes
+    (cond (pr-local-flint? runtime)
+            (str "local-flint/2\n" (cp-str runtime 0 "serverInstance") "\n"
+                 (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
+          (pr-local-mtp? runtime)
+            (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
+          :else body))))
+
 (defn- pr-count-id [runtime :vector-i64 body :vector-i64] :string
   (sha256-hex (cp-bytes (str "local-flint-count/2\n" (cp-str runtime 0 "socket") "\n"
                              (cp-str runtime 0 "authorizationFile") "\n"
@@ -502,10 +515,7 @@
                       "{\"content\":" (pr-json-quote system-text) ",\"role\":\"system\"}," history "],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
                       (if (pr-local-flint? runtime) ",\"stream\":false,\"temperature\":1,\"top_k\":20,\"top_p\":0.95}"
                         ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}"))
-                    id (sha256-hex (cp-bytes (if (pr-local? runtime)
-                         (str (if (pr-local-flint? runtime) "local-flint\n" "local-mtp\n")
-                           (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
-                         body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
+                    id (pr-generation-id runtime body) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
                     reserved (if (pr-local-flint? runtime) (pr-flint-turn-reserve cache task next state id) true)
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
