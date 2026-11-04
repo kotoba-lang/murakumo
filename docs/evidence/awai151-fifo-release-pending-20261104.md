@@ -119,3 +119,28 @@ real fsync failure, power loss, independent process death, full FIFO suite,
 resource reservation, whole-workload lifetime, a distributed fence or governor
 qualification. No model, build workload, persistent service or existing
 workload was changed.
+
+### RGQ4 reservation with lost watcher on three Macs
+
+On 2026-11-04, naphtali, benjamin and judah each ran the pinned signed RGQ4
+FIFO (`abd117f8a18503fd3404bc94ea765683d928a4b25239285076f1a273f6374d51`)
+and WP02 watcher (`1fdff12c551e847948096c96bf4037d91aee540310ca9947f43c9dda20d3869b`)
+over host-key-checked Tailscale SSH. The test-only Python observer
+`scripts/native/check-fifo-watch-boundary.py` SHA-256
+`4749bf963eba5e9ef032a5672ebe659a2c98e5160b6d8473f25a553b61007188`
+enqueued two synthetic tickets and reserved the first, started an owned
+`/bin/sleep`, bound a watcher to its observed PID/birth identity, read a ready
+frame and heartbeat, then killed and reaped the watcher. In each case the
+owned child remained alive and FIFO front/dequeue/second reserve refused. The
+observer then killed and reaped its direct child; the reservation still held.
+Only after that test-only observation did it explicitly release, dequeue and
+settle, exposing the second ticket. Each native FIFO/watcher process had a
+three-second CPU cap. The outer temporary staging directory was independently
+checked absent after the test. No existing service or model was changed.
+
+The observer made the supervision and reconciliation decisions in Python;
+neither the watcher nor FIFO was integrated into a native host supervisor.
+This one direct child does not cover grandchildren, daemonization, missed
+fork/exec events, crashes, restart, authenticated resource accounting, memory
+or GPU limits, distributed fencing or real workloads. The test therefore does
+not qualify a governor or authorize persistent deployment.
