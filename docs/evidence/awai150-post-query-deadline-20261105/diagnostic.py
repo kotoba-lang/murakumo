@@ -14,10 +14,13 @@ pre=r'''(ns post-query-fixture (:export [main]))
 (defn- pr-count-value [b :vector-i64] :i64 20)
 (defn- pr-read-bounded [p :string n :i64] :vector-i64 (cond (= p "slow-read") (let [z (mark "mark")] [1]) (= p "back-read") (let [z (mark "back")] [1]) :else [1]))
 (defn- cp-exists? [p :string] :bool true)
+(defn- cp-fs [op :string path :string tail :string] :string "0")
 (defn- pr-read-response [p :string] :vector-i64 (cond (= p "slow-read") (let [z (mark "mark")] [1]) (= p "back-read") (let [z (mark "back")] [1]) :else [1]))
 (defn- pr-answer [b :vector-i64] :string "ok")
 (defn- pr-local-response? [r :vector-i64 b :vector-i64] :bool true)
 (defn- pr-local-flint? [r :vector-i64] :bool (= (vector-at r 0) 1))
+(defn- cp-str [r :vector-i64 i :i64 k :string] :string "instance")
+(defn- pr-flint-busy-release [c :string i :string t :string n :string] :bool (mark "released"))
 '''
 main=r'''(defn main [] :i64
  (let [mode (typed-cap-call 38 :string :string "0") slow (= mode "slow") reading (= mode "slow-read") back (= mode "back") backread (= mode "back-read")
@@ -30,7 +33,14 @@ main2=r'''(defn main [] :i64
        unit (cond (or slow nonflint) "slow" back "back" :else "fast") path (cond reading "slow-read" backread "back-read" :else "ok")
        value (pr-wait unit path (if nonflint [0] [1]) 100000 110000 10)]
   (if (= value (not (or slow reading back backread))) 0 1)))'''
-base=pre+'\n'+form('pr-window-seconds')+'\n'+form('pr-count-wait')+'\n'+form('pr-wait')+'\n'
+main3=r'''(defn main [] :i64
+ (let [mode (typed-cap-call 38 :string :string "0") positive (or (= mode "positive-count") (= mode "positive-generation")) count-mode (or (= mode "positive-count") (= mode "negative-count"))
+       count (if count-mode (pr-flint-count-only-release [1] "/cache" "turn" "count" (if positive 20 -1)) positive)
+       input (if positive "profile/step-completed 1 cid" "profile/inference-unavailable-state-retained")
+       result (if count-mode input (pr-flint-finish [1] "/cache" "turn" "count" input))
+       released (= (typed-cap-call 35 :string :string "\u0000FS2\u0000D/released\u0000") "\u0000FS2\u00001")]
+  (if (and (= count positive) (= released positive) (= result input)) 0 1)))'''
+base=pre+'\n'+form('pr-window-seconds')+'\n'+form('pr-count-wait')+'\n'+form('pr-wait')+'\n'+form('pr-flint-count-only-release')+'\n'+form('pr-flint-finish')+'\n'
 compiler=Path('/tmp/codex-amu-1762/seed/bootstrap/aarch64-macos/amu-full-root.macho');pack=Path('/private/tmp/awai154-fs2-darwin-gate/candidate.macho')
 for p,d in [(compiler,'920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6'),(pack,'f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d')]:
  if hashlib.sha256(p.read_bytes()).hexdigest()!=d:raise RuntimeError('pin')
@@ -57,5 +67,9 @@ with tempfile.TemporaryDirectory(prefix='awai-flint-query-deadline-',dir='/priva
   for mode in ('slow','slow-read','back','back-read'):
    (root/'mark').unlink(missing_ok=True);(root/'back').unlink(missing_ok=True);run([mutant,mode],1);print('PASS',name,mode,'deadline guard mutant refused',flush=True)
   print('SOURCE_SHA',name,hashlib.sha256((base+entry).encode()).hexdigest(),flush=True)
+ img=build('occupancy',base+main3)
+ for mode in ('negative-count','positive-count','negative-generation','positive-generation'):
+  (root/'released').unlink(missing_ok=True);run([img,mode]);print('PASS occupancy',mode,flush=True)
+ print('SOURCE_SHA occupancy',hashlib.sha256((base+main3).encode()).hexdigest(),flush=True)
  os.close(3)
  if fd!=3:os.close(fd)

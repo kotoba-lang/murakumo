@@ -30,3 +30,12 @@ rollback case fail. Updated count fixture SHA-256 was
 updated generation fixture SHA-256 was
 `55c4d984fe8bd1b6b4466e62f6f3f221056ecbca5fb05dbaca177ba5723f5834`.
 This uses a simulated clock, not an independently qualified monotonic clock.
+
+A follow-up combined the current `pr-flint-count-only-release` and
+`pr-flint-finish` forms with a stubbed release that writes a marker. An unknown
+count and an `inference-unavailable-state-retained` result each left the
+marker absent; completed-count and completed-step controls each wrote it.
+The source fixture SHA-256 was
+`42a04305d0cadc88a4ec815539d8bededc051dffa9cfc0e5506e1b70621b8284`.
+This tests the release decisions independently with stubs, not an integrated
+resident, an actual durable reservation, or process-tree termination.
