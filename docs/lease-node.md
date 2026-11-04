@@ -18,6 +18,13 @@ FS2 O/E provider and exclusive path handling. Existing oversized state needs
 explicit reconciliation. The token and other input paths are not bounded by
 this change.
 
+With a topology, this candidate additionally requires the exact canonical
+six-field `lease-text` shape and a nonnegative bounded revision before an
+accept. Topology-free diagnostic mode keeps its prior behavior. An older
+accepted value outside this stricter profile can block future Paxos adoption;
+the host must inspect and reconcile existing registers before migration, not
+reset them. This does not authenticate quorum membership or fence effects.
+
 `init-fresh` returns `voter/init-created`, `voter/init-refused`, or
 `voter/init-unknown`; unknown means publication may have happened and must be
 reconciled before any retry. On ARM64 Linux/XFS, the native fixture in

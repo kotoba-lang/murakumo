@@ -222,12 +222,18 @@
                 (let [en (json-member topo e "enabled")] (and (>= en 0) (= (json-kind topo en) 5)))
                 :else (recur (+ k 1))))))))
 
-;; no topology: any canonical value; else lease.cljk valid-value? against it
+;; Topology-free mode is diagnostic. In fleet mode only the exact canonical
+;; six-field lease is admitted; an unusable extra/missing field must not be
+;; durably accepted and later poison adoption by stricter job consumers.
 (defn- ln-member-ok? [topo :vector-i64 now :i64 value :string] :bool
   (if (= (vector-count topo) 0) true
-    (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node")]
-      (valid-value? node (ln-enabled? topo node) (ln-text v r "class") (ln-num v r "slot")
-                    (ln-num v r "epoch") (ln-num v r "until") now))))
+    (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node") class (ln-text v r "class")
+          slot (ln-num v r "slot") epoch (ln-num v r "epoch") until (ln-num v r "until")
+          revision (ln-num v r "revision")]
+      (and (json-valid? v) (json-canonical? v) (= (json-kind v r) 1) (= (json-count v r) 6)
+           (>= revision 0) (<= revision 9007199254740991)
+           (= value (lease-text node class slot epoch until revision))
+           (valid-value? node (ln-enabled? topo node) class slot epoch until now)))))
 
 ;; An absent, truncated or inconsistent durable register is not a fresh
 ;; voter. Reinitialization requires an independently authorized recovery.

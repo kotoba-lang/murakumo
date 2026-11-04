@@ -1,0 +1,16 @@
+;; Source cases for topology-bound acceptance. A live integration fixture
+;; must also exercise persisted prior accepted values and quorum recovery.
+(ns murakumo.lease-voter-value-cases (:export [test-lease-voter-values]))
+
+(defn test-lease-voter-values [] :bool
+  (let [topo (ln-bytes "{\"payload\":{\"nodes\":[{\"enabled\":true,\"node\":\"node-a\"}]}}")
+        ok (lease-text "node-a" "job" 0 1 2000 0)
+        expired (lease-text "node-a" "job" 0 1 0 0)
+        extra "{\"class\":\"job\",\"epoch\":1,\"extra\":0,\"node\":\"node-a\",\"revision\":0,\"slot\":0,\"until\":2000}"
+        missing "{\"class\":\"job\",\"epoch\":1,\"node\":\"node-a\",\"slot\":0,\"until\":2000}"
+        negative (lease-text "node-a" "job" 0 1 2000 -1)]
+    (and (ln-member-ok? topo 1000 ok) (ln-member-ok? topo 1000 expired)
+         (not (ln-member-ok? topo 1000 extra)) (not (ln-member-ok? topo 1000 missing))
+         (not (ln-member-ok? topo 1000 negative))
+         (not (ln-member-ok? topo 1000 (lease-text "node-b" "job" 0 1 2000 0)))
+         (ln-member-ok? (vector-alloc 0) 1000 extra))))
