@@ -179,7 +179,7 @@
 ;; The public run entry passes the exact CID-checked input.
 ;; A trusted adapter may supply the exact bytes it already read and verified.
 ;; The ordinary entry retains its existing file-read behavior.
-(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool] :i64
+(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool expected-signer :string] :i64
   (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
         node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
         now (jn-int (typed-cap-call 7 :string :string "wall"))
@@ -193,6 +193,8 @@
         jp (job-problem profile input policy rail)]
     (cond (not (= jp "job/ok")) (let [x (jn-say (string-concat "job " jp))] 1)
           (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
+          (and (not (= expected-signer "")) (not (= (node-did seed) expected-signer)))
+            (let [x (jn-say "job/signer-changed")] 1)
           (not (= (jn-arg 9) "clock")) (let [x (jn-say "job/clock-required")] 2)
           (not (= mode "follow")) (let [x (jn-say "job/mode-refused")] 2)
           (or (< now 0) (> now 9007199253000000) (< t 1) (>= t 9007199254740991))
@@ -245,7 +247,7 @@
                             0))))))))))))))))
 
 (defn- jn-run-with-source [source :string source-admitted :bool] :i64
-  (jn-run-with-verified-input source source-admitted "" false))
+  (jn-run-with-verified-input source source-admitted "" false ""))
 
 (defn- jn-run [] :i64 (jn-run-with-source "" false))
 
