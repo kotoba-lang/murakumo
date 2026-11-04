@@ -33,8 +33,26 @@ compiler SHA-256 `920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4
 diagnostic packager SHA-256 `f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`;
 previous signed FIFO SHA-256 `e0686d9f82fc3eb5f218a0e716d373ef3a0a9565b0e09f39bef4ce48e0ae9da7`.
 
-The failure is injected, not a power-loss or actual I/O failure. Full RGQ4
-regression adaptation, concurrent/crash testing, production provider,
+The failure is injected, not a power-loss or actual I/O failure. Other RGQ4
+integration diagnostics, production provider,
 authenticated supervisor, whole-workload termination, resource limits and
 deployment remain unqualified. This is not a complete replay or resource
 governor solution and does not authorize Flint deployment.
+
+## Existing bounded FIFO regression, adapted for RGQ5
+
+The source-bound `check-fifo-bounded-fixture.py` and its boundary cases were
+adapted to the new header and run with the pins above. Normal operations,
+old-format refusal, synthetic old/new journal reconciliation, injected short
+reads and sync failures, one eight-caller enqueue sample, and owned-process
+kills at five queue-journal boundaries passed. The bounds-removal mutant was
+detected. A real-file same-size replacement still caused the old bytes to be
+accepted, confirming the host must exclude competing writers and aliases.
+The synthetic recovery setup directly seeds and resets queue files, sometimes
+with tickets lacking RGQ5 claim markers; it exercises legacy recovery logic,
+not a valid migration or a proof of the new claim invariant. Other historical
+RGQ4 integration scripts remain pinned to their own format and images.
+
+This regression used per-process three-second CPU limits and no hard memory
+cap. It did not simulate power loss, actual sync failures, claim-marker loss
+or rollback, or establish authenticated release or whole-workload lifetime.
