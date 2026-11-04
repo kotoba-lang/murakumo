@@ -194,3 +194,20 @@ One concurrent enqueue sample accepted eight requests and returned no busy
 responses. These are local synthetic diagnostics, with injected faults and no
 memory cap; they do not establish filesystem power-loss behavior, supervision
 of a real workload, resource enforcement or governor qualification.
+
+### Bounded read fault injection
+
+On 2026-11-04 the same local Darwin suite was extended to compile selected
+`rq-read-bounded` source with two source-injected conditions: a one-byte-short
+FS2 response and a changed post-read size. Both returned the empty refusal
+value. An unmodified read of the same nonempty file returned data and failed
+the refusal assertion, serving as the negative control. The complete local
+suite passed again with an inherited three-second CPU limit per native
+process; no hard memory limit was applied. The updated script SHA-256 was
+`c31c73f27af3f1451250fb9e50b317c57e4a7a6397cabf8b5f2a0ff126dc8019`;
+the component, compiler and packager pins are those in the preceding section.
+
+These are source-injected responses in a diagnostic build, not faults induced
+in the actual provider or filesystem. Same-size replacement, kernel I/O
+failure, power loss, concurrent writers, process supervision and production
+governor qualification remain outside this observation.

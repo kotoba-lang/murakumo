@@ -64,6 +64,19 @@ def main():
         (root / 'mutant.kotoba').write_text(unity.replace(ANCHOR, 'false'))
         (root / 'fifo.kotoba').write_text('(ns fifo-contract-fixture (:export [main]))\n' + component +
                                          '\n(defn main [] :i64 (resource-fifo-main))\n')
+        read_fixture = ('(ns fifo-read-fault-fixture (:export [main]))\n' + component +
+                        '\n(defn main [] :i64 (if (= (rq-read-bounded "/cases/small" 4165) "") 0 1))\n')
+        read_anchor = ('r (typed-cap-call 35 :string :bytes (str "\\u0000FS2\\u0000E" path '
+                       '"\\u00000:" (string-from-i64 size)))')
+        size_anchor = '(= (rq-size path) size)'
+        if read_fixture.count(read_anchor) != 1 or read_fixture.count(size_anchor) != 1:
+            raise ValueError('bounded read fault anchor changed')
+        (root / 'read-control.kotoba').write_text(read_fixture)
+        (root / 'read-short.kotoba').write_text(read_fixture.replace(
+            read_anchor, read_anchor.replace('r (typed-cap-call', 'r0 (typed-cap-call') +
+            '\n            r (bytes-slice r0 0 (- (bytes-count r0) 1))'))
+        (root / 'read-size-change.kotoba').write_text(read_fixture.replace(
+            size_anchor, '(= (+ (rq-size path) 1) size)'))
         plain = (root / 'fifo.kotoba').read_text()
         hold_guard = '(= hold-status "1") "fifo/reservation-held"'
         if plain.count(hold_guard) != 1:
@@ -154,6 +167,9 @@ def main():
                 return image
             image, mutant = build('fixture'), build('mutant')
             run([image], 0); run([mutant], 1)
+            run([build('read-control')], 1)
+            run([build('read-short')], 0)
+            run([build('read-size-change')], 0)
             fifo = build('fifo')
             reserve_bypass = build('reserve-bypass')
             queue = root / 'queuecase'; queue.mkdir(mode=0o700)
@@ -462,6 +478,7 @@ def main():
                               'fixtureSha256':sha(unity.encode()), 'compilerSha256':a.compiler_sha256,
                               'packagerSha256':a.packager_sha256, 'fifoSha256':sha(fifo.read_bytes()),
                               'positiveExit':0, 'boundRemovalMutantExit':1,
+                              'sourceInjectedReadFaults':['short-response', 'changed-post-read-size'],
                               'fifoContractPassed':True, 'oldAndNewJournalRecoveryPassed':True,
                               'concurrentAccepted':len(accepted), 'concurrentBusy':8-len(accepted),
                               'ownedChildKillPhases':killed_phases,
