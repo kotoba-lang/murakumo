@@ -116,9 +116,10 @@
     ;; that does not fit.
     (let [p (accel/parse-probe (str "vram-total\t100\ngtt-total\t0\n"
                                     "claim\t7\t4096\tllama-server\n"
-                                    "claim\t8\tnot-a-number\tComfyUI\n"))]
+                                    "claim\t8\tnot-a-number\tComfyUI\n"
+                                    "claim\t9\t-50\tworker\n"))]
       (is (= 1 (count (:claims p))))
-      (is (= 1 (:unreadable-claims p))))))
+      (is (= 2 (:unreadable-claims p))))))
 
 (deftest admission-requires-current-oracle-and-readable-claims
   (let [probe {:claims [] :unreadable-claims 0}

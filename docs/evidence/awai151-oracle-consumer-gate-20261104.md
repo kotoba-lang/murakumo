@@ -49,3 +49,21 @@ or compatibility of a patched output is established. Do not add fields by hand
 or replace the stored oracle based on this audit. A source-locked native
 producer with export/schema compatibility and actual consumer parity is still
 needed, along with the qualified execution environment.
+
+## Negative observed claim
+
+The legacy parser previously accepted a negative numeric claim as a measured
+allocation and left the unreadable count at zero. Since the consumer sums
+claims, a negative value could reduce the recorded commitment. The parser now
+counts negative claims as unreadable, so the consumer's existing observation
+gate refuses them and returns zero grant.
+
+On 2026-11-04 a CPU-limited local Babashka diagnostic evaluated the actual
+selected parser and consumer forms with a synthetic corrected oracle and fixed
+usable capacity. The prior parser accepted `-50` with zero unreadable claims;
+the changed parser retained the positive claim, counted both negative and
+non-numeric claims as unreadable, and the selected consumer returned
+`invalid-observation` with zero grant. This is not the complete host test
+suite, a ClojureScript execution, a real oracle or probe, or resource-governor
+qualification. The underlying probe can still miss holders without reporting
+an unreadable claim.

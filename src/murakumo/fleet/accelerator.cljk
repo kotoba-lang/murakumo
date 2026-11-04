@@ -87,11 +87,12 @@
        (case (first cells)
          "vram-total" (assoc acc :vram-total (or (parse-long* (second cells)) unmeasured))
          "gtt-total"  (assoc acc :gtt-total (or (parse-long* (second cells)) unmeasured))
-         "claim" (if-let [b (parse-long* (nth cells 2 ""))]
-                   (update acc :claims conj {:pid (nth cells 1 "?")
-                                             :bytes b
-                                             :comm (nth cells 3 "")})
-                   (update acc :unreadable-claims inc))
+         "claim" (let [b (parse-long* (nth cells 2 ""))]
+                   (if (and (some? b) (not (neg? b)))
+                     (update acc :claims conj {:pid (nth cells 1 "?")
+                                               :bytes b
+                                               :comm (nth cells 3 "")})
+                     (update acc :unreadable-claims inc)))
          acc)))
    {:vram-total unmeasured :gtt-total unmeasured :claims [] :unreadable-claims 0}
    (remove str/blank? (str/split-lines (or out "")))))
