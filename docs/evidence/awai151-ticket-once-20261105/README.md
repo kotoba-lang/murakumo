@@ -161,6 +161,24 @@ each host reported its temporary directory removed. These are process-kill
 and single concurrency samples, not power-loss durability, fairness or
 production-provider qualification.
 
+## Composition with the #1796 FS2 candidate
+
+The same current RGQ5 source and ticket-once observer were built with the
+separately signed #1796 merged-source diagnostic packager SHA-256
+`28aa2445711083523adef3cfed0d5b9031b85e2ad258ff760af8680a340d9378`.
+Locally and on naphtali, benjamin and judah, the observer passed the marker,
+no-replace, source-injected failure, four process-kill and same-ticket race
+cases. Each target built signed FIFO SHA-256
+`d324bf33d84223068c4aaa565f0f149df01fe1ace7c4ff9ae0ee7130b15efa97`,
+reported Darwin ARM64 macOS 26.7.2 build 25G332, and removed its temporary
+directory. The compiler and observer pins were `92095476...` and
+`913a9cc8...` as above. Each race was one sample, not a fairness guarantee.
+
+The #1796 packager here was produced with a prior diagnostic compiler and is
+not the rebuilt or released Amu runtime. This composition does not qualify
+the production FS2 provider, machine-crash recovery, supervisor, process tree,
+memory limits or a live model.
+
 ## Existing Mac bootstrap provider observation
 
 On one local Darwin ARM64 host, the Mac bootstrap packager from Amu #1824's
