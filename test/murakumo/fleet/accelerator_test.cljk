@@ -15,7 +15,8 @@
   GB aperture, an inference head at 41.2 GB, and a Hunyuan3D instance that had
   81.77 GB — more than the whole device."
   (:require [kotoba.test :refer [deftest testing is]]
-            [murakumo.fleet.accelerator :as accel]))
+            [murakumo.fleet.accelerator :as accel]
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private gib (* 1024 1024 1024))
 (defn- gb [x] (long (* x gib)))
@@ -43,7 +44,7 @@
   (testing "and an EMPTY device is a different, admitting answer"
     ;; The whole point: 0 bytes allocated is measured, -1 is not. If these two
     ;; ever return the same verdict, the check has stopped being one.
-    (let [empty-dev {:vram-total 0 :gtt-total 0 :claims []}]
+    (let [empty-dev {:vram-total 0 :gtt-total 0 :claims [] :unreadable-claims 0}]
       (is (zero? (accel/aperture-bytes empty-dev)))
       (is (= :over-aperture (:reason (accel/admit empty-dev {} :resident (gb 1))))
           "an empty aperture refuses for size, NOT for unmeasured"))))
@@ -118,6 +119,32 @@
                                     "claim\t8\tnot-a-number\tComfyUI\n"))]
       (is (= 1 (count (:claims p))))
       (is (= 1 (:unreadable-claims p))))))
+
+(deftest admission-requires-current-oracle-and-readable-claims
+  (let [probe {:claims [] :unreadable-claims 0}
+        answer (fn [_ export args]
+                 (case export
+                   "admit-code" (if (= args [0 76 100 20 5]) 3 0)
+                   "granted-bytes" (if (= args [0 100 20 5]) 75 100)
+                   "code-name" "admitted"))]
+    (with-redefs [accel/usable-bytes (fn [& _] 100)
+                  oracle/require-ready! (fn [_] true)
+                  oracle/call answer]
+      (is (true? (:admitted? (accel/admit probe {} :resident 1 0))))
+      (doseq [invalid [(assoc probe :unreadable-claims 1)
+                       (dissoc probe :unreadable-claims)]]
+        (let [d (accel/admit invalid {} :resident 1 0)]
+          (is (false? (:admitted? d)))
+          (is (= :invalid-observation (:reason d)))
+          (is (= 0 (:granted d))))))
+    (with-redefs [accel/usable-bytes (fn [& _] 100)
+                  oracle/require-ready! (fn [_] true)
+                  oracle/call (fn [_ export args]
+                                (if (= export "admit-code") 0 (answer nil export args)))]
+      (let [d (accel/admit probe {} :resident 1 0)]
+        (is (false? (:admitted? d)))
+        (is (= :oracle-unqualified (:reason d)))
+        (is (= 0 (:granted d)))))))
 
 (deftest unknown-holders-count-against-opportunistic-not-against-nothing
   (let [busy (assoc gad :claims [{:pid "99" :bytes (gb 30) :comm "some-unregistered-thing"}])

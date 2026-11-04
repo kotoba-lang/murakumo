@@ -135,11 +135,22 @@
   (let [usable (usable-bytes probe (or headroom-milli (headroom-default-milli)))
         {res :resident opp :opportunistic} (committed probe registry)
         k (get classes klass -1)
-        code (o "admit-code" [k request-bytes usable res opp])]
+        ;; The shipped KIR can lag the native source. Refuse this consumer's
+        ;; known overcommit counterexample before trusting an admission or
+        ;; a grant. This check detects that specific stale oracle; it is not
+        ;; a general qualification or a substitute for regeneration.
+        oracle-current? (and (= 3 (o "admit-code" [0 76 100 20 5]))
+                             (= 75 (o "granted-bytes" [0 100 20 5])))
+        unreadable (:unreadable-claims probe)
+        observed? (and (integer? unreadable) (zero? unreadable))
+        code (if (and oracle-current? observed?) (o "admit-code" [k request-bytes usable res opp]) 7)
+        reason (cond (not oracle-current?) :oracle-unqualified
+                     (not observed?) :invalid-observation
+                     :else (keyword (o "code-name" [code])))]
     {:admitted? (zero? code)
      :code code
-     :reason (keyword (o "code-name" [code]))
-     :granted (o "granted-bytes" [k usable res opp])
+     :reason reason
+     :granted (if (and oracle-current? observed?) (o "granted-bytes" [k usable res opp]) 0)
      :usable usable
      :resident res
      :opportunistic opp}))
