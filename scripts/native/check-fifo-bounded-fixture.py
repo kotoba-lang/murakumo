@@ -80,9 +80,14 @@ def main():
         read_pause_helper = ('(defn- rq-read-test-pause [] :bool\n'
                              '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
                              '        sent (typed-cap-call 37 :string :string s)] true))\n')
-        (root / 'read-race.kotoba').write_text(read_fixture.replace(
+        read_race_source = read_fixture.replace(
             '(defn- rq-read-bounded ', read_pause_helper + '(defn- rq-read-bounded ', 1).replace(
-            size_anchor, '(and (rq-read-test-pause) ' + size_anchor + ')', 1))
+            size_anchor, '(and (rq-read-test-pause) ' + size_anchor + ')', 1)
+        (root / 'read-race.kotoba').write_text(read_race_source)
+        read_expected = '(if (= (rq-read-bounded "/cases/small" 4165) "") 0 1)'
+        if read_race_source.count(read_expected) != 1: raise ValueError('read race result anchor changed')
+        (root / 'read-same-size.kotoba').write_text(read_race_source.replace(
+            read_expected, '(if (= (rq-read-bounded "/cases/small" 4165) "RGQ4\\n") 0 1)'))
         plain = (root / 'fifo.kotoba').read_text()
         hold_guard = '(= hold-status "1") "fifo/reservation-held"'
         if plain.count(hold_guard) != 1:
@@ -193,6 +198,22 @@ def main():
                         raise ValueError(('read race result', changed, child.returncode, len(stdout), stderr))
                 finally:
                     if child.poll() is None: child.kill(); child.wait(timeout=3)
+            small.write_bytes(b'RGQ4\n')
+            same_size = build('read-same-size')
+            child = subprocess.Popen([str(same_size)], cwd=root, pass_fds=(3,),
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     env={'PATH':'/nonexistent'})
+            try:
+                if not select.select([child.stdout], [], [], 10)[0] or os.read(child.stdout.fileno(), 1) != b'\0':
+                    raise RuntimeError('same-size race pause not reached')
+                if child.poll() is not None: raise RuntimeError('same-size race process exited early')
+                small.write_bytes(b'XXXX\n')
+                stdout, stderr = child.communicate(timeout=10)
+                if child.returncode != 0 or stderr or len(stdout) != 262143 or any(stdout):
+                    raise ValueError(('same-size race result', child.returncode, len(stdout), stderr))
+                if small.read_bytes() != b'XXXX\n': raise ValueError('same-size replacement not visible')
+            finally:
+                if child.poll() is None: child.kill(); child.wait(timeout=3)
             small.write_bytes(b'RGQ4\n')
             fifo = build('fifo')
             reserve_bypass = build('reserve-bypass')
@@ -504,6 +525,7 @@ def main():
                               'positiveExit':0, 'boundRemovalMutantExit':1,
                               'sourceInjectedReadFaults':['short-response', 'changed-post-read-size'],
                               'realFileReadRace':'changed-size-refused; unchanged-control-returned-data',
+                              'sameSizeRace':'old-data-accepted-after-file-change',
                               'fifoContractPassed':True, 'oldAndNewJournalRecoveryPassed':True,
                               'concurrentAccepted':len(accepted), 'concurrentBusy':8-len(accepted),
                               'ownedChildKillPhases':killed_phases,

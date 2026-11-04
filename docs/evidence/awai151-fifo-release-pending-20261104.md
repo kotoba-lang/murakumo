@@ -231,3 +231,21 @@ checks one changed-size race with a diagnostic provider, not same-size
 replacement, all filesystem races, actual kernel I/O failure, power loss, a
 production provider, workload supervision or governor qualification. A
 trusted host must still exclude concurrent writers and path aliases.
+
+### Same-size write counterexample
+
+With the same source-instrumented pause and diagnostic FS2 provider, a local
+test overwrote the private five-byte file from `RGQ4\n` to `XXXX\n` after the
+first read but before the second metadata query. The native reader accepted
+and returned the old `RGQ4\n` bytes even though the test independently read
+`XXXX\n` from the file afterward. The complete local suite passed with the
+same pins and three-second inherited CPU limit; no hard memory limit applied.
+Test script SHA-256:
+`fa9f7d7088d79615b6fda10b84b878e87569c96d28e5e84409fdb6908d4f8ef3`.
+
+This is a deliberately untrusted concurrent writer in a controlled fixture,
+not a claim that a correctly isolated host permits it. It demonstrates that
+the current length-only recheck cannot enforce exclusive ownership or detect
+same-size changes. A production host must prevent competing writers and path
+aliases throughout the operation; no supervisor or production provider has
+been qualified to supply that guarantee.
