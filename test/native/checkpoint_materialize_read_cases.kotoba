@@ -2,16 +2,16 @@
 ;; raw-CID-named bytes "abc" and the empty raw-CID block. These definitions
 ;; are not execution evidence; fault injection must also cover failed A/E/O
 ;; reads and sync, including a failed A for an empty write.
-(ns murakumo.checkpoint-materialize-read-cases (:export [test-checkpoint-materialize-read test-checkpoint-empty-write test-checkpoint-empty-write-refuses]))
+(ns murakumo.checkpoint-materialize-read-cases (:export [test-checkpoint-materialize-read test-checkpoint-empty-write test-checkpoint-empty-write-refuses test-checkpoint-closure-index-refuses]))
 
 (defn test-checkpoint-materialize-read [store :string] :bool
   (let [abc (cp-bytes "abc") empty (vector-alloc 0)
         abc-cid (cp-cid abc) empty-cid (cp-cid empty)]
-    (and (cp-materialize-block-valid? store abc-cid (cp-capture-read (str store "/" abc-cid)))
-         (cp-materialize-block-valid? store empty-cid (cp-capture-read (str store "/" empty-cid)))
-         (not (cp-materialize-block-valid? store abc-cid empty))
-         (not (cp-materialize-block-valid? store abc-cid (cp-bytes "abd")))
-         (not (cp-materialize-block-valid? store "invalid" empty)))))
+    (and (cp-reloaded-block-valid? store abc-cid (cp-capture-read (str store "/" abc-cid)))
+         (cp-reloaded-block-valid? store empty-cid (cp-capture-read (str store "/" empty-cid)))
+         (not (cp-reloaded-block-valid? store abc-cid empty))
+         (not (cp-reloaded-block-valid? store abc-cid (cp-bytes "abd")))
+         (not (cp-reloaded-block-valid? store "invalid" empty)))))
 
 ;; The host supplies a private writable test path. The refusal case requires
 ;; an FS2 fault fixture returning success for M and malformed or failed E.
@@ -19,3 +19,9 @@
   (cp-write path (vector-alloc 0)))
 (defn test-checkpoint-empty-write-refuses [path :string] :bool
   (not (cp-write path (vector-alloc 0))))
+
+;; The host supplies a previously valid signed checkpoint, then injects a
+;; failed or changed read of its bundle index after the closure preflight.
+;; The harness must also verify no closure-complete line was emitted.
+(defn test-checkpoint-closure-index-refuses [store :string cid :string checkpoint :vector-i64] :bool
+  (= (cp-closure-list store cid checkpoint) 1))

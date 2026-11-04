@@ -266,8 +266,8 @@
 
 (defn- cp-bundle? [store :string cid :string] :bool
   (if (not (cp-block? store cid)) false
-    (let [b (cp-load store cid)]
-      (if (not (json-canonical? b)) false
+    (let [b (cp-capture-read (str store "/" cid))]
+      (if (or (not (cp-reloaded-block-valid? store cid b)) (not (json-canonical? b))) false
         (let [chunks (json-member b 0 "chunks") size (cp-num b 0 "size")]
           (and (= (json-kind b 0) 1) (= (json-count b 0) 3)
             (= (cp-str b 0 "kind") "itonami.git-bundle/1") (> size 0) (<= size 67108864)
@@ -384,9 +384,9 @@
 
 (defn- cp-parent-dir [p :string] :string
   (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
-;; Revalidate the exact bytes used for materialization, not just an earlier
-;; closure check: a later failed read must not become an empty restored file.
-(defn- cp-materialize-block-valid? [store :string cid :string data :vector-i64] :bool
+;; Revalidate the exact bytes of every sensitive reload, not just an earlier
+;; closure check: a later failed read must not masquerade as an empty block.
+(defn- cp-reloaded-block-valid? [store :string cid :string data :vector-i64] :bool
   (and (cp-raw? cid) (cp-capture-read-valid? (str store "/" cid) data)
        (= (cp-cid data) cid)))
 
@@ -410,7 +410,7 @@
                     (if (= i (json-count b us)) true
                       (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))
                             cid (cp-str b u "cid") data (if (cp-raw? cid) (cp-capture-read (str store "/" cid)) (vector-alloc 0))]
-                        (if (and (cp-materialize-block-valid? store cid data)
+                        (if (and (cp-reloaded-block-valid? store cid data)
                                  (cp-real-parents? stage (cp-str b u "path") true) (cp-absent? path) (cp-write path data)
                                  (= (cp-fs "H" path (cp-str b u "mode")) "1")
                                  (= (cp-fs "M" path "") "1") (= (cp-fs "M" (cp-parent-dir path) "") "1"))
@@ -426,8 +426,13 @@
 ;; before publishing, and the host must keep the source store quiescent.
 ;; CID repeats are allowed (for example when policy and summary coincide).
 (defn- cp-closure-list [store :string cid :string b :vector-i64] :i64
-  (let [p (cp-payload b) bundle (cp-str b p "bundle") index (cp-load store bundle)
-        chunks (json-member index 0 "chunks") us (json-member b p "untracked")
+  (let [p (cp-payload b) bundle (cp-str b p "bundle")
+        index (if (cp-raw? bundle) (cp-capture-read (str store "/" bundle)) (vector-alloc 0))
+        chunks (if (json-canonical? index) (json-member index 0 "chunks") -1)
+        valid (and (cp-reloaded-block-valid? store bundle index) (json-canonical? index)
+                   (>= chunks 0) (= (json-kind index chunks) 2) (> (json-count index chunks) 0))]
+    (if (not valid) (cp-result "checkpoint/missing-or-corrupt-block")
+      (let [us (json-member b p "untracked")
         a (cp-say (str "checkpoint/block " cid))
         d (cp-say (str "checkpoint/block " bundle))
         e (cp-say (str "checkpoint/block " (cp-str b p "policy")))
@@ -438,7 +443,7 @@
             (let [x (cp-say (str "checkpoint/block " (cp-str b (json-element b us n) "cid")))] (recur (+ n 1)))))
         j (loop [n 0] (if (= n (json-count index chunks)) 0
             (let [x (cp-say (str "checkpoint/block " (json-string index (json-element index chunks n))))] (recur (+ n 1)))))]
-    (cp-result "checkpoint/closure-complete")))
+        (cp-result "checkpoint/closure-complete")))))
 
 (defn- cp-restore [] :i64
   (let [store (cp-arg 1) cid (cp-arg 2)]
