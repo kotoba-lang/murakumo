@@ -69,6 +69,26 @@ before and after these small tests.
 
 ## Remaining qualification
 
+### Self-applied process sandbox probe
+
+On the same three hosts on 2026-11-04, a short-lived UID 501 Python process
+called `sandbox_init` after interpreter startup with the profile
+`(version 1)(allow default)(deny process-fork)(deny process-exec)`.
+Each call returned 0. On every host `os.fork`, `os.execv` of `/usr/bin/true`,
+and `os.posix_spawn` of that executable returned `EPERM`; a Python thread
+ran and a separately evaluated 1 MiB MLX GPU allocation reported 1,048,588
+active bytes. The fork/exec and spawn/MLX checks used separate invocations.
+These were small diagnostics, not Flint runs or service-impact measurements.
+
+This is a candidate restriction, not a containment boundary for an arbitrary
+workload: the tested process voluntarily applied its own sandbox, and the
+profile otherwise allows default operations. The experiment does not establish
+how an untrusted or unmodified Kapitsa process would be forced into this
+profile after its final exec, whether IPC can delegate work elsewhere, or
+whether Flint functions under it. It does not provide aggregate CPU, GPU or
+memory accounting, reservation, a queue, or crash recovery. Kernel API
+availability and behavior must also be qualified for the supported OS versions.
+
 A production design still needs a native Kotoba/Amu host boundary, a trustworthy
 way to control all descendants and later execs, aggregate CPU/memory/GPU and
 other resource accounting, admission and reservation, FIFO and lock lifetime,
