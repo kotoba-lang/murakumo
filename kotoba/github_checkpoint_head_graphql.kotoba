@@ -50,7 +50,7 @@
                           (ga-git head (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
                   prev (if (cp-ok? fetch) (cp-git head "rev-parseARG_SEPFETCH_HEAD") "refused")
                   shape (and (cp-ok? prev) (= (cp-line (cp-out prev)) expected) (gh-head-tree? head "FETCH_HEAD"))
-                  content (if shape (cp-git head "showARG_SEPFETCH_HEAD:head.json") "refused")
+                  content (if shape (gh-small-show head "FETCH_HEAD:head.json" 8192) "refused")
                   request (str work "/graphql.json")
                   ready (and (cp-ok? content) (= (cp-out content) old) (cp-absent? request)
                              (cp-write request (hg-request repo branch expected new)))
@@ -63,7 +63,7 @@
                   tip (cp-line (cp-out got))
                   fsck (if (and (cp-ok? got) (cp-hex? tip 40)) (cp-git check "fsckARG_SEP--fullARG_SEP--strict") "refused")
                   back (if (and (cp-ok? fsck) (gh-head-tree? check "FETCH_HEAD"))
-                         (cp-git check "showARG_SEPFETCH_HEAD:head.json") "refused")
+                         (gh-small-show check "FETCH_HEAD:head.json" 8192) "refused")
                   back-parent (and (cp-ok? back) (gh-single-parent? check "FETCH_HEAD" tip expected))]
               (if (not ready) "head-cas/precondition-refused"
                 (if (and back-parent (= (cp-out back) new))
