@@ -387,10 +387,11 @@ The receipt is [evidence/lease-preemption-20261023.json](evidence/lease-preempti
 
 A voter with a topology follows changes to its topology file while it runs,
 as `replicated_topology`'s `accept!` does for a resident:
-- **Polling.** The voter checks before waiting for a connection and again
-  after accepting one, as well as after each empty wait slice (up to 500 ms).
-  A change after the second check can still race request processing; this is
-  not an atomic revocation fence.
+- **Polling.** The voter checks before waiting, after accepting, after reading
+  an authenticated request and after handling it. If the last check fails it
+  closes without replying, but the register may already have been written;
+  the outcome remains unknown. Changes between checks can still race request
+  processing; this is not an atomic revocation fence.
   Topology reads require FS2 no-follow metadata and an exact range response
   within the existing 262144-byte verifier limit. Missing, non-regular,
   oversized or failed reads close requests without processing them.
@@ -410,7 +411,9 @@ Qualification of this candidate needs a continuous-traffic test: publish a
 valid higher revision that disables a member, keep authenticated requests
 arriving without an idle gap, and verify that requests after adoption are
 refused. Also change or remove the file while the voter is waiting in accept,
-then connect and check that it sends no lease reply. Include unchanged and
+then connect and check that it sends no lease reply. Also change it while a
+request is being read and while the register is being written; check that the
+latter has an unknown, possibly durable outcome. Include unchanged and
 invalid-revision controls, and check the idle exit behavior. Source check alone does not establish that behavior. The
 per-connection file read and its effect on throughput have not been measured;
 the host must provision the topology file and a provider that enforces bounded

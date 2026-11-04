@@ -256,24 +256,29 @@
           :else (ln-reply false st))))
 
 ;; one connection, or none within ms: 0 when one was answered, else 1
+(defn- ln-topology-current? [path :string topo :vector-i64] :bool
+  (or (= path "") (= (arena-scope (ln-doc-state path topo)) 0)))
+
 (defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string permitted :bool topology-path :string] :i64
   (arena-scope
     (let [c (ln-accept (str l " " ms))]
       (if (< (ln-int c) 1) 1
-        ;; A document may change while accept waits. Recheck after accepting
-        ;; and before processing; later changes still require a real fence.
-        (if (not (and permitted (or (= topology-path "") (= (ln-doc-state topology-path topo) 0))))
+        ;; Accept and receiving a request can both wait. A later change still
+        ;; requires a real fence, and a lost response remains unknown.
+        (if (not (and permitted (ln-topology-current? topology-path topo)))
           (let [z (ln-write c)] 0)
-        (let [raw (ln-line (ln-recv c true))
-              line (if (= token "") raw (ln-rest raw))
-              ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))]
-          (if (not ok)
-            (let [x (ln-say "voter refused unauthenticated") z (ln-write c)] 0)
-            (let [rep (ln-handle file line topo now)
-                  out (if (= token "") rep (str (ln-mac token (str "rep " line "\n" rep)) " " rep))
-                  w (ln-write (str c " " (hex (ln-bytes (string-concat out "\n")))))
-                  z (ln-write c)]
-              0))))))))
+          (let [raw (ln-line (ln-recv c true))
+                line (if (= token "") raw (ln-rest raw))
+                ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))]
+            (if (not ok)
+              (let [x (ln-say "voter refused unauthenticated") z (ln-write c)] 0)
+              (if (not (ln-topology-current? topology-path topo)) (let [z (ln-write c)] 0)
+                (let [rep (ln-handle file line topo now)
+                      current (ln-topology-current? topology-path topo)
+                      out (if (= token "") rep (str (ln-mac token (str "rep " line "\n" rep)) " " rep))
+                      w (if current (ln-write (str c " " (hex (ln-bytes (string-concat out "\n"))))) "")
+                      z (ln-write c)]
+                  0)))))))))
 
 ;; Topology validation caps documents at 262144 bytes. Check a no-follow
 ;; regular-file size before requesting exactly that bounded range, and check
