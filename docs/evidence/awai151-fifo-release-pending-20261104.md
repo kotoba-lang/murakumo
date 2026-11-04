@@ -211,3 +211,23 @@ These are source-injected responses in a diagnostic build, not faults induced
 in the actual provider or filesystem. Same-size replacement, kernel I/O
 failure, power loss, concurrent writers, process supervision and production
 governor qualification remain outside this observation.
+
+### Controlled file-size race with diagnostic FS2
+
+On the same local Darwin host, the bounded-read fixture was instrumented to
+pause after the diagnostic FS2 provider returned the file bytes and before
+the second metadata query. While the owned process was paused, the test
+changed its private file from five bytes to one byte. On resumption, the
+actual diagnostic provider returned the changed metadata and the selected
+FIFO reader refused the result. With no file change, the same paused fixture
+returned the original data and failed the refusal assertion as expected.
+The full local suite passed with the same pinned compiler/provider and a
+three-second inherited per-process CPU limit; there was no hard memory cap.
+The test script SHA-256 was
+`adb351be97c4e0a0779bff85fef3b4dbb4b9253856c8d55f0b2dd3d674dc4b2a`.
+
+The pause is source-instrumented and the file mutation is test-owned. This
+checks one changed-size race with a diagnostic provider, not same-size
+replacement, all filesystem races, actual kernel I/O failure, power loss, a
+production provider, workload supervision or governor qualification. A
+trusted host must still exclude concurrent writers and path aliases.

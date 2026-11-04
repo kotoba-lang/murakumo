@@ -77,6 +77,12 @@ def main():
             '\n            r (bytes-slice r0 0 (- (bytes-count r0) 1))'))
         (root / 'read-size-change.kotoba').write_text(read_fixture.replace(
             size_anchor, '(= (+ (rq-size path) 1) size)'))
+        read_pause_helper = ('(defn- rq-read-test-pause [] :bool\n'
+                             '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
+                             '        sent (typed-cap-call 37 :string :string s)] true))\n')
+        (root / 'read-race.kotoba').write_text(read_fixture.replace(
+            '(defn- rq-read-bounded ', read_pause_helper + '(defn- rq-read-bounded ', 1).replace(
+            size_anchor, '(and (rq-read-test-pause) ' + size_anchor + ')', 1))
         plain = (root / 'fifo.kotoba').read_text()
         hold_guard = '(= hold-status "1") "fifo/reservation-held"'
         if plain.count(hold_guard) != 1:
@@ -170,6 +176,24 @@ def main():
             run([build('read-control')], 1)
             run([build('read-short')], 0)
             run([build('read-size-change')], 0)
+            read_race = build('read-race')
+            for changed, expected_exit in [(False, 1), (True, 0)]:
+                small = scope / 'small'
+                small.write_bytes(b'RGQ4\n')
+                child = subprocess.Popen([str(read_race)], cwd=root, pass_fds=(3,),
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         env={'PATH':'/nonexistent'})
+                try:
+                    if not select.select([child.stdout], [], [], 10)[0] or os.read(child.stdout.fileno(), 1) != b'\0':
+                        raise RuntimeError('read race pause not reached')
+                    if child.poll() is not None: raise RuntimeError('read race process exited early')
+                    if changed: small.write_bytes(b'X')
+                    stdout, stderr = child.communicate(timeout=10)
+                    if child.returncode != expected_exit or stderr or len(stdout) != 262143 or any(stdout):
+                        raise ValueError(('read race result', changed, child.returncode, len(stdout), stderr))
+                finally:
+                    if child.poll() is None: child.kill(); child.wait(timeout=3)
+            small.write_bytes(b'RGQ4\n')
             fifo = build('fifo')
             reserve_bypass = build('reserve-bypass')
             queue = root / 'queuecase'; queue.mkdir(mode=0o700)
@@ -479,6 +503,7 @@ def main():
                               'packagerSha256':a.packager_sha256, 'fifoSha256':sha(fifo.read_bytes()),
                               'positiveExit':0, 'boundRemovalMutantExit':1,
                               'sourceInjectedReadFaults':['short-response', 'changed-post-read-size'],
+                              'realFileReadRace':'changed-size-refused; unchanged-control-returned-data',
                               'fifoContractPassed':True, 'oldAndNewJournalRecoveryPassed':True,
                               'concurrentAccepted':len(accepted), 'concurrentBusy':8-len(accepted),
                               'ownedChildKillPhases':killed_phases,
