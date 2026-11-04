@@ -46,6 +46,27 @@ supervisor that treats termination as an unknown operation outcome. Until
 that path is qualified, a trap cannot be reported as a clean checkpoint
 refusal or used as evidence that no prior side effect occurred.
 
+## Child termination boundary
+
+In that same Amu source, the private AMUH1 host's `mh-service-words` waits
+for the child, extracts the low seven signal bits and maps a signalled child
+to `128 + signal`, except SIGALRM maps to 124. Thus its source-level mapping
+for Darwin SIGTRAP (5) is exit 133, with signal 5 in the third reply byte.
+An ordinary exit uses the wait status's exit byte. This is a source reading,
+not a new execution or proof that this host implementation is the deployed
+checkpoint caller. The earlier Mac checkpoint test adapter converts that
+first exit byte into the wire-20 text prefix; the repository's `cp-ok?`
+accepts only a `0\n` prefix. These pieces suggest the signal would be
+rejected if composed as described, but their actual composition and signal
+injection have not been tested.
+
+The cron coordinator's source writes and syncs a dispatch marker before
+`rt-cycle`; a present or unknown marker refuses a new dispatch. A trap can
+also occur earlier, or inside the coordinator itself, and the private host
+must interpret an absent success reply as unknown and reconcile durable
+state before retrying. The presence of these guards is not an end-to-end
+recovery test or a guarantee of persistence across a host crash.
+
 The diagnostic requests a **string** response and prints it. The checkpoint
 candidate requests a **bytes** response, and the modified checkpoint code
 was not executed. This observation therefore does not qualify that ABI, its
