@@ -116,3 +116,39 @@ release/reacquire cycle and an unpaired `.last` refusal. It ran with the local
 native FS2 diagnostic, source/image SHA-256
 `bb3021dc8f4dda862dfa18c524510a28825acb63515bb2c3f804608b40a28489` /
 `f8f9fae20aa09465cfdefe3e4107f4481fa3d85955d465f448e7ea2901aef470`.
+
+## Count-only recovery
+
+The earlier statement that count-only release requires separate reconciliation
+is now addressed by the candidate command
+`profile-recovery-main reconcile-count REPO RUNTIME CACHE OLD-STATE COUNT-ID`.
+Under exclusive trusted task/server ownership it verifies the unchanged old
+state, an absent temporary state and generation intent, exact count request
+identity, durable dispatch marker, completed count unit and a valid count
+response. It syncs these files and rechecks intent absence before finishing a
+matching busy release or reconciling its already-visible `.last`. It starts no
+inference and does not modify the profile state. Unit identity and runtime
+remain trusted host responsibilities.
+
+A local source-unity fixture exercised the actual candidate and busy-marker
+operations with the Darwin FS2 diagnostic provider and an `exited` unit stub.
+A matching synthetic count reconciled; mismatched state or count ID, pending
+state, generation intent, missing response and malformed response refused and
+retained `.busy`. Source/image SHA-256:
+`515a3003594910aaea33e72d38b3a3729c576ecc1ea8172728b5005e1cb807f8` /
+`91d372992ef79d6449e8e664dec2c7be6544960563d56d20c5c888784854acd7`.
+An injected lost release-sync response refused; a later retry with the fault
+removed reconciled and established `.settled`, without starting generation.
+Source/image SHA-256:
+`961d20017557dcff8b9d50b46a4dd512adff86558a3c98b86516400072d77fa7` /
+`eb03651632198a563b410de0768f1416f7115aceef736ad5b939e7b509a28997`.
+These are synthetic files and injected unit/fault observations, not real
+systemd, provider faults, crashes, power loss, concurrent writers or a live
+model. Each native process had a three-second CPU cap.
+
+The initial empty-marker case also now requires `.previous` to be absent;
+otherwise a missing `.last` and `.settled` cannot be assumed to mean a fresh
+server. The updated stored native cycle case passed with the FS2 diagnostic,
+source/image SHA-256
+`3fcc483a0319c5954603178de76e5e22042b68e6751727d9be0312de2488e387` /
+`09ccc048d6413e93b3b1101ce5f008c0a8ff59ec41b9a486871083a85e733e36`.

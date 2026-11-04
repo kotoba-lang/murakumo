@@ -5,6 +5,7 @@
 (defn test-flint-busy-cycle [cache :string] :bool
   (let [instance "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         other "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        orphan "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         turn "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         count "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         last (str cache "/server-" instance ".last")
@@ -24,4 +25,6 @@
          (= (cp-fs "D" previous "") "1")
          (cp-write uncertain (pr-flint-busy-text turn count))
          (not (pr-flint-busy-reserve cache other turn count))
-         (= (cp-fs "D" (str cache "/server-" other ".busy") "") "0"))))
+         (= (cp-fs "D" (str cache "/server-" other ".busy") "") "0")
+         (cp-write (str cache "/server-" orphan ".previous") (pr-flint-busy-text turn count))
+         (not (pr-flint-busy-reserve cache orphan turn count)))))

@@ -360,8 +360,8 @@
         status (cp-fs "D" path "")]
     (and (cp-safe-absolute? cache) (cp-hex? instance 64) (cp-hex? turn 64) (cp-hex? count-id 64)
          (cond (= status "0")
-               (let [ls (cp-fs "D" last "") ss (cp-fs "D" settled "")
-                     clear (cond (and (= ls "0") (= ss "0")) true
+               (let [ls (cp-fs "D" last "") ss (cp-fs "D" settled "") ps (cp-fs "D" previous "")
+                     clear (cond (and (= ls "0") (= ss "0") (= ps "0")) true
                                  (and (= ls "1") (= ss "1"))
                                    (let [a (pr-read-bounded last 256) b (pr-read-bounded settled 256)]
                                      (and (pr-flint-busy-valid? a) (= (cp-cid a) (cp-cid b))
@@ -384,9 +384,9 @@
          (= (cp-fs "M" path "") "1") (= (cp-fs "L" path last) "1") (= (cp-fs "M" cache "") "1")
          (cp-write settled expected) (= (cp-fs "M" cache "") "1"))))
 
-;; Only after separately verifying the already-published state, a trusted host
-;; can finish an interrupted marker release. It must retain exclusive cache
-;; ownership throughout; this does not establish workload termination.
+;; Only after separately verifying the published state or a completed count
+;; with no generation intent can a trusted host finish interrupted release.
+;; Exclusive cache ownership is required; this does not prove termination.
 (defn- pr-flint-busy-reconcile-release [cache :string instance :string turn :string count-id :string] :bool
   (let [path (str cache "/server-" instance ".busy") last (str cache "/server-" instance ".last")
         settled (str cache "/server-" instance ".settled") expected (pr-flint-busy-text turn count-id)
@@ -501,6 +501,42 @@
                             (pr-flint-busy-reconcile-release cache (cp-str runtime 0 "serverInstance") turn count-id)))
           (str "profile/publication-reconciled " next " " cid)
           "profile/state-publication-unknown")))))
+
+;; Recover a completed count which never reached the generation-intent write.
+;; The host must hold exclusive task/server locks and authenticate the runtime,
+;; process instance and completed unit; no inference or state write occurs.
+(defn- pr-reconcile-count [repo :string runtime :vector-i64 cache :string old :vector-i64 count-id :string] :string
+  (let [ni (if (json-valid? old) (json-member old 0 "next") -1)
+        next (if (and (>= ni 0) (json-int-ok? old ni)) (json-int old ni) 0)
+        task (cp-str old 0 "task")
+        valid (and (cp-safe-absolute? repo) (cp-safe-absolute? cache)
+                   (pr-local-flint? runtime) (json-canonical? old)
+                   (>= next 1) (< next 1000000) (not (= task ""))
+                   (= (field-problem task) "enroll/ok") (cp-hex? count-id 64))]
+    (if (not valid) "profile/count-reconciliation-unknown"
+      (let [turn (pr-flint-turn-id task next old)
+            request (str cache "/" count-id ".count-request.json")
+            marker (str cache "/" count-id ".count-dispatch")
+            response (str cache "/" count-id ".count-response.json")
+            intent (str cache "/turn-" turn ".intent")
+            unit (str "itonami-count-" (string-substring count-id 0 24) ".service")
+            statepath (str repo "/state.json") body (pr-read-bounded request 262144)
+            result (pr-read-bounded response 1024)
+            ready (and (= (pr-unit-state unit) "exited")
+                       (= (cp-fs "D" intent "") "0")
+                       (= (cp-fs "D" (str repo "/state.json.tmp") "") "0")
+                       (> (vector-count body) 0) (= (pr-count-id runtime body) count-id)
+                       (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n")
+                       (> (pr-count-value result) 0)
+                       (= (cp-cid (pr-read-bounded statepath 16384)) (cp-cid old)))
+            synced (and ready (= (cp-fs "M" request "") "1") (= (cp-fs "M" marker "") "1")
+                        (= (cp-fs "M" response "") "1") (= (cp-fs "M" cache "") "1")
+                        (= (cp-fs "M" statepath "") "1") (= (cp-fs "M" repo "") "1")
+                        (= (cp-fs "D" intent "") "0"))]
+        (if (and synced (or (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id)
+                            (pr-flint-busy-reconcile-release cache (cp-str runtime 0 "serverInstance") turn count-id)))
+          (str "profile/count-reconciled " next)
+          "profile/count-reconciliation-unknown")))))
 
 (defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
@@ -704,6 +740,9 @@
         (= (cp-arg 0) "reconcile-published")
         (cp-say (pr-reconcile-published (cp-arg 1) (pr-read-bounded (cp-arg 2) 131072) (cp-arg 3)
                   (pr-read-bounded (cp-arg 4) 16384) (cp-arg 5) (cp-arg 6)))
+        (= (cp-arg 0) "reconcile-count")
+        (cp-say (pr-reconcile-count (cp-arg 1) (pr-read-bounded (cp-arg 2) 131072) (cp-arg 3)
+                  (pr-read-bounded (cp-arg 4) 16384) (cp-arg 5)))
         (= (cp-arg 0) "hold") (pr-hold (cp-arg 1))
         (= (cp-arg 0) "watch")
         (let [requested (cp-int (cp-arg 7)) limit (if (and (> requested 0) (<= requested 1800)) requested 1800)]
