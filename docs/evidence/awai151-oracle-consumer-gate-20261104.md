@@ -233,3 +233,15 @@ through the product-shell diagnostic. Consumer SHA-256 was
 `cd8ab3c0b24fb4db68d4f88a7ee876f759b7d1bc0123a3fee9235e5f6943e457`.
 This is a safety ceiling, not qualification of the real observation path,
 other oracle semantics, corrected KIR, workload isolation or governor.
+
+A subsequent local nbb diagnostic loaded the actual accelerator test
+namespace and ran five targeted tests through `cljs.test/test-vars` using
+mocked oracles. The reported counters were 5 tests, 23 passing assertions,
+zero failures and zero errors. Consumer SHA-256 was
+`cd8ab3c0b24fb4db68d4f88a7ee876f759b7d1bc0123a3fee9235e5f6943e457`,
+and test SHA-256 was
+`8173393be728ec5b8ce71f4d72a2c06394c228320e029b80517f04d2fe55141b`.
+The reproducible diagnostic is `scripts/native/check-accelerator-host-tests-cljs.py`.
+It uses local, unpinned Kotoba dependency sources and Node/nbb only for the
+check. It does not run the complete suite, corrected KIR, real probe or native
+governor.
