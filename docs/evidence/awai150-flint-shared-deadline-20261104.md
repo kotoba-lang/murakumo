@@ -389,6 +389,7 @@ The generated fixture source SHA-256 was
 `5b44f7efa1f60552e1716020eec38c2de1644af2c1f09b773d4ad223a6a4760a`;
 its generated ELF SHA-256 was
 `f12b5de438648a4346f453e7838f81b7fffdfa4420e88fd6c6755aa86b6c542a`.
+The exact fixture source and operator script are [archived here](awai150-two-phase-lease-20261104/README.md).
 The source-derived Linux ARM64 F3 compiler SHA-256 was
 `46fce6f620a73d91c7ec482687856a3354646f416e05085a6fa61022d37a5e0b`.
 The fixture builder and operator script SHA-256 values were respectively
