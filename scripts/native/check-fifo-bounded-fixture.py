@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import re
+import select
 import shutil
 import subprocess
 import tempfile
@@ -58,6 +59,25 @@ def main():
         (root / 'mutant.kotoba').write_text(unity.replace(ANCHOR, 'false'))
         (root / 'fifo.kotoba').write_text('(ns fifo-contract-fixture (:export [main]))\n' + component +
                                          '\n(defn main [] :i64 (resource-fifo-main))\n')
+        plain = (root / 'fifo.kotoba').read_text()
+        pause = '(rq-test-pause)'
+        helper = ('(defn- rq-test-pause [] :bool\n'
+                  '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
+                  '        sent (typed-cap-call 37 :string :string s)] true))\n')
+        anchors = {
+            'after-intent': '(= (rq-fs "M" root "") "1") (rq-write? tmp next)',
+            'after-pending': '(= (rq-fs "M" tmp "") "1") (= (rq-read-bounded tmp 4165) next)',
+            'after-rename': '(= (rq-fs "L" tmp state) "1")\n         (= (rq-fs "M" root "") "1")',
+            'after-sync': '(= (rq-fs "M" root "") "1") (= (rq-fs "L" intent (str root "/queue.last")) "1")',
+            'after-archive': '(= (rq-fs "L" intent (str root "/queue.last")) "1")\n         (= (rq-fs "M" root "") "1")',
+        }
+        for phase, anchor in anchors.items():
+            if plain.count(anchor) != 1 or plain.count('(defn- rq-commit ') != 1:
+                raise ValueError('pause anchor changed: ' + phase)
+            cut = anchor.index('"1")') + len('"1")')
+            instrumented = anchor[:cut] + ' ' + pause + anchor[cut:]
+            (root / (phase + '.kotoba')).write_text(plain.replace('(defn- rq-commit ', helper + '(defn- rq-commit ')
+                                                    .replace(anchor, instrumented))
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY); saved = None
         if fd != 3:
             try: saved = os.dup(3)
@@ -130,6 +150,48 @@ def main():
             lines = (queue / 'queue').read_text().splitlines()
             if lines[0] != 'RGQ1' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
                 raise ValueError('concurrent state mismatch')
+            killed_phases = []
+            for phase in anchors:
+                variant = build(phase)
+                phase_root = root / ('kill-' + phase); phase_root.mkdir(mode=0o700)
+                (phase_root / 'queue.lock').write_text(''); (phase_root / 'queue').write_text(old)
+                child = subprocess.Popen([str(variant), '/kill-' + phase, 'enqueue', first], cwd=root,
+                                         pass_fds=(3,), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         env={'PATH':'/nonexistent'})
+                try:
+                    if not select.select([child.stdout], [], [], 10)[0] or os.read(child.stdout.fileno(), 1) != b'\0':
+                        raise RuntimeError('pause not reached: ' + phase)
+                    if child.poll() is not None: raise RuntimeError('paused process exited: ' + phase)
+                    intent = (phase_root / 'queue.intent').exists()
+                    pending = (phase_root / 'queue.pending').exists()
+                    state = (phase_root / 'queue').read_text()
+                    expected_new = phase in ('after-rename', 'after-sync', 'after-archive')
+                    if intent != (phase != 'after-archive') or state != (new if expected_new else old):
+                        raise ValueError(('unexpected stopped state', phase, intent, pending, state))
+                    child.kill()
+                    if child.wait(timeout=3) != -9: raise ValueError('owned child was not killed')
+                    check = subprocess.run([str(fifo), '/kill-' + phase, 'front'], cwd=root, pass_fds=(3,),
+                                           capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
+                    expected_front = (0, 'fifo/front '+first) if phase == 'after-archive' else (1, 'fifo/pending-unknown')
+                    if check.stderr or (check.returncode, check.stdout.decode().strip()) != expected_front:
+                        raise ValueError(('unexpected post-kill result', phase, check.returncode, check.stdout, check.stderr))
+                    recovery = subprocess.run([str(fifo), '/kill-' + phase, 'recover'], cwd=root, pass_fds=(3,),
+                                              capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
+                    expected_recovery = {
+                        'after-intent': (0, 'fifo/aborted'),
+                        'after-pending': (1, 'fifo/recovery-unresolved'),
+                        'after-rename': (0, 'fifo/recovered'),
+                        'after-sync': (0, 'fifo/recovered'),
+                        'after-archive': (1, 'fifo/no-intent'),
+                    }[phase]
+                    if recovery.stderr or (recovery.returncode, recovery.stdout.decode().strip()) != expected_recovery:
+                        raise ValueError(('unexpected reconciliation', phase, recovery.returncode,
+                                          recovery.stdout, recovery.stderr))
+                    if (phase_root / 'queue').read_text() != (new if expected_new else old):
+                        raise ValueError(('reconciliation changed queue', phase))
+                    killed_phases.append(phase)
+                finally:
+                    if child.poll() is None: child.kill(); child.wait(timeout=3)
             if COMPONENT.read_bytes() != raw_component or CASES.read_bytes() != raw_cases:
                 raise ValueError('source changed during run')
             if sha(compiler.read_bytes()) != a.compiler_sha256 or sha(packager.read_bytes()) != a.packager_sha256:
@@ -139,6 +201,7 @@ def main():
                               'packagerSha256':a.packager_sha256, 'positiveExit':0, 'boundRemovalMutantExit':1,
                               'fifoContractPassed':True, 'oldAndNewJournalRecoveryPassed':True,
                               'concurrentAccepted':len(accepted), 'concurrentBusy':8-len(accepted),
+                              'ownedChildKillPhases':killed_phases,
                               'scope':'local synthetic FIFO diagnostic; not provider or governor qualification'}))
         finally:
             if fd != 3:
