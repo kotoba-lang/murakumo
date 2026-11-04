@@ -27,14 +27,16 @@ paths and is a test instrument rather than an operator command.
 
 `provider.py` additionally runs the current `jo-put` and empty-frame check
 with the pinned Darwin FS2 diagnostic provider and task-owned real files.
-The retained historical unity fixture's frame, read, metadata and CID helper
-forms are checked byte-for-byte against current source. Readable empty and
+The retained historical unity fixture's frame, read and CID helper forms are
+checked byte-for-byte against current source; the current `cp-size` is
+substituted explicitly. Readable empty and
 one-byte existing blocks succeeded. An empty mode-000 file caused the
 provider to terminate the diagnostic with SIGTRAP during the read; it did not
 return a controlled refusal. The host must preserve this interruption as an
 unknown outcome. This real permission failure does not distinguish the new
 guard from the prior implementation, because the provider traps earlier;
 the injected failure test above covers that branch. Generated source SHA-256:
-`5eef391862614ee8a0c48c1f761202895bc40707d88a846b9f061eec071a9676`.
+`e444758bd6e2387ce254f8fab31893afb8ff164b81f4bde05837b7a433f878cf`
+after the metadata validation update.
 The task-owned temporary directory was removed. This does not qualify the
 production provider, actual GitHub archive, or governor.

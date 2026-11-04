@@ -202,8 +202,11 @@
             :else (recur (+ i 1) start field)))))
 (defn- cp-kind [p :string] :string (cp-meta-field (cp-fs "O" p "") 3))
 (defn- cp-size [p :string] :i64
-  (let [m (cp-fs "O" p "")]
-    (if (= (cp-meta-field m 3) "0") (cp-int (cp-meta-field m 1)) -1)))
+  (let [meta (cp-fs "O" p "") mode (cp-meta-field meta 0) size (cp-meta-field meta 1)
+        blocks (cp-meta-field meta 2) kind (cp-meta-field meta 3)
+        m (cp-int mode) n (cp-int size) b (cp-int blocks)]
+    (if (and (= meta (str mode " " size " " blocks " " kind))
+             (>= m 0) (<= m 511) (>= n 0) (>= b 0) (= kind "0")) n -1)))
 (defn- cp-mkdir [p :string] :bool
   (or (= (cp-fs "I" p "") "1") (= (cp-kind p) "1")))
 

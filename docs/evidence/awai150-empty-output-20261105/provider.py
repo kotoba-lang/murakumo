@@ -9,9 +9,10 @@ base=Path('/private/tmp/awai-flint-clock-cross.kotoba').read_text()
 def extract(path,name):
  text=path.read_text();a,b=h.form(text,name);return text[a:b]
 checkpoint=repo/'kotoba/git_checkpoint.kotoba';output=repo/'kotoba/fleet_job_output.kotoba'
-for name in ('cp-frame','cp-fs','cp-read-op','cp-cid','cp-size','cp-range','cp-meta-field'):
+for name in ('cp-frame','cp-fs','cp-read-op','cp-cid','cp-range','cp-meta-field'):
  a,b=h.form(base,name)
  if base[a:b]!=extract(checkpoint,name):raise RuntimeError('historical fixture differs: '+name)
+a,b=h.form(base,'cp-size');base=base[:a]+extract(checkpoint,'cp-size')+base[b:]
 a,b=h.form(base,'main');base=base[:a]+base[b:]
 base+='\n'+extract(checkpoint,'cp-empty-readable?')+'\n'+extract(output,'jo-put')+'\n'
 base+=r'''(defn main [] :i64
