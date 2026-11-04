@@ -71,3 +71,43 @@ The local observer/generator SHA-256 values were
 They are test-only files in `/private/tmp/awai150-github-private-eval/`.
 This does not validate HTTPS credential handling, a production host adapter,
 autonomous bot credentials, real inference or resource-governor qualification.
+
+## HTTPS and real private/public checks
+
+A third local diagnostic kept both the actual `ga-private?` implementation and
+the source's `https://github.com/<repo>.git` remote expression. Its privileged
+test-only adapter used the operator's existing `gh` login. For Git HTTPS it
+set an isolated HOME and a temporary task-owned `GIT_ASKPASS` script that
+supplied the operator credential to Git through the normal askpass pipe, with
+terminal prompting and global/system Git configuration disabled. The script
+was part of the temporary fixture and was removed with that fixture. It did
+not place the credential in arguments or persist it as a file. This shell
+adapter is a test instrument, not an operational dependency or credential
+boundary. The diagnostic host itself does not provide this authentication.
+
+The actual native privacy predicate refused an inaccessible repository and the
+public `cli/cli` repository before creating their staging directories. It
+accepted the existing private `cloud-itonami/itonami-bot-state` repository.
+The native checkpoint and archive source then captured a synthetic working
+tree, pushed the archive over HTTPS, fetched and verified it, and restored a
+matching staged/unstaged/untracked snapshot. Wrong policy, existing
+destination, corrupt block and wrong recovery epoch controls refused.
+
+Only the archive ref was substituted for a unique evaluation namespace:
+`refs/heads/itonami/eval-native/10976b9c886e4a79/bafkreiftsnasczw4r6rifnyliaifpnvaiyywgioq3behvbidypbjt5p57a`.
+An independent GitHub API read observed root commit
+`eb46c9d8bc58a132510759b3b1232c553544ebc5` and tree
+`aa115b212c8fe77e9b1fbffd6fed555f47439a62`; the recursive tree contained
+eight block blobs and one manifest and was not truncated. The branch remains
+as synthetic evidence and does not change the canonical bot head.
+
+The composed archive fixture SHA-256 was
+`63a5730377b7d0f4c644392bcc8e121c7d64b20f129765e8f057c6a815780cc3`;
+the local observer/generator SHA-256 values were
+`162d4103df70592890acc78189ea6339593d7f4cdc2521161112786ed49edc21` /
+`1ea4c4d772ae9c59d06d71f7ac8fbf621ef6fe6d6403cddccd647a72bd5609ff`.
+They are test-only files in `/private/tmp/awai150-github-https-eval/`. The
+compiler and packager remain the diagnostic pins above. This one synthetic
+round trip does not qualify a production host credential broker, bot identity,
+concurrent or crash recovery, the full source-locked runtime, resource governor,
+or actual agent/bot inference.
