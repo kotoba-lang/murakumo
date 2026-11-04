@@ -152,3 +152,36 @@ server. The updated stored native cycle case passed with the FS2 diagnostic,
 source/image SHA-256
 `3fcc483a0319c5954603178de76e5e22042b68e6751727d9be0312de2488e387` /
 `09ccc048d6413e93b3b1101ce5f008c0a8ff59ec41b9a486871083a85e733e36`.
+
+## Xavier native systemd integration attempt
+
+On 2026-11-04, a Tailscale SSH session with strict host-key verification to
+Xavier compiled the actual selected count-reconciliation source with a real
+`pr-unit-state` and a synthetic profile/response. The diagnostic Linux ARM64
+compiler SHA-256 was
+`b6bc55a5424742fee501b7ae27e9cf7c5a7bf63538c98f5fda94bd63fdba6e6d`,
+source SHA-256 was
+`0af96af961dd0987468e787a5c1ed6177cbc160c1561fdd2a1a2890f94d2d032`,
+and generated static ELF SHA-256 was
+`c26d649f1e89ba3eb182e97d73d3988a0c39adb65fb0c4669464f62090e2deb3`.
+The unique test-owned transient oneshot unit reached `exited`, but the
+fixture returned exit 126 with `spawn/isolation-unavailable` before it could
+query the unit. Its synthetic busy marker remained. The owned unit was stopped;
+a separate SSH observation found `LoadState=not-found` and
+`ActiveState=inactive`. The running and absent unit cases did not run.
+
+On the same host, Linux `5.10.120-tegra`, a separate short-lived Python process
+called `close_range(100, 100, 0)` successfully and
+`close_range(100, 100, CLOSE_RANGE_CLOEXEC)` returned `EINVAL` (22). The pinned
+Amu ARM64 spawn source requests `close_range(3, UINT_MAX, 4)` and maps a
+close-range setup failure to `spawn/isolation-unavailable`. This makes the
+unsupported flag a strong explanation for the observed refusal, but the trap
+does not independently identify the exact failing setup stage. The call only
+involved a test-owned process; no existing service was stopped. The compiler
+and fixture used a 3-second soft / 4-second hard CPU limit, an 8 GiB virtual
+address ceiling (the runtime reserves large sparse mappings), and 50 ms RSS
+sampling with termination above 200 MiB; sampling is not a hard memory limit.
+Task-owned temporary directories were retained for inspection. This is not a
+qualified supervisor or a successful systemd integration; changing descriptor
+isolation or replacing this refusal requires native host and security-contract
+validation. No model, bot, network inference or state publication ran.
