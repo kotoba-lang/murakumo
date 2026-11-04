@@ -35,6 +35,16 @@ accordingly.
 
 ## Measured since
 
+S1 (merged 2026-11-04, kotoba-lang/amu#1813, amu ADR 0404, JUN-804): in an ordinary leaf function, f32 locals live in
+s16..s31 and `f32-from-bits` is an inline range check, so a kernel that reads f32 values from a vector stays a leaf.
+Results stay bit-exact with C twins built with `-ffp-contract=off`. Evidence: amu `docs/evidence/s1-fp-homes-20261103/`.
+Diagnostic only (loaded host, CPU time, 2026-11-03).
+
+- A 4,864 × 896 f32 matvec takes 19.9 ms with one accumulator (from 32.2) and 14.6 ms with four (from 26.1), against 6.2
+  and 2.1 ms in C.
+- S1's target of 2× of `cc -O2` is not met. ADR 0404 attributes the rest of the gap to vector access and the
+  per-element range check, which S2 addresses; S2 has not been measured.
+
 S7, first slice (2026-11-04, kotoba-lang/amu#1822, amu ADR 0405, JUN-819): a binary built by `bin/amu` runs the Q8_0
 kernel on this Mac's GPU through Metal, with no C loader. Its answer equals the CPU and C twins at 4,864 × 896, and a
 mutated kernel differs. Evidence: amu `docs/evidence/macos-metal-20261104/`. Diagnostic only (shared host, load average
@@ -49,12 +59,13 @@ mutated kernel differs. Evidence: amu `docs/evidence/macos-metal-20261104/`. Dia
 
 ## What stops a Kotoba engine on this Mac
 
-Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`; row 7 was updated for `15aef330f`.
+Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`; row 7 was updated for `15aef330f`, rows 1 and
+2 for `9ca2f3421`.
 
 | # | Gap | Where | Effect on inference |
 | --- | --- | --- | --- |
-| 1 | Floats are spelled as named operations (`f32-add`, `f32-mul`, …); the generic `+`/`*` refuse them (E2104), and `f32-from-bits` is a library call (a 32-bit range assert), so every kernel that reads f32 values from a vector makes a call per element and is not a leaf | amu `seed/21-check.kotoba` `ck-fl-code`, `ck-r6f-t-f32` | the Q8_0 kernel used fixed-point scales only because the probe used the wrong names |
-| 2 | Float code moves both operands through `d0`/`d1` with `fmov` for every operation; no value lives in an FP register | amu `seed/41-a64gen.kotoba:2073-2076` | every float op costs three to five instructions, and an f32 accumulator crosses the general/FP boundary twice per iteration (S1 addresses this) |
+| 1 | Floats are spelled as named operations (`f32-add`, `f32-mul`, …); the generic `+`/`*` refuse them (E2104). `f32-from-bits` no longer makes a call (S1), but its 32-bit range check still runs per element | amu `seed/21-check.kotoba` `ck-fl-code`, `ck-r6f-t-f32`; `seed/41-a64gen.kotoba` `gn-range-wrapper` | the Q8_0 kernel used fixed-point scales only because the probe used the wrong names |
+| 2 | Only f32 locals in ordinary leaf functions live in FP registers (S1). Everywhere else, including f64 and any function that makes a real call, float code moves both operands through `d0`/`d1` with `fmov` for every operation | amu `seed/41-a64gen.kotoba` `fh-admit`, `gn-fl-bin` | outside those leaves every float op still costs three to five instructions, and a binding whose value comes from an `if` stays in a general register |
 | 3 | No SIMD types or NEON lowering | spec and `41-a64gen` | M1 has FEAT_DotProd (`sdot`: 16 int8 MACs per instruction) and FEAT_FP16; the kernel unpacks each byte with two shifts |
 | 4 | No byte arrays; weights live in `:vector-i64` words | spec | 8 bytes per word plus unpacking; no `ldrsb`/`ld1` |
 | 5 | The Mac CLI host gives guests no filesystem, a 5-second `run` deadline and a 1 MiB source limit; the full-root route reads whole files only (wire 35, no range) | amu `examples/foundation-starter/MACOS-ARM64.md`, `docs/native-public-entry.md` | a 531 MB GGUF cannot reach a guest |
@@ -85,7 +96,7 @@ Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`; row 7 
 | Stage | Spec / compiler change | Gate | Target on this Mac |
 | --- | --- | --- | --- |
 | S0 · baseline | — (done: harness and this record) | Q8_0 kernel = C, mutant differs | 2.47 ms per 4,864 × 896 product |
-| S1 · scalar floats | `41-a64gen` keeps f32 locals in FP registers (FP homes, s16..s31) and writes f32 results into them in place; `f32-from-bits` becomes an inline range check. `:f16` storage and a fused `f32-fma` stay language decisions. **Built, diagnostic:** kotoba-lang/amu#1813 (ADR 0404): 4864 × 896 f32 matvec 32.2 → 19.9 ms (one accumulator) and 26.1 → 14.6 ms (four), C 6.2 / 2.1 ms; core adoption round and native CI pending | f32 matvec (1 and 4 accumulators), RMSNorm and an FP-home path corpus against C twins (`-ffp-contract=off`), bit-exact; mutants; `f32-from-bits` traps out of range; integer programs keep identical bytes | f32 matvec within 2× of `cc -O2`: not met; the rest of the gap is vector access and the per-element range check (S2) |
+| S1 · scalar floats | `41-a64gen` keeps f32 locals in FP registers (FP homes, s16..s31) and writes f32 results into them in place; `f32-from-bits` becomes an inline range check. `:f16` storage and a fused `f32-fma` stay language decisions. **Merged 2026-11-04:** kotoba-lang/amu#1813 (ADR 0404), with Mac core adoption and native ARM/x86 CI passing. Diagnostic: 4864 × 896 f32 matvec 32.2 → 19.9 ms (one accumulator) and 26.1 → 14.6 ms (four), C 6.2 / 2.1 ms | f32 matvec (1 and 4 accumulators), RMSNorm and an FP-home path corpus against C twins (`-ffp-contract=off`), bit-exact; mutants; `f32-from-bits` traps out of range; integer programs keep identical bytes | f32 matvec within 2× of `cc -O2`: not met; the rest of the gap is vector access and the per-element range check (S2) |
 | S2 · bytes | `:bytes` and `:vector-i8`/`:vector-u8` views with typed loads (`ldrsb`, `ldr q`); bounds checks hoisted out of counted loops whose range the checker proves | Q8_0 kernel checksum unchanged | ≤ 1.45 ms (scalar C) |
 | S3 · SIMD | fixed-width lane types (`:i8x16`, `:i32x4`, `:f32x4`, `:f16x8`) and forms that lower one-to-one: `dot-i8x16` → `sdot`, `fma-f32x4` → `fmla`, horizontal add → `addv` | Q8_0 and f32 kernels exact against scalar Kotoba and C | ≥ 40 G MACs/s on one core (llama.cpp's one thread: 44.8) |
 | S4 · model access | a `:model/read` capability naming one file and its sha256, granted per run; the Mac runtime maps it read-only through libSystem (`mmap`) and exposes it as `:bytes`; granted engines leave the 5-second `run` deadline | GGUF header and tensor-table admission on the real file (port of the AIUEOS `qwen35-gguf-*` objects to `qwen2`); a wrong digest is refused | 531 MB mapped, zero copies |
@@ -95,8 +106,8 @@ Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`; row 7 
 | S8 · murakumo serves it | `murakumo node join` with the Kotoba engine on a Mac: `/v1/chat/completions` from the S5–S7 binary, no external model server | the node's answer equals S5's tokens | JUN-740 on Apple silicon |
 
 S1–S3 are compiler and spec work with no model; S4–S5 need the host
-capability; S6–S7 need a new runtime surface in the Mac host. S2 and S3 can
-start in parallel with S1. The Linux route shares the spec and the checker,
+capability; S6–S7 need a new runtime surface in the Mac host. S1 is merged;
+S2 and S3 can run in parallel. The Linux route shares the spec and the checker,
 but its plain emitter (amu `seed/80`) needs its own lowering of each stage;
 kotoba-lang/amu#1667 (inline vector access) removes gap 8 first.
 
@@ -119,6 +130,7 @@ kotoba-lang/amu#1667 (inline vector access) removes gap 8 first.
 - JUN-701 / JUN-740: Amu-native engine through route C on the Xavier, and
   murakumo serving it.
 - JUN-377 (ADR 0375): GPU through Amu selfhost; S7 is its macOS route B.
+- JUN-804: this roadmap, and S1 (ADR 0404).
 - JUN-819 (ADR 0405): S7's first slice.
 - KOTOBA-168 (kotoba-lang/amu#1667): inline vector access for the plain
   emitter, which removes gap 8.
