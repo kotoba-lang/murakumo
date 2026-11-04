@@ -85,7 +85,13 @@
             (let [e (cp-cut b i) x (cp-piece p b i e first)]
               (if (= e (vector-count b)) 0 (recur e false))))
         flush (cp-fs "M" p "")]
-    (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
+    ;; A failed A read is represented as an empty vector. For an empty
+    ;; write, additionally prove that a regular zero-size file can be read;
+    ;; otherwise a read failure could compare equal to the empty CID.
+    (and (= flush "1")
+         (or (> (vector-count b) 0)
+             (and (= (cp-size p) 0) (cp-empty-readable? p) (= (cp-size p) 0)))
+         (= (cp-cid (cp-read p)) (cp-cid b)))))
 (defn- cp-put [store :string b :vector-i64] :string
   (let [cid (cp-cid b) p (str store "/" cid) status (cp-fs "D" p "")]
     ;; Even an existing block may be the unsynced remnant of a previous
@@ -258,36 +264,51 @@
                        (recur (+ i 1) (str out (if (= i 0) "" ",") "\"" (cp-chunk-id ids i) "\"")))) "")]
         (if (= chunks "") "" (cp-put store (cp-bytes (str "{\"chunks\":" chunks ",\"kind\":\"itonami.git-bundle/1\",\"size\":" size "}"))))))))
 
+;; Verify the shape before using size, chunk count or entries in loops.
+(defn- cp-bundle-index? [b :vector-i64] :bool
+  (if (not (json-canonical? b)) false
+    (let [chunks (json-member b 0 "chunks") size (cp-num b 0 "size")]
+      (and (= (json-kind b 0) 1) (= (json-count b 0) 3)
+           (= (cp-str b 0 "kind") "itonami.git-bundle/1") (> size 0) (<= size 67108864)
+           (>= chunks 0) (= (json-kind b chunks) 2) (= (json-count b chunks) (quot (+ size 131071) 131072))
+           (loop [i 0]
+             (if (= i (json-count b chunks)) true
+               (let [el (json-element b chunks i)]
+                 (and (= (json-kind b el) 3) (cp-raw? (json-string b el)) (recur (+ i 1))))))))))
+
 (defn- cp-bundle? [store :string cid :string] :bool
   (if (not (cp-block? store cid)) false
-    (let [b (cp-load store cid)]
-      (if (not (json-canonical? b)) false
+    (let [b (cp-capture-read (str store "/" cid))]
+      (if (not (and (cp-reloaded-block-valid? store cid b) (cp-bundle-index? b))) false
         (let [chunks (json-member b 0 "chunks") size (cp-num b 0 "size")]
-          (and (= (json-kind b 0) 1) (= (json-count b 0) 3)
-            (= (cp-str b 0 "kind") "itonami.git-bundle/1") (> size 0) (<= size 67108864)
-            (>= chunks 0) (= (json-kind b chunks) 2) (= (json-count b chunks) (quot (+ size 131071) 131072))
-            (loop [i 0]
-              (if (= i (json-count b chunks)) true
-                (if (arena-scope (let [el (json-element b chunks i) c (if (= (json-kind b el) 3) (json-string b el) "")]
-                      (and (cp-block? store c) (= (cp-size (str store "/" c)) (cp-chunk-size size i)))))
-                  (recur (+ i 1)) false)))))))))
+          (loop [i 0]
+            (if (= i (json-count b chunks)) true
+              (if (arena-scope (let [c (json-string b (json-element b chunks i))]
+                    (and (cp-block? store c) (= (cp-size (str store "/" c)) (cp-chunk-size size i)))))
+                (recur (+ i 1)) false))))))))
 
 (defn- cp-assemble-bundle [store :string cid :string] :bool
-  (let [b (cp-load store cid) chunks (json-member b 0 "chunks") size (cp-num b 0 "size") path (str store "/" cid ".bundle")
-        written (loop [i 0]
-                  (if (= i (json-count b chunks)) true
-                    (if (arena-scope
-                          (let [data (cp-load store (json-string b (json-element b chunks i)))
-                                z (loop [p 0]
-                                    (let [e (cp-cut data p) w (cp-piece path data p e (and (= i 0) (= p 0)))]
-                                      (if (= e (vector-count data)) 0 (recur e))))] true))
-                      (recur (+ i 1)) false)))
-        flush (cp-fs "M" path "")]
-    (and written (= flush "1") (= (cp-size path) size)
-      (loop [i 0]
-        (if (= i (json-count b chunks)) true
-          (if (arena-scope (= (cp-cid (cp-range path (* i 131072) (cp-chunk-size size i))) (json-string b (json-element b chunks i))))
-            (recur (+ i 1)) false))))))
+  (let [b (if (cp-raw? cid) (cp-capture-read (str store "/" cid)) (vector-alloc 0))
+        path (str store "/" cid ".bundle")]
+    (if (not (and (cp-reloaded-block-valid? store cid b) (cp-bundle-index? b))) false
+      (let [chunks (json-member b 0 "chunks") size (cp-num b 0 "size")
+            written (loop [i 0]
+                      (if (= i (json-count b chunks)) true
+                        (if (arena-scope
+                              (let [chunk (json-string b (json-element b chunks i))
+                                    data (cp-capture-read (str store "/" chunk))]
+                                (if (not (and (cp-reloaded-block-valid? store chunk data)
+                                              (= (vector-count data) (cp-chunk-size size i)))) false
+                                  (let [z (loop [p 0]
+                                            (let [e (cp-cut data p) w (cp-piece path data p e (and (= i 0) (= p 0)))]
+                                              (if (= e (vector-count data)) 0 (recur e))))] true))))
+                          (recur (+ i 1)) false)))
+            flush (if written (cp-fs "M" path "") "")]
+        (and written (= flush "1") (= (cp-size path) size)
+          (loop [i 0]
+            (if (= i (json-count b chunks)) true
+              (if (arena-scope (= (cp-cid (cp-range path (* i 131072) (cp-chunk-size size i))) (json-string b (json-element b chunks i))))
+                (recur (+ i 1)) false))))))))
 
 ;; Explicit allowlist only: ignored/registered paths are never captured as
 ;; untracked. FS2 U no-follow metadata exposes all permission bits; the
@@ -378,6 +399,12 @@
 
 (defn- cp-parent-dir [p :string] :string
   (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+;; Revalidate the exact bytes of every sensitive reload, not just an earlier
+;; closure check: a later failed read must not masquerade as an empty block.
+(defn- cp-reloaded-block-valid? [store :string cid :string data :vector-i64] :bool
+  (and (cp-raw? cid) (cp-capture-read-valid? (str store "/" cid) data)
+       (= (cp-cid data) cid)))
+
 (defn- cp-materialize [store :string b :vector-i64 dest :string] :string
   (let [p (cp-payload b) head (cp-str b p "head") stash (cp-str b p "stash")
         stage (str dest ".partial") ref (str "refs/itonami/checkpoints/" (if (= stash "none") head stash))
@@ -396,8 +423,10 @@
                 files (if (cp-ok? fsck)
                   (loop [i 0]
                     (if (= i (json-count b us)) true
-                      (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))]
-                        (if (and (cp-real-parents? stage (cp-str b u "path") true) (cp-absent? path) (cp-write path (cp-load store (cp-str b u "cid")))
+                      (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))
+                            cid (cp-str b u "cid") data (if (cp-raw? cid) (cp-capture-read (str store "/" cid)) (vector-alloc 0))]
+                        (if (and (cp-reloaded-block-valid? store cid data)
+                                 (cp-real-parents? stage (cp-str b u "path") true) (cp-absent? path) (cp-write path data)
                                  (= (cp-fs "H" path (cp-str b u "mode")) "1")
                                  (= (cp-fs "M" path "") "1") (= (cp-fs "M" (cp-parent-dir path) "") "1"))
                           (recur (+ i 1)) false)))) false)]
@@ -412,8 +441,12 @@
 ;; before publishing, and the host must keep the source store quiescent.
 ;; CID repeats are allowed (for example when policy and summary coincide).
 (defn- cp-closure-list [store :string cid :string b :vector-i64] :i64
-  (let [p (cp-payload b) bundle (cp-str b p "bundle") index (cp-load store bundle)
-        chunks (json-member index 0 "chunks") us (json-member b p "untracked")
+  (let [p (cp-payload b) bundle (cp-str b p "bundle")
+        index (if (cp-raw? bundle) (cp-capture-read (str store "/" bundle)) (vector-alloc 0))
+        chunks (if (json-canonical? index) (json-member index 0 "chunks") -1)
+        valid (and (cp-reloaded-block-valid? store bundle index) (cp-bundle-index? index))]
+    (if (not valid) (cp-result "checkpoint/missing-or-corrupt-block")
+      (let [us (json-member b p "untracked")
         a (cp-say (str "checkpoint/block " cid))
         d (cp-say (str "checkpoint/block " bundle))
         e (cp-say (str "checkpoint/block " (cp-str b p "policy")))
@@ -424,7 +457,7 @@
             (let [x (cp-say (str "checkpoint/block " (cp-str b (json-element b us n) "cid")))] (recur (+ n 1)))))
         j (loop [n 0] (if (= n (json-count index chunks)) 0
             (let [x (cp-say (str "checkpoint/block " (json-string index (json-element index chunks n))))] (recur (+ n 1)))))]
-    (cp-result "checkpoint/closure-complete")))
+        (cp-result "checkpoint/closure-complete")))))
 
 (defn- cp-restore [] :i64
   (let [store (cp-arg 1) cid (cp-arg 2)]
