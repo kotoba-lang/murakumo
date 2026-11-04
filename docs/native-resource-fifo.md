@@ -2,15 +2,29 @@
 
 `kotoba/resource_fifo.kotoba` implements a bounded, local, durable queue of
 up to 64 caller-supplied 64-character lowercase hex tickets. A trusted host
-provisions a private directory containing a stable `queue.lock` and an initial
-`queue` containing `RGQ1` followed by LF. The component takes a nonblocking
-filesystem flock before every operation. `enqueue` appends a unique ticket,
-`front` reads the head, `dequeue` removes only the exact head, and `cancel`
-removes an exact non-head ticket. The trusted host must authorize cancellation
-only for an abandoned request that has not launched; cancellation of the head
-is always refused. Malformed,
-missing or duplicate state, full queue, unknown staging and contention are
-refused. No refusal is retried in a polling loop.
+provisions a private directory containing a stable `queue.lock` and an empty
+`queue` containing exactly `RGQ3` followed by LF. `RGQ1` and `RGQ2` are
+intentionally incompatible and are refused. Migration requires the host to
+stop and exclude older writers, reconcile all existing queues, reservations
+and workloads, and migrate offline; changing the header alone is not a safe
+migration. The component takes a nonblocking filesystem flock before every
+operation. `enqueue` appends a unique ticket, `front` reads the head when no
+reservation or release is pending, and `cancel` removes an exact non-head
+ticket. The trusted host may cancel only an abandoned request that never
+launched; cancellation of the head is refused.
+
+The normal handoff is `reserve T`, independently run and supervise the owned
+workload, then only after independently proving its whole lifetime ended,
+`release T`, `dequeue T`, and `settle T`. `reserve` durably records the exact
+head and blocks other operations. `release` moves that marker to a pending
+barrier; it does not dequeue. `dequeue` requires the matching pending ticket,
+and `settle` checks the completed queue journal and archives the barrier.
+Other tickets and ordinary queue operations remain refused while the barrier
+exists. These operations require the host to serialize callers and protect
+the directory and its files. A reservation is not proof of capacity, workload
+identity or termination. An unknown write, lost response, malformed marker or
+interrupted transition requires trusted host reconciliation before dispatch;
+none authorizes a retry or release by itself.
 
 Writes use an fsynced `queue.intent`, an fsynced `queue.pending`, an atomic
 rename and directory fsync. After syncing the new queue, the intent is renamed
@@ -37,7 +51,7 @@ receive `fifo/busy`, so ordering among simultaneous arrivals is not provided.
 The CLI has no access-control boundary of its own. A trusted host must retain
 exclusive control of the directory and authorize dequeue only after proving
 that the previous workload and its entire process tree have stopped. There is
-no workload launcher, resource reservation or limit, local recovery agent,
+no workload launcher, capacity accounting or resource limits, local recovery agent,
 distributed fencing, Mac qualification, secure multi-user service, or
 production installation. Do not use this component to admit build, deployment,
 inference or bot workloads until the complete governor is qualified.
@@ -79,3 +93,12 @@ The [cancellation observation](evidence/awai151-fifo-cancel-20261103/)
 checks queue order, head refusal, recovery and a single lock race on a local
 Mac diagnostic runtime. Cancellation is not yet integrated with workload
 identity or a production governor.
+
+The current `RGQ3` reservation and release-barrier source was retested on one
+local Mac with the diagnostic compiler and FS2 packager. The fixture exercised
+old-format refusal, reserve/release/dequeue/settle, synthetic release sync
+faults, process kills at injected points, recovery and a single contention
+race; its source SHA-256 was
+`d9afabd660eb58465a59f1565fd51d28bf169946eebd47aee807ff3e5b96633a`.
+This does not establish real power-loss durability, host process supervision,
+actual workload termination or capacity admission.
