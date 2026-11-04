@@ -13,8 +13,7 @@
         compact-text (cp-text compact)
         extra (cp-bytes (str (string-substring compact-text 0 (- (string-length compact-text) 1)) ",\"reasoning_content\":\"private\"}"))
         malformed (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"done\",\"role\":\"assistant\"}}],\"model\":\"flint\",\"rawResponseDigest\":\"sha256:broken\"}")]
-    (and (= (pr-output-file-limit true) 1024) (= (pr-output-file-limit false) 262144)
-         (pr-local-flint? runtime) (pr-local? runtime) (not (pr-local-mtp? runtime))
+    (and (pr-local-flint? runtime) (pr-local? runtime) (not (pr-local-mtp? runtime))
          (not (pr-local-flint? bad-context)) (not (pr-local-flint? bad-budget))
          (not (pr-local-flint? (cp-bytes (string-replace-all (cp-text runtime) "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "bad"))))
          (not (pr-local-flint? (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"socket\":\"/private/socket\"}")))

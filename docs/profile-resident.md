@@ -563,13 +563,6 @@ The FS2 host must enforce the range bound and own these paths exclusively;
 metadata and range reads do not establish a same-FD snapshot. This source
 change has not been qualified on a native runtime or production host.
 
-The Linux systemd submission candidate also sets `LimitFSIZE` for its curl
-process to 1024 bytes for token-count responses and 262144 bytes for model
-responses. A failed or truncated transfer must remain an unknown result; this
-limit does not replace bounded reads, aggregate disk admission, process-tree
-control, or a native macOS transport. This configuration has not been
-qualified with the production systemd/curl combination.
-
 ## Flint token preflight candidate
 
 Before a Flint generation the candidate sends the same system and conversation
