@@ -40,3 +40,19 @@ dependencies and test-only host assembly, not a qualified selfhost/import
 closure or a production provider. They do not run token counting and dispatch,
 validate a live server, authenticate model weights, prove the saved response
 origin, exercise GitHub state, qualify the governor, or start an agent or bot.
+
+## Refusal-bearing responses
+
+The response validator now rejects an assistant message with a non-null
+`refusal` member, even when it also contains answer text and `finish_reason`
+is `stop`. An absent or null member remains acceptable. A signed local native
+source-unity fixture passed absent, null, string and object refusal cases;
+removing the guard made its negative control fail. Source/image SHA-256:
+`e4b0f9c3188e542f74f210033109cd2568377899fbd1794e22339f995b3e87d6` /
+`c3c5bfa5e3924d4a8cf095294d710b47927dcca7d6248bba066334b33118125e`.
+The two previously saved responses above remained acceptable in a second
+native fixture, source/image SHA-256:
+`8e5c4a60ce37cefef423adcf05ad29e50bc6fef58a9ba11110760f71fc3d4e33` /
+`123e786487551df1dfad8ac997969373c062a99fb0bd864a6cd1c7c9a3435a94`.
+Each native process had a three-second CPU cap. The compiler and provider pins
+and the scope limitations are unchanged; no live inference was run.

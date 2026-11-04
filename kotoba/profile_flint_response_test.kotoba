@@ -3,6 +3,9 @@
 
 (defn test-flint-response [] :bool
   (let [good (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"reasoning_content\":\"private\"}}],\"model\":\"flint\"}")
+        null-refusal (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"refusal\":null}}],\"model\":\"flint\"}")
+        refusal (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"refusal\":\"declined\"}}],\"model\":\"flint\"}")
+        malformed-refusal (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"refusal\":{}}}],\"model\":\"flint\"}")
         error-response (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\"}}],\"error\":{\"message\":\"failed\"},\"model\":\"flint\"}")
         error-null (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\"}}],\"error\":null,\"model\":\"flint\"}")
         wrong-choices (cp-bytes "{\"choices\":{},\"model\":\"flint\"}")
@@ -20,6 +23,10 @@
         legacy-null (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"function_call\":null}}],\"model\":\"flint\"}")
         compact (flint-compact "flint" good)]
     (and (= (flint-response-problem "flint" good) "flint/ok")
+         (= (flint-response-problem "flint" null-refusal) "flint/ok")
+         (= (flint-response-problem "flint" refusal) "flint/refusal-response")
+         (= (flint-response-problem "flint" malformed-refusal) "flint/refusal-response")
+         (= (vector-count (flint-compact "flint" refusal)) 0)
          (= (flint-response-problem "flint" error-response) "flint/error-response")
          (= (flint-response-problem "flint" error-null) "flint/error-response")
          (= (flint-response-problem "flint" wrong-choices) "flint/choices-refused")
