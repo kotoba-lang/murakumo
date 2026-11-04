@@ -554,7 +554,11 @@
                         rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs "M" repo "") "0")]
                     (if (not usable) "profile/response-not-replicable"
-                      (if (= sync "1") (pr-flint-finish runtime cache turn count-id (str "profile/step-completed " next " " cid)) "profile/state-publication-failed"))))))))))))))))
+                      ;; Rename or directory sync may have taken effect even
+                      ;; when its acknowledgement is lost. Preserve that
+                      ;; ambiguity for host reconciliation; the host must not
+                      ;; retry inference without resolving the outcome.
+                      (if (= sync "1") (pr-flint-finish runtime cache turn count-id (str "profile/step-completed " next " " cid)) "profile/state-publication-unknown"))))))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
   (if (pr-local-flint? runtime) (cp-num runtime 0 "maxTokens")
