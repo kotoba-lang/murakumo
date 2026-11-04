@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix='awai-flint-query-deadline-',dir='/priva
   q='(< (pr-window-seconds now deadline after-query seconds) 1)'; assert base.count(q)==2
   muttext=(base+entry).replace(q,'false').replace('(> (pr-window-seconds after-query deadline after-read seconds) 0)','true').replace('(> (pr-window-seconds after-query deadline (pr-wall-ms) seconds) 0)','true')
   mutant=build(name+'-mutant',muttext)
-  
+
   for mode in ('slow','slow-read'):
    (root/'mark').unlink(missing_ok=True);run([mutant,mode],1);print('PASS',name,mode,'deadline guard mutant refused',flush=True)
   print('SOURCE_SHA',name,hashlib.sha256((base+entry).encode()).hexdigest(),flush=True)
