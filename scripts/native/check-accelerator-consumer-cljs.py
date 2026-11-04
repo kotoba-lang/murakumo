@@ -31,9 +31,10 @@ def main():
 (def classes {:resident 0 :opportunistic 1})
 (def oracle-usable (atom 100))
 (def oracle-aperture (atom nil))
+(def oracle-grant (atom 100))
 (defn o [op args] (let [v (case op "aperture-bytes" (or @oracle-aperture (apply + args)) "headroom-default-milli" 0
                        "usable-bytes" @oracle-usable "admit-code" (if (= args [0 76 100 20 5]) 3 0)
-                       "granted-bytes" (if (= args [0 100 20 5]) 75 100) "code-name" "admitted")]
+                       "granted-bytes" (if (= args [0 100 20 5]) 75 @oracle-grant) "code-name" "admitted")]
                     (if (and (number? v) (js/Number.isSafeInteger v)) (js/BigInt v) v)))
 '''
     cases = r'''
@@ -65,6 +66,19 @@ def main():
       (assert (= :unmeasured (:reason d))) (assert (false? (:admitted? d)))
       (assert (= 0 (:granted d)))))
   (reset! oracle-usable 100)
+  (let [busy (assoc good :claims [{:pid "1" :comm "resident" :bytes 20}
+                                 {:pid "2" :comm "other" :bytes 10}])
+        registry {"1" :resident}]
+    ;; The oracle passes its fixed sentinel but returns an excessive grant.
+    (let [d (admit busy registry :resident 70 0)]
+      (assert (= :oracle-inconsistent (:reason d))) (assert (= 0 (:granted d))))
+    (reset! oracle-grant 70)
+    ;; A plausible grant does not excuse a false admission of 71 into 70.
+    (let [d (admit busy registry :resident 71 0)]
+      (assert (= :oracle-inconsistent (:reason d))) (assert (= 0 (:granted d))))
+    (let [d (admit busy registry :resident 70 0)]
+      (assert (:admitted? d)) (assert (= 70 (:granted d)))))
+  (reset! oracle-grant 100)
   (reset! oracle-usable 90)
   (assert (= 90 (usable-bytes good 100)))
   (reset! oracle-usable 8998192055486251)
@@ -137,6 +151,8 @@ def main():
     for guard, replacement in [
         ('(= aperture (+ vram-total gtt-total))', 'true'),
         ('(and (integer? usable) (= usable expected))', 'true'),
+        ('(<= 0 candidate-grant remaining)', '(>= candidate-grant 0)'),
+        ('(or (not= candidate-code 0) (<= request-bytes remaining))', 'true'),
     ]:
         if program.count(guard) != 1:
             raise ValueError('oracle capacity mutation anchor changed')

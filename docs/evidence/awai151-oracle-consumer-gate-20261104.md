@@ -221,3 +221,15 @@ source and KIR bytes did not change during the call. Consumer SHA-256 was
 `92d24b3953efb030e131bba45e8370fdf47f20f322867ccf505277e598e94766`.
 This does not pin the complete Kotoba dependency closure or qualify the stale
 oracle, live probe, corrected KIR or native governor.
+
+The consumer now independently rejects an oracle admission larger than the
+observed remaining usable capacity and rejects an oracle grant outside that
+capacity, even if the oracle passes the fixed stale-KIR sentinel. A selected
+ClojureScript diagnostic used an intentionally inconsistent BigInt-returning
+oracle: excessive grant and excessive admitted request were refused with zero
+grant; an exactly fitting request was admitted. Removing each capacity check
+made its respective control fail. The real shipped stale KIR still refused
+through the product-shell diagnostic. Consumer SHA-256 was
+`cd8ab3c0b24fb4db68d4f88a7ee876f759b7d1bc0123a3fee9235e5f6943e457`.
+This is a safety ceiling, not qualification of the real observation path,
+other oracle semantics, corrected KIR, workload isolation or governor.

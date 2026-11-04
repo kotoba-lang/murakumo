@@ -194,17 +194,35 @@
         unreadable (:unreadable-claims probe)
         observed? (and valid-claims? (integer? unreadable) (zero? unreadable))
         measured? (and (integer? usable) (<= 0 usable 9007199254740991))
+        known-class? (contains? classes klass)
+        valid-request? (and (integer? request-bytes) (<= 1 request-bytes 9007199254740991))
+        eligible? (and oracle-current? observed? measured? known-class? valid-request?)
+        ;; A known counterexample alone does not qualify every oracle result.
+        ;; All holders still consume capacity until their release is observed.
+        remaining (if (and observed? measured?) (max 0 (- usable res opp)) 0)
+        candidate-code (if eligible? (oi "admit-code" [k request-bytes usable res opp]) nil)
+        candidate-grant (if eligible? (oi "granted-bytes" [k usable res opp]) nil)
+        consistent? (and (integer? candidate-code) (<= 0 candidate-code 7)
+                         (integer? candidate-grant) (<= 0 candidate-grant remaining)
+                         (or (not= candidate-code 0) (<= request-bytes remaining)))
         code (cond (not (and oracle-current? observed?)) 7
                    (not measured?) 1
-                   :else (or (oi "admit-code" [k request-bytes usable res opp]) 7))
+                   (not known-class?) 5
+                   (not valid-request?) 6
+                   (not consistent?) 7
+                   :else candidate-code)
         reason (cond (not oracle-current?) :oracle-unqualified
                      (not observed?) :invalid-observation
                      (not measured?) :unmeasured
+                     (not known-class?) :unknown-class
+                     (not valid-request?) (if (and (integer? request-bytes) (<= request-bytes 0))
+                                            :non-positive-request :invalid-request)
+                     (not consistent?) :oracle-inconsistent
                      :else (keyword (o "code-name" [code])))]
     {:admitted? (zero? code)
      :code code
      :reason reason
-     :granted (if (and oracle-current? observed? measured?) (or (oi "granted-bytes" [k usable res opp]) 0) 0)
+     :granted (if (and eligible? consistent?) candidate-grant 0)
      :usable usable
      :resident res
      :opportunistic opp}))

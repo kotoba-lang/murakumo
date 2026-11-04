@@ -154,6 +154,25 @@
   (doseq [r [0 -1 (- (gb 5))]]
     (is (= :non-positive-request (:reason (accel/admit gad {} :resident r))))))
 
+(deftest oracle-results-cannot-exceed-observed-remaining-capacity
+  (let [probe {:claims [{:pid "1" :comm "head" :bytes 20}
+                        {:pid "2" :comm "other" :bytes 10}]
+               :unreadable-claims 0}
+        grant (atom 100)]
+    (with-redefs [accel/usable-bytes (fn [& _] 100)
+                  oracle/require-ready! (fn [_] true)
+                  oracle/call (fn [_ export args]
+                                (case export
+                                  "admit-code" (if (= args [0 76 100 20 5]) 3 0)
+                                  "granted-bytes" (if (= args [0 100 20 5]) 75 @grant)
+                                  "code-name" "admitted"))]
+      (let [d (accel/admit probe {"1" :resident} :resident 70 0)]
+        (is (= :oracle-inconsistent (:reason d))) (is (= 0 (:granted d))))
+      (reset! grant 70)
+      (let [d (accel/admit probe {"1" :resident} :resident 71 0)]
+        (is (= :oracle-inconsistent (:reason d))) (is (= 0 (:granted d))))
+      (is (:admitted? (accel/admit probe {"1" :resident} :resident 70 0))))))
+
 ;; ── the probe half: measuring must be able to say it could not ─────────
 
 (deftest probe-parsing-distinguishes-absent-from-zero
