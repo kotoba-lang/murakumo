@@ -58,12 +58,15 @@ def main():
     false_missing = source.replace(missing_guard, 'status "0"')
     no_rename = {name: source.replace(rename_guard, response)
                  for name, response in [('no-rename', '"0"'), ('missing-frame', '""')]}
+    claim_start = source.index('(defn- rq-claim-ticket')
+    claim_end = source.index('(defn- rq-claimed?', claim_start)
+    claim_body = source[claim_start:claim_end]
     read_faults = {}
     for name, call in [('stage-read-fault', '(rq-read-bounded pending 70)'),
                        ('published-read-fault', '(rq-read-bounded path 70)')]:
-        if source.count(call) != 1:
+        if claim_body.count(call) != 1:
             raise ValueError('claim read fault anchor changed: ' + name)
-        read_faults[name] = source.replace(call, '""')
+        read_faults[name] = source[:claim_start] + claim_body.replace(call, '""') + source[claim_end:]
     reserve_guard = ('(not (= (string-substring state 5 69) ticket)) "fifo/not-front"\n'
                      '                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"')
     if source.count(reserve_guard) != 1:
@@ -76,15 +79,21 @@ def main():
     for name, anchor in [
         ('inspect-queue-sync', '(= (rq-fs "M" (str root "/queue") "") "1")'),
         ('inspect-claim-sync', '(= (rq-fs "M" (str root "/queue.used." ticket) "") "1")'),
+        ('inspect-hold-sync', '(= (rq-fs "M" (str root "/queue.reservation") "") "1")'),
+        ('inspect-release-sync', '(= (rq-fs "M" (str root "/queue.release.pending") "") "1")'),
         ('inspect-dir-sync', '(= (rq-fs "M" root "") "1")'),
     ]:
         if sync_body.count(anchor) != 1:
             raise ValueError('inspect sync fault anchor changed: ' + name)
         sync_faults[name] = source[:sync_start] + sync_body.replace(anchor, anchor.replace('"1")', '"0")'), 1) + source[sync_end:]
-    bypass_anchor = '(not (rq-inspect-sync? root ticket)) "fifo/claim-unknown"'
+    bypass_anchor = '(not (rq-inspect-sync? root ticket hold-status release-status)) "fifo/claim-unknown"'
     if source.count(bypass_anchor) != 1:
         raise ValueError('inspect sync guard mutation anchor changed')
     sync_bypass = sync_faults['inspect-claim-sync'].replace(bypass_anchor, 'false "fifo/claim-unknown"')
+    barrier_guard = '(not (rq-inspect-barrier-valid? root state hold-status release-status)) "fifo/reservation-unknown"'
+    if source.count(barrier_guard) != 1:
+        raise ValueError('inspect barrier guard mutation anchor changed')
+    barrier_bypass = source.replace(barrier_guard, 'false "fifo/reservation-unknown"')
     pause_helper = ('(defn- rq-claim-test-pause [] :bool\n'
                     '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
                     '        sent (typed-cap-call 37 :string :string s)] true))\n')
@@ -135,6 +144,7 @@ def main():
             read_fault_images = {name: build(name, text) for name, text in read_faults.items()}
             sync_fault_images = {name: build(name, text) for name, text in sync_faults.items()}
             sync_bypass_image = build('inspect-sync-bypass', sync_bypass)
+            barrier_bypass_image = build('inspect-barrier-bypass', barrier_bypass)
             pause_images = {name: build(name, text) for name, text in pause_sources.items()}
             q = root / 'q'; q.mkdir(); (q / 'queue.lock').write_text(''); (q / 'queue').write_text('RGQ5\n')
             def op(img, action, expected, ticket=None, code=0):
@@ -151,6 +161,8 @@ def main():
                 op(image, 'inspect', 'fifo/claim-queued', ticket)
                 if ticket == a:
                     for name, fault_image in sync_fault_images.items():
+                        if name in ('inspect-hold-sync', 'inspect-release-sync'):
+                            continue
                         op(fault_image, 'inspect', 'fifo/claim-unknown', ticket, 1)
                         if (q / 'queue').read_text() != 'RGQ5\n' + ticket + '\n':
                             raise ValueError('sync failure changed queue: ' + name)
@@ -171,9 +183,15 @@ def main():
                 op(image, 'reserve', 'fifo/reserved', ticket)
                 op(image, 'inspect', 'fifo/claim-queued', ticket)
                 if ticket == a:
+                    op(sync_fault_images['inspect-hold-sync'], 'inspect', 'fifo/claim-unknown', ticket, 1)
                     hold = q / 'queue.reservation'; hold_content = hold.read_text()
                     hold.write_text('malformed')
                     op(image, 'inspect', 'fifo/reservation-unknown', ticket, 1)
+                    other_marker = q / ('queue.used.' + b)
+                    other_marker.write_text('RGU1\n' + b + '\n')  # invalid synthetic state, not migration
+                    hold.write_text('RGH1\n' + b + '\n')
+                    op(image, 'inspect', 'fifo/reservation-unknown', ticket, 1)
+                    other_marker.unlink()
                     hold.write_text(hold_content)
                     marker.unlink()
                     op(image, 'release', 'fifo/ticket-unknown', ticket, 1)
@@ -185,6 +203,7 @@ def main():
                 op(image, 'release', 'fifo/release-pending', ticket)
                 op(image, 'inspect', 'fifo/claim-queued', ticket)
                 if ticket == a:
+                    op(sync_fault_images['inspect-release-sync'], 'inspect', 'fifo/claim-unknown', ticket, 1)
                     pending_release = q / 'queue.release.pending'; release_content = pending_release.read_text()
                     pending_release.write_text('malformed')
                     op(image, 'inspect', 'fifo/reservation-unknown', ticket, 1)
@@ -204,6 +223,8 @@ def main():
                     if (q / 'queue.reservation.settled').exists():
                         raise ValueError('missing claim settled recovery')
                     marker.write_text(content)
+                    op(image, 'inspect', 'fifo/reservation-unknown', ticket, 1)
+                    op(barrier_bypass_image, 'inspect', 'fifo/claim-recorded', ticket)
                     op(image, 'settle-recover', 'fifo/settled', ticket)
                 else:
                     op(image, 'settle', 'fifo/settled', ticket)

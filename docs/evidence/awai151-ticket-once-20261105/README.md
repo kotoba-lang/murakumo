@@ -236,8 +236,8 @@ not production-host, power-loss, authenticated-supervisor or governor proof.
 ## Sync before a successful inspection
 
 A process may die after a claim is visible but before its sync completes.
-Before `inspect` reports queued or recorded, the current candidate syncs the
-queue file, the ticket claim and their parent directory. A failed or unknown
+Before `inspect` reports queued or recorded, it syncs the queue file, the
+ticket claim, any active barrier and their parent directory. A failed or unknown
 sync returns `fifo/claim-unknown`; it is not a durable observation. This does
 not change queue contents or release a reservation. It relies on the trusted
 provider, filesystem sync semantics and exclusive host ownership; it is not
@@ -255,6 +255,30 @@ signed FIFO SHA-256:
 `36a1d9fd434707a36dedd5687e956803c053438011eaa46e5ddd780aa04a2101`;
 observer SHA-256:
 `2ef026960eb5661c0042cdadf827b1f1ce7832cb43eb2b7490bcbf864b58e204`.
+
+## Refuse inconsistent barriers and incomplete settlement
+
+The latest inspection also checks that an active hold has a valid claim and
+matches the queue front, that a pending release has a valid claim and is
+either the front or absent from the queue, and that an idle queue has cleared
+settlement history. It syncs the active hold or release marker before
+returning a successful observation. An unresolved settlement therefore stays
+unknown even if the ticket's claim and queue bytes can be read.
+
+Local and three-Mac native diagnostics passed using the #1796 diagnostic
+packager `28aa2445...`. Synthetic tests refused a validly formatted hold for
+the wrong ticket and a settlement interrupted between marker rename and
+receipt; a barrier-check bypass mutant reported the latter as recorded.
+Injected failed hold/release syncs also refused. The adapted bounded FIFO
+regression passed locally. Source SHA-256:
+`9d874edf1a2b1ec9967f9b57ee8688d20eea47d4d2a0f68b2121295809165f65`;
+signed FIFO SHA-256:
+`c5382649d28d3f3b06985e26a35e28ca821a69cdf556d3ba4aaa9c6b432fdf8e`;
+observer SHA-256:
+`cfa6f911054b9718dafd40e9e30274296549cde8608e14a86f411a68f3148510`.
+The three hosts reported task directory removal. These are simulated states
+and response faults, not actual fsync failure, power-loss recovery, process
+tree or production governor validation.
 
 ## Existing Mac bootstrap provider observation
 
