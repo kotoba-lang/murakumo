@@ -1,0 +1,27 @@
+;; Native FS2 cases; the host supplies an exclusive fresh cache directory and
+;; serializes access. These do not emulate sync failure or establish a fence.
+(ns murakumo.flint-busy-cycle-cases (:export [test-flint-busy-cycle]))
+
+(defn test-flint-busy-cycle [cache :string] :bool
+  (let [instance "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        other "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        turn "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        count "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        last (str cache "/server-" instance ".last")
+        settled (str cache "/server-" instance ".settled")
+        previous (str cache "/server-" instance ".previous")
+        busy (str cache "/server-" instance ".busy")
+        uncertain (str cache "/server-" other ".last")]
+    (and (cp-safe-absolute? cache)
+         (= (cp-fs "D" busy "") "0") (= (cp-fs "D" last "") "0")
+         (= (cp-fs "D" settled "") "0") (= (cp-fs "D" previous "") "0")
+         (= (cp-fs "D" uncertain "") "0")
+         (pr-flint-busy-reserve cache instance turn count)
+         (pr-flint-busy-release cache instance turn count)
+         (= (cp-fs "D" busy "") "0") (= (cp-fs "D" settled "") "1")
+         (pr-flint-busy-reserve cache instance turn count)
+         (= (cp-fs "D" busy "") "1") (= (cp-fs "D" settled "") "0")
+         (= (cp-fs "D" previous "") "1")
+         (cp-write uncertain (pr-flint-busy-text turn count))
+         (not (pr-flint-busy-reserve cache other turn count))
+         (= (cp-fs "D" (str cache "/server-" other ".busy") "") "0"))))

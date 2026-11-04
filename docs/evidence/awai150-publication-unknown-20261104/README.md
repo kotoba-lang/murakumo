@@ -74,3 +74,45 @@ The test does not exercise real systemd, production credentials, lock
 ownership, response loss after marker rename, provider I/O errors, a crash,
 power loss or the full source-locked application. Its synthetic directories
 are retained for inspection; no user workload or service was changed.
+
+## Release acknowledgement barrier
+
+The earlier busy-marker protocol could return unknown after moving `.busy` to
+`.last` yet admit a new turn, because the next reserve observed no `.busy`.
+A native local FS2 fixture reproduced that sequence after a test wrapper
+withheld the directory-sync success response: the old code admitted the next
+reservation while both old `.last` and new `.busy` existed. The fixture source
+and image SHA-256 were `202f56a04d4956599dc170e303a85233f6681a24d15a5e4814a7e40865e93f46`
+and `74677cca0fee152b55ff37087c83e59b0f345e488904364948eacaa4ae4d190a`.
+
+Release now writes and syncs a matching `.settled` receipt only after the
+`.last` rename and directory sync report success. A new reservation must see
+both absent (initial state), or validate and sync both matching markers, move
+`.settled` to `.previous`, sync that transition, and only then create `.busy`.
+A matching existing `.busy` is reusable only with `.settled` absent. Any
+missing, malformed or unacknowledged state refuses; older `.last` markers
+without a receipt require host reconciliation and are not migrated silently.
+After verifying the already-visible output and state, `reconcile-published` can
+also re-sync a matching `.last` and establish the receipt if release was
+interrupted. A count-only release without that evidence still requires separate
+host reconciliation. The host must enforce exclusive ownership and preserve
+all markers; this is not a distributed fence or a process supervisor.
+
+With the same real local FS2 provider and synthetic fixture, the injected
+lost-sync response left `.last` without `.settled`, returned unknown and
+refused a new reservation. A separate retry, with the fault removed, verified
+the published state and wrote `.settled` without starting inference. Source /
+image SHA-256: `cdb179a96f2524e606133245cd2105ecf2721492aad7ca9d8c4973cffcbcb1d6` /
+`83bb77c5b05896f9fd8d1466222ab5a9a54f6b1ca24c87bca2c8f12a3155afd7`.
+A successful release followed by a second reservation also passed, including
+receipt consumption; source / image SHA-256:
+`e36de5680a6ea1f10db82f87cfa91d42b560e5b17ccd8c609b0ccbdd90976ad3` /
+`47e5af5be05020932d2bc42a062d663d162b9c13526f732dc6320d032e911589`.
+The regular success and state-mismatch, pending, missing-response and wrong-ID
+cases passed again. The systemd unit state and sync failure were injected;
+no actual sync error, power loss, multi-writer race, service or model was run.
+The repository's `test/native/flint_busy_cycle_cases.kotoba` records the normal
+release/reacquire cycle and an unpaired `.last` refusal. It ran with the local
+native FS2 diagnostic, source/image SHA-256
+`bb3021dc8f4dda862dfa18c524510a28825acb63515bb2c3f804608b40a28489` /
+`f8f9fae20aa09465cfdefe3e4107f4481fa3d85955d465f448e7ea2901aef470`.

@@ -346,20 +346,60 @@
 ;; prove that an old instance stopped when a new identifier is provisioned.
 (defn- pr-flint-busy-text [turn :string count-id :string] :vector-i64
   (cp-bytes (str "flint-busy/2\n" turn "\n" count-id "\n")))
+(defn- pr-flint-busy-valid? [b :vector-i64] :bool
+  (let [s (cp-text b)]
+    (and (= (vector-count b) 143) (= (string-length s) 143)
+         (= (string-substring s 0 13) "flint-busy/2\n")
+         (= (string-substring s 77 78) "\n") (= (string-substring s 142 143) "\n")
+         (cp-hex? (string-substring s 13 77) 64) (cp-hex? (string-substring s 78 142) 64))))
 (defn- pr-flint-busy-reserve [cache :string instance :string turn :string count-id :string] :bool
   (let [path (str cache "/server-" instance ".busy") expected (pr-flint-busy-text turn count-id)
+        last (str cache "/server-" instance ".last")
+        settled (str cache "/server-" instance ".settled")
+        previous (str cache "/server-" instance ".previous")
         status (cp-fs "D" path "")]
     (and (cp-safe-absolute? cache) (cp-hex? instance 64) (cp-hex? turn 64) (cp-hex? count-id 64)
-         (cond (= status "0") (cp-write path expected)
-               (= status "1") (= (cp-cid (pr-read-bounded path 256)) (cp-cid expected))
+         (cond (= status "0")
+               (let [ls (cp-fs "D" last "") ss (cp-fs "D" settled "")
+                     clear (cond (and (= ls "0") (= ss "0")) true
+                                 (and (= ls "1") (= ss "1"))
+                                   (let [a (pr-read-bounded last 256) b (pr-read-bounded settled 256)]
+                                     (and (pr-flint-busy-valid? a) (= (cp-cid a) (cp-cid b))
+                                          (= (cp-fs "M" last "") "1") (= (cp-fs "M" settled "") "1")
+                                          (= (cp-fs "M" cache "") "1")
+                                          (= (cp-fs "L" settled previous) "1") (= (cp-fs "M" cache "") "1")))
+                                 :else false)]
+                 (and clear (cp-write path expected)))
+               (= status "1") (and (= (cp-fs "D" settled "") "0")
+                                    (= (cp-cid (pr-read-bounded path 256)) (cp-cid expected)))
                :else false)
          (= (cp-fs "M" path "") "1") (= (cp-fs "M" cache "") "1"))))
 (defn- pr-flint-busy-release [cache :string instance :string turn :string count-id :string] :bool
   (let [path (str cache "/server-" instance ".busy") last (str cache "/server-" instance ".last")
+        settled (str cache "/server-" instance ".settled")
         expected (pr-flint-busy-text turn count-id)]
     (and (cp-safe-absolute? cache) (cp-hex? instance 64) (cp-hex? turn 64) (cp-hex? count-id 64)
+         (= (cp-fs "D" settled "") "0")
          (= (cp-fs "D" path "") "1") (= (cp-cid (pr-read-bounded path 256)) (cp-cid expected))
-         (= (cp-fs "M" path "") "1") (= (cp-fs "L" path last) "1") (= (cp-fs "M" cache "") "1"))))
+         (= (cp-fs "M" path "") "1") (= (cp-fs "L" path last) "1") (= (cp-fs "M" cache "") "1")
+         (cp-write settled expected) (= (cp-fs "M" cache "") "1"))))
+
+;; Only after separately verifying the already-published state, a trusted host
+;; can finish an interrupted marker release. It must retain exclusive cache
+;; ownership throughout; this does not establish workload termination.
+(defn- pr-flint-busy-reconcile-release [cache :string instance :string turn :string count-id :string] :bool
+  (let [path (str cache "/server-" instance ".busy") last (str cache "/server-" instance ".last")
+        settled (str cache "/server-" instance ".settled") expected (pr-flint-busy-text turn count-id)
+        ss (cp-fs "D" settled "")]
+    (and (cp-safe-absolute? cache) (cp-hex? instance 64) (cp-hex? turn 64) (cp-hex? count-id 64)
+         (= (cp-fs "D" path "") "0") (= (cp-fs "D" last "") "1")
+         (= (cp-cid (pr-read-bounded last 256)) (cp-cid expected))
+         (= (cp-fs "M" last "") "1") (= (cp-fs "M" cache "") "1")
+         (cond (= ss "0") (cp-write settled expected)
+               (= ss "1") (and (= (cp-cid (pr-read-bounded settled 256)) (cp-cid expected))
+                                  (= (cp-fs "M" settled "") "1"))
+               :else false)
+         (= (cp-fs "M" cache "") "1"))))
 
 ;; A completed count can be released without generation only when the durable
 ;; turn marker is explicitly absent. Unknown count, marker or sync outcomes
@@ -457,7 +497,8 @@
                         (= (cp-fs "M" cache "") "1")
                         (= (cp-fs "M" output "") "1") (= (cp-fs "M" outdir "") "1")
                         (= (cp-fs "M" statepath "") "1") (= (cp-fs "M" repo "") "1"))]
-        (if (and synced (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id))
+        (if (and synced (or (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id)
+                            (pr-flint-busy-reconcile-release cache (cp-str runtime 0 "serverInstance") turn count-id)))
           (str "profile/publication-reconciled " next " " cid)
           "profile/state-publication-unknown")))))
 
