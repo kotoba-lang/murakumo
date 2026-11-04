@@ -28,6 +28,7 @@ def main():
     p.add_argument('--compiler-sha256', required=True)
     p.add_argument('--packager', type=Path, required=True)
     p.add_argument('--packager-sha256', required=True)
+    p.add_argument('--local-archive', action='store_true', help='also exercise a stubbed-private local bare Git remote')
     a = p.parse_args()
     if (platform.system(), platform.machine()) != ('Darwin', 'arm64'):
         raise ValueError('Apple Silicon macOS required')
@@ -38,7 +39,8 @@ def main():
         fixture.mkdir(mode=0o700)
         for name in ('repo', 'store', 'logs', 'input', 'home'):
             (fixture / name).mkdir(mode=0o700)
-        gen = subprocess.run(['/usr/bin/python3', str(HERE / 'generate-checkpoint-git-fixture.py'),
+        generator = 'generate-checkpoint-local-archive.py' if a.local_archive else 'generate-checkpoint-git-fixture.py'
+        gen = subprocess.run(['/usr/bin/python3', str(HERE / generator),
                               '--fixture-parent', str(root), '--output', str(root / 'fixture.kotoba')],
                              check=True, capture_output=True, text=True, timeout=30)
         receipt = json.loads(gen.stdout)
@@ -49,6 +51,9 @@ def main():
                                capture_output=True, timeout=15, check=True)
             return r.stdout.decode()
         git('repo', 'init', '--quiet', '--template=')
+        if a.local_archive:
+            (fixture / 'remote.git').mkdir(mode=0o700)
+            git('remote.git', 'init', '--bare', '--quiet', '--template=')
         (fixture / 'repo/tracked.txt').write_text('base\n')
         git('repo', 'add', '--', 'tracked.txt')
         git('repo', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
@@ -97,6 +102,14 @@ def main():
                            check=True, capture_output=True, timeout=30)
             def guest(args, expected=0):
                 return command([image, *args], expected, timeout=45, stderr_ok=True).decode()
+            if a.local_archive:
+                guest(['config-test', '/fixture3/repo'])
+                git('repo', 'config', '--local', 'credential.helper', 'synthetic-helper')
+                try: guest(['config-test', '/fixture3/repo'], 1)
+                finally: git('repo', 'config', '--local', '--unset-all', 'credential.helper')
+                git('repo', 'config', '--local', 'include.path', '/nonexistent/synthetic')
+                try: guest(['config-test', '/fixture3/repo'], 1)
+                finally: git('repo', 'config', '--local', '--unset-all', 'include.path')
             before = snapshot('repo')
             captured = guest(['capture', '/fixture3/repo', '/fixture3/store', '/fixture3/input/seed',
                               '/fixture3/input/profile', '/fixture3/input/policy', '/fixture3/input/environment',
@@ -148,6 +161,29 @@ def main():
             wrong_epoch = recovery_args.copy(); wrong_epoch[-1] = '3'
             if guest(['verify-recovery', *wrong_epoch], 1) != 'recovery/contract\n':
                 raise ValueError('wrong recovery epoch accepted')
+            if a.local_archive:
+                contract = [cid, v['did'], v['profile'], v['policy'], v['environment'], '1', 'root', 'fixture']
+                denied = guest(['archive', '/fixture3/denied', '/fixture3/store', *contract,
+                                'fixture/public', '/usr/bin/gh'], 1)
+                if denied != 'archive/private-repository-unverified\n' or (fixture/'denied').exists():
+                    raise ValueError(('privacy control failed', denied))
+                stored = guest(['archive', '/fixture3/archive-work', '/fixture3/store', *contract,
+                                'fixture/private', '/usr/bin/gh'])
+                parts = stored.split()
+                if len(parts) != 4 or parts[0] != 'archive/stored' or parts[1] != cid:
+                    raise ValueError(('archive result', stored))
+                tree = git('remote.git', 'rev-parse', 'refs/heads/itonami/archive/'+cid+'^{tree}').strip()
+                if tree != parts[2]: raise ValueError('remote tree mismatch')
+                remote_restore = guest(['archive-restore', '/fixture3/archive-restore-work',
+                                        '/fixture3/archive-restored', *contract, 'fixture/private', '/usr/bin/gh'])
+                if not remote_restore.startswith('archive-restore/restored '+cid+' '):
+                    raise ValueError(('archive restore result', remote_restore))
+                if snapshot('archive-restored') != before: raise ValueError('archive restored snapshot mismatch')
+                wrong = contract.copy(); wrong[3] = v['environment']
+                refused = guest(['archive-restore', '/fixture3/wrong-work', '/fixture3/wrong-dest',
+                                 *wrong, 'fixture/private', '/usr/bin/gh'], 1)
+                if refused != 'archive-restore/readback-refused\n' or (fixture/'wrong-dest').exists():
+                    raise ValueError(('archive wrong-policy control', refused))
             if snapshot('repo') != before or snapshot('restored') != after:
                 raise ValueError('source or restore changed')
             if helper.digest(compiler) != a.compiler_sha256 or helper.digest(packager) != a.packager_sha256:
@@ -158,6 +194,7 @@ def main():
                             'corruptedBlockRefused': True, 'closure': True,
                             'successorCaptured': True, 'recoveryRecordedAndVerified': True,
                             'wrongRecoveryEpochRefused': True,
+                            'localArchiveAndRestore': a.local_archive,
                             'scope': 'local Git diagnostic; privileged adapter; not production'})
             print(json.dumps(receipt))
         finally:
