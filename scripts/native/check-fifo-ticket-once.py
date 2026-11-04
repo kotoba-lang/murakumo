@@ -43,7 +43,7 @@ def main():
     source = SOURCE.read_text()
     source = '(ns fifo-ticket-once (:export [main]))\n' + source[source.index('(defn- rq-arg'):]
     source += '\n(defn main [] :i64 (resource-fifo-main))\n'
-    hook = '(= (rq-fs "M" path "") "1") (= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"'
+    hook = '(= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"'
     if source.count(hook) != 1:
         raise ValueError('claim fault anchor changed')
     fault = source.replace(hook, hook.replace(')) "fifo/ticket-claimed"', ') false) "fifo/ticket-claimed"'))
@@ -58,6 +58,12 @@ def main():
     false_missing = source.replace(missing_guard, 'status "0"')
     no_rename = {name: source.replace(rename_guard, response)
                  for name, response in [('no-rename', '"0"'), ('missing-frame', '""')]}
+    read_faults = {}
+    for name, call in [('stage-read-fault', '(rq-read-bounded pending 70)'),
+                       ('published-read-fault', '(rq-read-bounded path 70)')]:
+        if source.count(call) != 1:
+            raise ValueError('claim read fault anchor changed: ' + name)
+        read_faults[name] = source.replace(call, '""')
     reserve_guard = ('(not (= (string-substring state 5 69) ticket)) "fifo/not-front"\n'
                      '                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"')
     if source.count(reserve_guard) != 1:
@@ -110,6 +116,7 @@ def main():
             bypass_image, reserve_mutant = build('claim-bypass', bypass), build('reserve-marker-bypass', reserve_bypass)
             false_missing_image = build('false-missing', false_missing)
             no_rename_images = {name: build(name, text) for name, text in no_rename.items()}
+            read_fault_images = {name: build(name, text) for name, text in read_faults.items()}
             pause_images = {name: build(name, text) for name, text in pause_sources.items()}
             q = root / 'q'; q.mkdir(); (q / 'queue.lock').write_text(''); (q / 'queue').write_text('RGQ5\n')
             def op(img, action, expected, ticket=None, code=0):
@@ -188,6 +195,17 @@ def main():
                 if result != 'fifo/ticket-unknown' or (case / 'queue').read_text() != 'RGQ5\n' or (case / ('queue.used.' + c)).exists():
                     raise ValueError(('unsupported rename admitted ticket', name, result))
                 print('PASS T failure refuses enqueue:', name)
+            for name, fault_image in read_fault_images.items():
+                case = root / name; case.mkdir()
+                (case / 'queue.lock').write_text(''); (case / 'queue').write_text('RGQ5\n')
+                result = run([fault_image, '/' + name, 'enqueue', c], 1).decode().strip()
+                published = (case / ('queue.used.' + c)).exists()
+                if result != 'fifo/ticket-unknown' or (case / 'queue').read_text() != 'RGQ5\n' or published != (name == 'published-read-fault'):
+                    raise ValueError(('claim read failure admitted ticket', name, result, published))
+                retry = run([image, '/' + name, 'enqueue', c], 1 if published else 0).decode().strip()
+                if retry != ('fifo/ticket-used' if published else 'fifo/enqueued'):
+                    raise ValueError(('claim read failure retry', name, retry))
+                print('PASS claim read failure:', name, 'retry', retry)
             for phase, paused_image in pause_images.items():
                 case = root / phase; case.mkdir()
                 (case / 'queue.lock').write_text(''); (case / 'queue').write_text('RGQ5\n')

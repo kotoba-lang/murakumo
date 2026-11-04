@@ -179,6 +179,30 @@ not the rebuilt or released Amu runtime. This composition does not qualify
 the production FS2 provider, machine-crash recovery, supervisor, process tree,
 memory limits or a live model.
 
+## Re-read claims before and after publication
+
+The current candidate checks the exact bounded claim contents after the staged
+file is synced and again after no-replace publication and file sync, before
+syncing the directory and reporting the ticket claimed. A read failure or
+mismatch returns `fifo/ticket-unknown` without enqueueing. A source-injected
+empty read before publication left the claim unpublished and a known test retry
+enqueued; the same injected failure after publication left the claim present
+and the test retry refused reuse. A caller receiving an unknown outcome must
+reconcile it rather than assume either result.
+
+The updated source-bound ticket tests passed locally and on naphtali, benjamin
+and judah using the #1796 diagnostic packager `28aa2445...`; the adapted
+bounded FIFO regression passed locally. The source SHA-256 was
+`e475139cec522d65ce3f187916745323a98f261596e6616c7b2a6ad57b09febf`, the
+signed FIFO SHA-256 was
+`aec6f14b5ab802b53c38374133a5c80de8c8f68335f986f1587e09315bacd0d9`, and
+the test observer SHA-256 was
+`508799e0f52e54b4847b7e79ff227d272144726fb0114f3914d54025e15c9a59`.
+All hosts reported their task directories removed. Read failures were injected
+into the source rather than caused by kernel I/O errors; the known same-size
+concurrent-write limitation and the host ownership requirement remain. These
+tests do not qualify a production provider, power-loss behavior or governor.
+
 ## Existing Mac bootstrap provider observation
 
 On one local Darwin ARM64 host, the Mac bootstrap packager from Amu #1824's

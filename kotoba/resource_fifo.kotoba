@@ -108,8 +108,12 @@
     (cond (= status "1") "fifo/ticket-used"
           (not (= status "0")) "fifo/ticket-unknown"
           (and (rq-write? pending (str "RGU1\n" ticket "\n"))
-               (= (rq-fs "M" pending "") "1") (= (rq-fs "T" pending path) "1")
-               (= (rq-fs "M" path "") "1") (= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"
+               (= (rq-fs "M" pending "") "1")
+               (= (rq-read-bounded pending 70) (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "T" pending path) "1")
+               (= (rq-fs "M" path "") "1")
+               (= (rq-read-bounded path 70) (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"
           :else "fifo/ticket-unknown")))
 (defn- rq-claimed? [root :string ticket :string] :bool
   (= (rq-read-bounded (str root "/queue.used." ticket) 70) (str "RGU1\n" ticket "\n")))
