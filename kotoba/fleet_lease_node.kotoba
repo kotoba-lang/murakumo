@@ -222,18 +222,25 @@
                 (let [en (json-member topo e "enabled")] (and (>= en 0) (= (json-kind topo en) 5)))
                 :else (recur (+ k 1))))))))
 
+;; The shape check is independent of membership and wall-clock freshness.
+;; It is also used by the read-only migration preflight; it is not a grant.
+(defn- ln-lease-shape? [value :string] :bool
+  (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node") class (ln-text v r "class")
+        slot (ln-num v r "slot") epoch (ln-num v r "epoch") until (ln-num v r "until")
+        revision (ln-num v r "revision")]
+    (and (json-valid? v) (json-canonical? v) (= (json-kind v r) 1) (= (json-count v r) 6)
+         (>= revision 0) (<= revision 9007199254740991)
+         (= value (lease-text node class slot epoch until revision))
+         (valid-value? node true class slot epoch until 9007199254740991))))
+
 ;; Topology-free mode is diagnostic. In fleet mode only the exact canonical
-;; six-field lease is admitted; an unusable extra/missing field must not be
-;; durably accepted and later poison adoption by stricter job consumers.
+;; six-field lease is admitted; this is not a receiver-side fence.
 (defn- ln-member-ok? [topo :vector-i64 now :i64 value :string] :bool
   (if (= (vector-count topo) 0) true
-    (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node") class (ln-text v r "class")
-          slot (ln-num v r "slot") epoch (ln-num v r "epoch") until (ln-num v r "until")
-          revision (ln-num v r "revision")]
-      (and (json-valid? v) (json-canonical? v) (= (json-kind v r) 1) (= (json-count v r) 6)
-           (>= revision 0) (<= revision 9007199254740991)
-           (= value (lease-text node class slot epoch until revision))
-           (valid-value? node (ln-enabled? topo node) class slot epoch until now)))))
+    (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node")]
+      (and (ln-lease-shape? value)
+           (valid-value? node (ln-enabled? topo node) (ln-text v r "class") (ln-num v r "slot")
+                         (ln-num v r "epoch") (ln-num v r "until") now)))))
 
 ;; An absent, truncated or inconsistent durable register is not a fresh
 ;; voter. Reinitialization requires an independently authorized recovery.
@@ -247,6 +254,23 @@
            (and (ln-ballot-valid? at aid) (not (= av ""))
                 (>= (ballot-cmp pt pid at aid) 0)
                 (json-valid? (ln-bytes av)) (json-canonical? (ln-bytes av)))))))
+
+;; Never print the register or infer a new voter from an unreadable file.
+;; This reports shape compatibility only, not identity, provenance, freshness,
+;; quorum consistency, admission or permission to reset a register.
+(defn- ln-register-shape [st :string] :string
+  (cond (not (ln-state-ok? st)) "voter/state-unknown"
+        (= (ln-int (ln-field st 2)) 0) "voter/state-no-accepted-value"
+        (ln-lease-shape? (ln-undash (ln-field st 4))) "voter/state-shape-compatible"
+        :else "voter/state-shape-incompatible"))
+
+(defn- ln-inspect-register [] :i64
+  (let [path (ln-arg 1)
+        valid (and (> (string-length path) 1) (= (string-substring path 0 1) "/")
+                   (< (string-index-of path "..") 0) (< (string-index-of path "//") 0)
+                   (< (string-index-of path "_SEP") 0) (= (ln-arg 2) ""))
+        result (if valid (ln-register-shape (ln-load path)) "voter/state-unknown") x (ln-say result)]
+    (if (or (= result "voter/state-no-accepted-value") (= result "voter/state-shape-compatible")) 0 1)))
 
 ;; one request against the state in file; the new state is stored before the
 ;; reply is returned
@@ -488,6 +512,7 @@
   (loop [k 5] (cond (= (ln-arg k) "") "" (ln-tok-arg? (ln-arg k)) (string-substring (ln-arg k) 6 (string-length (ln-arg k))) :else (recur (+ k 1)))))
 
 (defn lease-node-main [] :i64
+  (if (= (ln-arg 0) "inspect-register") (ln-inspect-register)
   (if (= (ln-arg 0) "init-fresh")
     (let [result (ln-init-fresh (ln-arg 1)) x (ln-say result)]
       (if (= result "voter/init-created") 0 1))
@@ -495,4 +520,4 @@
     (ln-voter-main)
     (let [tp (ln-arg-token-path) token (ln-token tp)]
       (if (and (not (= tp "")) (= token "")) (let [x (ln-say "proposer token/missing-or-short")] 2)
-        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token))))))
+        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token)))))))

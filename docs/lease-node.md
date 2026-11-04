@@ -25,6 +25,14 @@ accepted value outside this stricter profile can block future Paxos adoption;
 the host must inspect and reconcile existing registers before migration, not
 reset them. This does not authenticate quorum membership or fence effects.
 
+The draft also adds a read-only `inspect-register <absolute-path>` entry. It
+reports only `voter/state-no-accepted-value`, `voter/state-shape-compatible`,
+`voter/state-shape-incompatible`, or `voter/state-unknown`; it never prints the
+register or modifies it. Shape compatibility alone does not establish quorum,
+provenance, membership, freshness, or permission to reset. The entry and its
+FS2 provider have not yet been built or qualified, and no deployed register
+has been inspected with this candidate.
+
 `init-fresh` returns `voter/init-created`, `voter/init-refused`, or
 `voter/init-unknown`; unknown means publication may have happened and must be
 reconciled before any retry. On ARM64 Linux/XFS, the native fixture in
