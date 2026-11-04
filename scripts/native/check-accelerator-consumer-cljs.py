@@ -29,8 +29,9 @@ def main():
     prelude = '''(ns awai151-probe (:require [clojure.string :as str]))
 (def unmeasured -1)
 (def classes {:resident 0 :opportunistic 1})
+(def oracle-usable (atom 100))
 (defn o [op args] (case op "aperture-bytes" (apply + args) "headroom-default-milli" 0
-                       "usable-bytes" 100 "admit-code" (if (= args [0 76 100 20 5]) 3 0)
+                       "usable-bytes" @oracle-usable "admit-code" (if (= args [0 76 100 20 5]) 3 0)
                        "granted-bytes" (if (= args [0 100 20 5]) 75 100) "code-name" "admitted"))
 '''
     cases = r'''
@@ -50,6 +51,12 @@ def main():
   (let [d (admit (assoc good :vram-total 9007199254740991 :gtt-total 1) {} :resident 1 0)]
     (assert (= :unmeasured (:reason d))) (assert (false? (:admitted? d)))
     (assert (= 0 (:granted d))))
+  (doseq [bad-value [-1 1.5 9007199254740992 nil "100"]]
+    (reset! oracle-usable bad-value)
+    (let [d (admit good {} :resident 1 0)]
+      (assert (= :unmeasured (:reason d))) (assert (false? (:admitted? d)))
+      (assert (= 0 (:granted d)))))
+  (reset! oracle-usable 100)
   (doseq [x bad] (let [d (admit x {} :resident 1 1)]
                    (assert (= :invalid-observation (:reason d))) (assert (= 0 (:granted d)))))
   (assert (= {:resident 0 :opportunistic 80}
@@ -94,6 +101,15 @@ def main():
                              capture_output=True, text=True, timeout=15, preexec_fn=limit)
     if control.returncode == 0 or 'Assert failed' not in control.stderr:
         raise RuntimeError(('unknown propagation control not detected', control.returncode,
+                            control.stdout[-1000:], control.stderr[-1000:]))
+    measurement_guard = 'measured? (and (integer? usable) (<= 0 usable 9007199254740991))'
+    if program.count(measurement_guard) != 1:
+        raise ValueError('usable measurement mutation anchor changed')
+    mutant = program.replace(measurement_guard, 'measured? true', 1)
+    control = subprocess.run([str(node), str(nbb), '-e', mutant], cwd='/private/tmp',
+                             capture_output=True, text=True, timeout=15, preexec_fn=limit)
+    if control.returncode == 0 or 'Assert failed' not in control.stderr:
+        raise RuntimeError(('usable guard-removal control not detected', control.returncode,
                             control.stdout[-1000:], control.stderr[-1000:]))
     if SOURCE.read_bytes() != raw:
         raise RuntimeError('source changed during diagnostic')

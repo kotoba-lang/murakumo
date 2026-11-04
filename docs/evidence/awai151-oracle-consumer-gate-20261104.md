@@ -155,3 +155,10 @@ removing the propagation guard failed the same case. Source SHA-256 was
 and the selected diagnostic program SHA-256 was
 `7964a4c3aa43dc1c41a70d3b202348ea9d75ececa04f962223feaa68a84cbcc7`.
 The synthetic oracle does not establish the actual oracle or host behavior.
+
+A follow-up selected-source ClojureScript diagnostic supplied invalid usable
+values from the synthetic oracle: negative, fractional, above the exact range,
+null and a string. Each was refused with zero grant. A mutation bypassing the
+usable-value guard failed these cases. Program SHA-256 was
+`a1b9000a4a575fce187b4a3e648d34cbff2a1cfc8dbd1bd31c1feaaf74c9c9bb`;
+the real oracle and full host suite remain untested.
