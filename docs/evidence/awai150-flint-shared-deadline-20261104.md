@@ -140,3 +140,29 @@ Updated script SHA-256:
 The signed count fixture and expired-only bypass mutant image SHA-256 values
 were `a651f0ea2458e333377f2e3fe2253644d3790170d977d88863289ee87fba8d81` and
 `44c7e7a6e4adafc30586a6a2db3566cb8d8936f6f171e699fe2a028067beb62d`.
+
+## Generation submission seam with synthetic dependencies
+
+On 2026-11-04, a signed local Darwin source-unity fixture executed the actual
+`pr-step-range` and `pr-window-seconds` forms, using historical assembled
+dependencies and test-only stubs for runtime validation, count, clock,
+filesystem, unit state, submit, response and persistence. With 3.5 seconds
+remaining from an initial ten-second budget, the submit stub recorded one
+call with a three-second limit and the synthetic step completed. When the
+stubbed clock was past the deadline, the step returned
+`profile/inference-unavailable-state-retained` and the submit counter remained
+zero. Replacing the generation window calculation with the original ten
+seconds caused the negative-control fixture to fail. Each compiler and native
+fixture process had a three-second CPU limit; no hard memory limit applied.
+
+The temporary generator SHA-256 was
+`bc27b08c70bb36b4a4f7ab72411701a1e047854c6ad5d8eb1130500782833f47`.
+Good and guard-bypass fixture source SHA-256 values were
+`5911c13ebe58c0d6a3d1028a9158e058ffb67cb2201cf88735593fe97d0d40a3` and
+`e5fddae847ceeb2ba60af49903bc9b68f4bfe187dca9849a9e13126bf1887ec3`;
+the signed image SHA-256 values were
+`799c838051b47baeb50e50b450974af3316bbd3f0d08e3fb7ab8aec1db83d2e1` and
+`e1f2e024a855f4610854093d3c25222761bd9c19926e350e35379e7ca52d733c`.
+The diagnostic compiler/packager are pinned in the earlier section. This is
+not a real lease, clock, systemd/curl, model, output recovery, full source-lock
+build or qualified governor. The lease revalidation and fencing gaps remain.
