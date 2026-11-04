@@ -203,7 +203,7 @@ into the source rather than caused by kernel I/O errors; the known same-size
 concurrent-write limitation and the host ownership requirement remain. These
 tests do not qualify a production provider, power-loss behavior or governor.
 
-## Read-only ticket inspection
+## Ticket inspection
 
 `inspect <ticket>` is a bounded, lock-protected observation for a future
 trusted host. With a valid claim and a valid stable queue, it reports
@@ -211,7 +211,8 @@ trusted host. With a valid claim and a valid stable queue, it reports
 is not. A missing or malformed claim, malformed hold/release marker, pending
 queue update or invalid queue refuses. A nonzero exit, trap, truncated output
 or lost response must be treated as unknown. Inspection never releases a
-reservation or changes the queue.
+reservation or changes queue contents. The current revision does issue
+filesystem sync operations as described below.
 
 `fifo/claim-recorded` does not distinguish a failed pre-enqueue claim, a
 cancelled ticket or a completed one. Neither result proves whether a workload
@@ -231,6 +232,29 @@ observer SHA-256
 `9a6496c56bf058672e83b54f49ee9fc71ea9a8d3b435484c1af2aa99479c537a`.
 The hosts reported task directory removal. These are synthetic observations,
 not production-host, power-loss, authenticated-supervisor or governor proof.
+
+## Sync before a successful inspection
+
+A process may die after a claim is visible but before its sync completes.
+Before `inspect` reports queued or recorded, the current candidate syncs the
+queue file, the ticket claim and their parent directory. A failed or unknown
+sync returns `fifo/claim-unknown`; it is not a durable observation. This does
+not change queue contents or release a reservation. It relies on the trusted
+provider, filesystem sync semantics and exclusive host ownership; it is not
+proof against power loss, rollback or a provider that falsely reports success.
+
+The local bounded FIFO regression and ticket-once tests passed, as did the
+ticket test on naphtali, benjamin and judah using the #1796 diagnostic
+packager `28aa2445...`. Injecting an unexpected response at each of the three
+sync checks refused inspection, and a separately compiled guard-bypass mutant
+reported the queued ticket. These are source-injected response tests, not
+actual kernel fsync failures. All three hosts reported task directory removal.
+Source SHA-256:
+`80f6d4930984aebaa0baa72c1a20f62d6a93ae60e0ee0d5805f068481a4920e7`;
+signed FIFO SHA-256:
+`36a1d9fd434707a36dedd5687e956803c053438011eaa46e5ddd780aa04a2101`;
+observer SHA-256:
+`2ef026960eb5661c0042cdadf827b1f1ce7832cb43eb2b7490bcbf864b58e204`.
 
 ## Existing Mac bootstrap provider observation
 

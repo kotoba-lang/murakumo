@@ -117,6 +117,13 @@
           :else "fifo/ticket-unknown")))
 (defn- rq-claimed? [root :string ticket :string] :bool
   (= (rq-read-bounded (str root "/queue.used." ticket) 70) (str "RGU1\n" ticket "\n")))
+;; A visible post-crash state may not yet have a completed sync. A successful
+;; observation re-syncs the queue, claim and directory; an unknown sync never
+;; authorizes the caller to treat the result as durable.
+(defn- rq-inspect-sync? [root :string ticket :string] :bool
+  (and (= (rq-fs "M" (str root "/queue") "") "1")
+       (= (rq-fs "M" (str root "/queue.used." ticket) "") "1")
+       (= (rq-fs "M" root "") "1")))
 (defn- rq-hold-valid? [s :string] :bool
   (and (= (string-length s) 70) (= (string-substring s 0 5) "RGH1\n")
        (= (string-substring s 69 70) "\n") (rq-ticket? (string-substring s 5 69))))
@@ -237,6 +244,7 @@
                   (and (= hold-status "1") (not (rq-hold-valid? (rq-read-bounded hold 70)))) "fifo/reservation-unknown"
                   (and (= release-status "1") (not (rq-hold-valid? (rq-read-bounded release 70)))) "fifo/reservation-unknown"
                   (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
+                  (not (rq-inspect-sync? root ticket)) "fifo/claim-unknown"
                   (< (string-index-of state (str ticket "\n")) 0) "fifo/claim-recorded"
                   :else "fifo/claim-queued")
           (= op "settle-recover")

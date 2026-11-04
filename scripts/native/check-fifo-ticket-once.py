@@ -69,6 +69,22 @@ def main():
     if source.count(reserve_guard) != 1:
         raise ValueError('reserve marker guard mutation anchor changed')
     reserve_bypass = source.replace(reserve_guard, reserve_guard.replace('(not (rq-claimed? root ticket))', 'false'))
+    sync_start = source.index('(defn- rq-inspect-sync?')
+    sync_end = source.index('(defn- rq-hold-valid?', sync_start)
+    sync_body = source[sync_start:sync_end]
+    sync_faults = {}
+    for name, anchor in [
+        ('inspect-queue-sync', '(= (rq-fs "M" (str root "/queue") "") "1")'),
+        ('inspect-claim-sync', '(= (rq-fs "M" (str root "/queue.used." ticket) "") "1")'),
+        ('inspect-dir-sync', '(= (rq-fs "M" root "") "1")'),
+    ]:
+        if sync_body.count(anchor) != 1:
+            raise ValueError('inspect sync fault anchor changed: ' + name)
+        sync_faults[name] = source[:sync_start] + sync_body.replace(anchor, anchor.replace('"1")', '"0")'), 1) + source[sync_end:]
+    bypass_anchor = '(not (rq-inspect-sync? root ticket)) "fifo/claim-unknown"'
+    if source.count(bypass_anchor) != 1:
+        raise ValueError('inspect sync guard mutation anchor changed')
+    sync_bypass = sync_faults['inspect-claim-sync'].replace(bypass_anchor, 'false "fifo/claim-unknown"')
     pause_helper = ('(defn- rq-claim-test-pause [] :bool\n'
                     '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
                     '        sent (typed-cap-call 37 :string :string s)] true))\n')
@@ -117,6 +133,8 @@ def main():
             false_missing_image = build('false-missing', false_missing)
             no_rename_images = {name: build(name, text) for name, text in no_rename.items()}
             read_fault_images = {name: build(name, text) for name, text in read_faults.items()}
+            sync_fault_images = {name: build(name, text) for name, text in sync_faults.items()}
+            sync_bypass_image = build('inspect-sync-bypass', sync_bypass)
             pause_images = {name: build(name, text) for name, text in pause_sources.items()}
             q = root / 'q'; q.mkdir(); (q / 'queue.lock').write_text(''); (q / 'queue').write_text('RGQ5\n')
             def op(img, action, expected, ticket=None, code=0):
@@ -132,6 +150,12 @@ def main():
                 op(image, 'enqueue', 'fifo/enqueued', ticket)
                 op(image, 'inspect', 'fifo/claim-queued', ticket)
                 if ticket == a:
+                    for name, fault_image in sync_fault_images.items():
+                        op(fault_image, 'inspect', 'fifo/claim-unknown', ticket, 1)
+                        if (q / 'queue').read_text() != 'RGQ5\n' + ticket + '\n':
+                            raise ValueError('sync failure changed queue: ' + name)
+                    op(sync_bypass_image, 'inspect', 'fifo/claim-queued', ticket)
+                    print('PASS inspect sync failures refuse; guard bypass reports queued')
                     marker = q / ('queue.used.' + ticket)
                     content = marker.read_text()
                     marker.unlink()
