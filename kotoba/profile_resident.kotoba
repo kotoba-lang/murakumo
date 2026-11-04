@@ -357,22 +357,23 @@
     (cond (not (= admission "resident/admission-held")) admission
           (or (< budget 1) (not (rt-clock-window? now (* budget 1000)))) "profile/budget-refused"
           :else
-            (let [runtime (rt-runtime cfg) cache (cp-str cfg 0 "cache") deadline (+ now (* budget 1000))]
+            (let [runtime (rt-runtime cfg) cache (cp-str cfg 0 "cache") deadline (+ now (* budget 1000)) clock [now]]
               (if (not (pr-local-flint? runtime))
-                (pr-step-resident dest runtime cache next budget now deadline 0)
-                (let [counted (pr-step-resident dest runtime cache next budget now deadline 1)]
+                (pr-step-resident dest runtime cache next budget now deadline 0 clock)
+                (let [counted (pr-step-resident dest runtime cache next budget now deadline 1 clock)]
                   (if (not (= counted "profile/flint-count-ready")) counted
                     ;; Do not start a new quorum round once the shared budget
                     ;; is already exhausted or the clock sample is unknown.
                     ;; This check cannot bound the duration of the round.
                     (let [before (rt-now)]
-                      (if (< (pr-window-seconds now deadline before budget) 1) "profile/budget-refused"
+                      (if (< (pr-window-seconds (vector-at clock 0) deadline before budget) 1) "profile/budget-refused"
                         (let [again (rt-lease cfg (cp-num lease 0 "epoch")) after (rt-now)
                               admitted (rt-post-problem cfg head lease again after)
                               remaining (pr-window-seconds before deadline after budget)]
                           (cond (not (= admitted "resident/admission-held")) admitted
                                 (< remaining 1) "profile/budget-refused"
-                                :else (pr-step-resident dest runtime cache next budget after deadline 2))))))))))))
+                                :else (let [saved (vector-assoc! clock 0 after)]
+                                        (pr-step-resident dest runtime cache next budget after deadline 2 clock)))))))))))))
 
 (defn- rt-turn [cfg :vector-i64 head :vector-i64 lease :vector-i64 request :string] :string
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") checkpoint (cp-load store root)

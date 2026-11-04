@@ -276,7 +276,7 @@
       (if (and (>= i 0) (json-int-ok? b i) (> (json-int b i) 0) (<= (json-int b i) 8192))
         (json-int b i) -1))))
 
-(defn- pr-count-wait [unit :string response :string started :i64 deadline :i64 seconds :i64] :i64
+(defn- pr-count-wait [unit :string response :string started :i64 deadline :i64 seconds :i64 clock :vector-i64] :i64
   (loop [i 0 last started]
     ;; Expiry or an unknown clock is not proof that the unit stopped. The
     ;; caller keeps the busy marker and requires host reconciliation.
@@ -286,7 +286,8 @@
           (cond (< (pr-window-seconds now deadline after-query seconds) 1) -1
                 (= state 1) (let [value (pr-count-value (pr-read-bounded response 1024))
                                   after-read (pr-wall-ms)]
-                              (if (> (pr-window-seconds after-query deadline after-read seconds) 0) value -1))
+                              (if (and (> value 0) (> (pr-window-seconds after-query deadline after-read seconds) 0))
+                                (let [saved (vector-assoc! clock 0 after-read)] value) -1))
                 (or (= state -1) (> i 900)) -1
                 :else (let [z (pr-pause)] (if z (recur (+ i 1) after-query) -1))))))))
 
@@ -325,7 +326,7 @@
     (let [remaining (quot (- deadline now) 1000)]
       (if (< remaining 1) -1 (if (< remaining limit) remaining limit)))))
 
-(defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64 started :i64 deadline :i64 reuse-only :bool] :i64
+(defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64 started :i64 deadline :i64 reuse-only :bool clock :vector-i64] :i64
   (if (or (not (pr-local-flint? runtime)) (= (vector-count body) 0)) -1
     (let [id (pr-count-id runtime body)
           unit (str "itonami-count-" (string-substring id 0 24) ".service")
@@ -344,7 +345,7 @@
                             (let [remaining (pr-window-seconds started deadline (pr-wall-ms) seconds)]
                               (and (> remaining 0) (pr-submit-kind unit request response remaining runtime true))))
                           :else false)]
-      (if submitted (pr-count-wait unit response started deadline seconds) -1))))
+      (if submitted (pr-count-wait unit response started deadline seconds clock) -1))))
 
 (defn- pr-flint-output-budget [input :i64 requested :i64] :i64
   (let [available (- 8192 input 256)]
@@ -626,7 +627,7 @@
 ;; Flint phase 1 records a completed count without generation; phase 2 only
 ;; reuses an already recorded count after the resident's lease revalidation.
 ;; Busy state is retained across the gap and any unknown outcome.
-(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64 started :i64 deadline :i64 phase :i64] :string
+(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64 started :i64 deadline :i64 phase :i64 clock :vector-i64] :string
   (let [dir (str repo "/profile") meta (pr-read-bounded (str dir "/itonami.edn") 131072) role (pr-read-bounded (str dir "/SOUL.md") 131072)
         growth (= (cp-str runtime 0 "profile") "awai-growth-steward")
         work-path (str dir "/tasks/first-turn.md") context-path (str dir "/context.md")
@@ -670,8 +671,11 @@
                     turn (if (pr-local-flint? runtime) (pr-flint-turn-id task next state) "")
                     count-id (if (pr-local-flint? runtime) (pr-count-id runtime count-body) "")
                     occupied (if (pr-local-flint? runtime) (pr-flint-busy-reserve cache (cp-str runtime 0 "serverInstance") turn count-id) true)
-                    counted (if (pr-local-flint? runtime) (if occupied (pr-count runtime cache seconds count-body started deadline (= phase 2)) -1) 0)
+                    counted0 (if (pr-local-flint? runtime) (if occupied (pr-count runtime cache seconds count-body started deadline (= phase 2) clock) -1) 0)
                     counted-at (if (pr-local-flint? runtime) (pr-wall-ms) 0)
+                    counted (if (pr-local-flint? runtime)
+                              (if (and (> counted0 0) (> (pr-window-seconds (vector-at clock 0) deadline counted-at seconds) 0))
+                                (let [saved (vector-assoc! clock 0 counted-at)] counted0) -1) counted0)
                     budget (if (pr-local-flint? runtime) (pr-flint-output-budget counted tokens) tokens)]
               (if (not occupied) "profile/server-busy-or-unknown"
               (if (< budget 1)
@@ -735,10 +739,10 @@
     (if resident 256 32))))
 
 (defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false) 0 0 0))
+  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false) 0 0 0 [0]))
 
-(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 started :i64 deadline :i64 phase :i64] :string
-  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true) started deadline phase))
+(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 started :i64 deadline :i64 phase :i64 clock :vector-i64] :string
+  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true) started deadline phase clock))
 
 (defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
   (pr-step-bounded repo runtime cache next 840))

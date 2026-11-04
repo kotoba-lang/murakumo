@@ -25,9 +25,9 @@ pre=r'''(ns post-query-fixture (:export [main]))
 main=r'''(defn main [] :i64
  (let [mode (typed-cap-call 38 :string :string "0") slow (= mode "slow") reading (= mode "slow-read") back (= mode "back") backread (= mode "back-read")
        unit (cond slow "slow" back "back" :else "fast") path (cond reading "slow-read" backread "back-read" :else "ok")
-       count (pr-count-wait unit path 100000 110000 10)
+       clock [0] count (pr-count-wait unit path 100000 110000 10 clock)
        expected (if (or slow reading back backread) -1 20)]
-  (if (= count expected) 0 1)))'''
+  (if (and (= count expected) (= (vector-at clock 0) (if (= count 20) 100000 0))) 0 1)))'''
 main2=r'''(defn main [] :i64
  (let [mode (typed-cap-call 38 :string :string "0") slow (= mode "slow") reading (= mode "slow-read") back (= mode "back") backread (= mode "back-read") nonflint (= mode "nonflint")
        unit (cond (or slow nonflint) "slow" back "back" :else "fast") path (cond reading "slow-read" backread "back-read" :else "ok")
