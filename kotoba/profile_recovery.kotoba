@@ -165,9 +165,10 @@
                 first (if (>= choices 0) (json-element raw choices 0) -1)
                 second (if (>= choices 0) (json-element raw choices 1) -1)
                 message (if (>= first 0) (json-member raw first "message") -1)
-                tools (if (>= message 0) (json-member raw message "tool_calls") -1)]
+                tools (if (>= message 0) (json-member raw message "tool_calls") -1)
+                legacy-call (if (>= message 0) (json-member raw message "function_call") -1)]
             (cond (or (< first 0) (>= second 0)) "flint/choices-refused"
-                  (>= tools 0) "flint/tool-calls-refused"
+                  (or (>= tools 0) (>= legacy-call 0)) "flint/tool-calls-refused"
                   (not (= (cp-str raw message "role") "assistant")) "flint/role-refused"
                   (= (pr-answer raw) "") "flint/incomplete"
                   :else "flint/ok"))))

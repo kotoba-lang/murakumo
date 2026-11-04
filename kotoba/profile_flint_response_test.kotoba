@@ -13,6 +13,8 @@
         escaped-key (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\"}}],\"mo\\u0064el\":\"flint\"}")
         tool (cp-bytes "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\"}}],\"model\":\"flint\"}")
         tool-hidden (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"tool_calls\":[]}}],\"model\":\"flint\"}")
+        legacy-call (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"function_call\":{\"name\":\"x\",\"arguments\":\"{}\"}}}],\"model\":\"flint\"}")
+        legacy-null (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"draft\",\"function_call\":null}}],\"model\":\"flint\"}")
         compact (flint-compact "flint" good)]
     (and (= (flint-response-problem "flint" good) "flint/ok")
          (= (flint-response-problem "" good) "flint/model-unpinned")
@@ -30,6 +32,8 @@
          (= (flint-response-problem "flint" escaped-key) "flint/response-invalid")
          (= (flint-response-problem "flint" tool) "flint/incomplete")
          (= (flint-response-problem "flint" tool-hidden) "flint/tool-calls-refused")
+         (= (flint-response-problem "flint" legacy-call) "flint/tool-calls-refused")
+         (= (flint-response-problem "flint" legacy-null) "flint/tool-calls-refused")
          (= (vector-count (flint-compact "flint" unfinished)) 0)
          (json-valid? compact) (= (pr-answer compact) "draft")
          (= (flint-response-problem "flint" compact) "flint/ok")
