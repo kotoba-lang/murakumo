@@ -123,6 +123,9 @@
 (defn- jn-token [i :i64] :string
   (let [path (jn-arg i)] (if (= path "") "" (let [t (lease-token path)] (if (= t "") "-" t)))))
 
+(defn- jn-token-bounded [i :i64] :string
+  (let [path (jn-arg i)] (if (= path "") "" (let [t (lease-token-bounded path)] (if (= t "") "-" t)))))
+
 ;; An adopted Paxos value is not automatically a lease for this job. Recheck
 ;; its full binding and deadline immediately before dispatch. The register and
 ;; clock still have to be independently provisioned and protected by the host.
@@ -186,7 +189,7 @@
         now (jn-int (typed-cap-call 7 :string :string "wall"))
         allowed (jn-int (jn-arg 10)) index (jn-arg 11) layout (jn-arg 12)
         ports (jn-arg 13) t (jn-int (jn-arg 14)) mode (jn-arg 15)
-        ipath (jn-arg 16) token (jn-token 17) attempts (jn-arg 18)
+        ipath (jn-arg 16) token (if (= expected-signer "") (jn-token 17) (jn-token-bounded 17)) attempts (jn-arg 18)
         capture-arg (jn-arg 23) capture (and source-admitted (= capture-arg "capture-output"))
         has-input (and (not (= ipath "")) (if use-verified-input source-admitted
                          (= (typed-cap-call 35 :string :string (string-concat ipath "EXISTS_SEP")) "1")))
