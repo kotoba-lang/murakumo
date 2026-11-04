@@ -3,7 +3,10 @@
   (:export [test-fenced-profile-recovery]))
 
 (defn test-fenced-profile-recovery [] :i64
-  (let [a (cp-bytes (lease-text "A" "task" 0 1 10000 1))]
+  (let [a (cp-bytes (lease-text "A" "task" 0 1 10000 1))
+        missing-node (cp-bytes "{\"class\":\"task\",\"epoch\":1,\"revision\":1,\"slot\":0,\"until\":0}")
+        empty-node (cp-bytes (lease-text "" "task" 0 1 0 1))
+        negative-revision (cp-bytes (lease-text "A" "task" 0 1 0 -1))]
     (+ (if (= (rf-previous-value-status a a "B" "task" 1 1000) 0) 1 0)
        (if (and (= (rf-previous-value-status a a "B" "task" 1 70000) 0)
                 (= (rf-previous-value-status a a "B" "task" 1 70001) 1)) 2 0)
@@ -14,6 +17,9 @@
                 (= (rf-previous-value-status a a "B" "task" 1 9007199254740991) -4)
                 (not (rf-clock-ballot-ok? 1000 0))
                 (rf-clock-ballot-ok? 1000 1)) 64 0)
+       (if (and (= (rf-previous-value-status missing-node missing-node "B" "task" 1 70001) -5)
+                (= (rf-previous-value-status empty-node empty-node "B" "task" 1 70001) -5)
+                (= (rf-previous-value-status negative-revision negative-revision "B" "task" 1 70001) -5)) 128 0)
        (if (and (rf-voters? "127.0.0.1:1,127.0.0.2:1,127.0.0.3:1")
                 (not (rf-voters? "127.0.0.1:1,127.0.0.1:2,127.0.0.3:1"))) 8 0)
        (if (and (= (rf-budget 900000 1000000 0) 830)

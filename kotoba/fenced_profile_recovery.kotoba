@@ -94,8 +94,12 @@
 (defn- rf-previous-value-status [previous :vector-i64 expected :vector-i64 node :string task :string epoch :i64 now :i64] :i64
   (cond (not (rf-clock-ballot-ok? now epoch)) -4
         (not (= (cp-text previous) (cp-text expected))) -1
+        (or (not (json-valid? previous)) (not (json-canonical? previous))
+            (not (= (json-kind previous 0) 1)) (not (= (json-count previous 0) 6))) -5
         (not (= (cp-num previous 0 "epoch") epoch)) -2
         (or (not (= (cp-str previous 0 "class") task)) (not (= (cp-num previous 0 "slot") 0))) -3
+        (or (< (cp-num previous 0 "revision") 0)
+            (not (valid-value? (cp-str previous 0 "node") true task 0 epoch (cp-num previous 0 "until") now))) -5
         (= (decide node (cp-num previous 0 "epoch") true
              (cp-str previous 0 "node") (cp-num previous 0 "until") now) "lease/take-over") 1
         :else 0))
@@ -118,6 +122,7 @@
                         (= status -2) "recovery/previous-lease-epoch"
                         (= status -3) "recovery/previous-lease-task"
                         (= status -4) "recovery/clock-or-epoch-unknown"
+                        (= status -5) "recovery/previous-lease-invalid"
                         (= status 1) (rf-run plan true)
                         (>= waits 1800) "recovery/lease-wait-expired"
                         :else (let [z (pr-pause)] (recur (+ waits 1)))))))
