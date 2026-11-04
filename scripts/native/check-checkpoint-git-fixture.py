@@ -5,7 +5,7 @@ Only use with task-owned synthetic data. This exercises local Git, not a
 production supervisor, provider, GitHub, fault recovery or authorization.
 """
 import argparse
-import importlib.util
+import hashlib
 import json
 import os
 import platform
@@ -17,9 +17,15 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location('bounded_probe', HERE / 'check-checkpoint-bounded-fixture.py')
-helper = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(helper)
+def verified(path, expected):
+    if path.is_symlink() or not re.fullmatch('[0-9a-f]{64}', expected):
+        raise ValueError('invalid input or pin')
+    path = path.resolve(strict=True)
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        raise ValueError('image pin mismatch')
+    subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(path)],
+                   check=True, capture_output=True, timeout=30)
+    return path
 
 
 def main():
@@ -32,8 +38,8 @@ def main():
     a = p.parse_args()
     if (platform.system(), platform.machine()) != ('Darwin', 'arm64'):
         raise ValueError('Apple Silicon macOS required')
-    compiler = helper.verified(a.compiler, a.compiler_sha256)
-    packager = helper.verified(a.packager, a.packager_sha256)
+    compiler = verified(a.compiler, a.compiler_sha256)
+    packager = verified(a.packager, a.packager_sha256)
     with tempfile.TemporaryDirectory(prefix='awai150-checkpoint-', dir='/private/tmp') as tmp:
         root = Path(tmp); fixture = root / 'fixture3'
         fixture.mkdir(mode=0o700)
@@ -196,7 +202,7 @@ def main():
                     raise ValueError(('archive wrong-policy control', refused))
             if snapshot('repo') != before or snapshot('restored') != after:
                 raise ValueError('source or restore changed')
-            if helper.digest(compiler) != a.compiler_sha256 or helper.digest(packager) != a.packager_sha256:
+            if hashlib.sha256(compiler.read_bytes()).hexdigest() != a.compiler_sha256 or hashlib.sha256(packager.read_bytes()).hexdigest() != a.packager_sha256:
                 raise ValueError('tool changed')
             receipt.update({'compilerSha256': a.compiler_sha256, 'packagerSha256': a.packager_sha256,
                             'capture': True, 'verify': True, 'restoreMatches': True,
