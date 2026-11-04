@@ -101,11 +101,13 @@
 ;; replace cgroup enforcement, descendant containment or host admission.
 ;; HTTPS uses --fail, supported by Xavier curl 7.68; error bodies are not
 ;; retained as successful model responses.
+(defn- pr-output-file-limit [count :bool] :i64 (if count 1024 262144))
 (defn- pr-submit-kind [unit :string request :string response :string seconds :i64 runtime :vector-i64 count :bool] :bool
   (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
     (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
     (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
     (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%" (cp-a) "--property=LimitAS=128M"
+    (cp-a) (str "--property=LimitFSIZE=" (pr-output-file-limit count))
     (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1"
     (if (pr-local? runtime)
       (str (cp-a) "--noproxy" (cp-a) "*"
