@@ -171,3 +171,26 @@ rename, receipt, consume and receipt-sync-fault diagnostic image hashes were
 The pause and failure are injected into source and the checks observe process
 death on one running OS. This does not simulate kernel I/O faults, power loss,
 real workloads, descendants, multi-host coordination or a qualified governor.
+
+### Follow-up: full local FIFO diagnostic suite
+
+On 2026-11-04 the existing `scripts/native/check-fifo-bounded-fixture.py`
+(SHA-256 `0d69b2a07e79900424f2b074b2132f469dd51d8c8a3026efd0943e16b654567f`)
+completed on Darwin ARM64 with a three-second CPU limit inherited by each
+process. This follow-up supersedes the earlier statement that the complete
+suite had not been run. It used compiler SHA-256
+`920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6`
+and diagnostic packager SHA-256
+`f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`.
+The FIFO component source was
+`bd23560f142c1e417662eca2f026c521c931be5ed48739c7976c91b10588c825`;
+the resulting diagnostic FIFO image was
+`e0686d9f82fc3eb5f218a0e716d373ef3a0a9565b0e09f39bef4ce48e0ae9da7`.
+
+The positive contract, old-format refusal and journal recovery checks passed;
+the bound-removal mutant failed as expected. The suite also exercised
+injected sync faults and owned-child kills at its recorded journal phases.
+One concurrent enqueue sample accepted eight requests and returned no busy
+responses. These are local synthetic diagnostics, with injected faults and no
+memory cap; they do not establish filesystem power-loss behavior, supervision
+of a real workload, resource enforcement or governor qualification.
