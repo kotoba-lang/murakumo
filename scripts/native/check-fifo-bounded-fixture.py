@@ -5,6 +5,8 @@ Python stages files and observes native compiler/packager/programs. This does
 not qualify a provider, a crash-safe host, resource reservations or a governor.
 """
 import argparse
+import concurrent.futures
+import fcntl
 import hashlib
 import json
 import os
@@ -54,6 +56,8 @@ def main():
             (scope / name).write_bytes(data)
         (root / 'fixture.kotoba').write_text(unity)
         (root / 'mutant.kotoba').write_text(unity.replace(ANCHOR, 'false'))
+        (root / 'fifo.kotoba').write_text('(ns fifo-contract-fixture (:export [main]))\n' + component +
+                                         '\n(defn main [] :i64 (resource-fifo-main))\n')
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY); saved = None
         if fd != 3:
             try: saved = os.dup(3)
@@ -78,6 +82,54 @@ def main():
                 return image
             image, mutant = build('fixture'), build('mutant')
             run([image], 0); run([mutant], 1)
+            fifo = build('fifo')
+            queue = root / 'queuecase'; queue.mkdir(mode=0o700)
+            (queue / 'queue.lock').write_text(''); (queue / 'queue').write_text('RGQ1\n')
+            first, second, third = 'a'*64, 'b'*64, 'c'*64
+            def op(action, ticket=None):
+                args = [str(fifo), '/queuecase', action] + ([ticket] if ticket else [])
+                r = subprocess.run(args, cwd=root, pass_fds=(3,), capture_output=True,
+                                   timeout=15, env={'PATH':'/nonexistent'})
+                if r.stderr: raise RuntimeError(('unexpected fifo stderr', r.stderr))
+                return r.returncode, r.stdout.decode().strip()
+            def expect(action, result, ticket=None):
+                actual = op(action, ticket)
+                if actual != result: raise RuntimeError((action, result, actual))
+            expect('front', (0, 'fifo/empty'))
+            expect('enqueue', (0, 'fifo/enqueued'), first)
+            expect('enqueue', (0, 'fifo/enqueued'), second)
+            expect('enqueue', (1, 'fifo/already-queued'), first)
+            expect('front', (0, 'fifo/front '+first))
+            expect('dequeue', (1, 'fifo/not-front'), second)
+            expect('cancel', (1, 'fifo/cancel-front-refused'), first)
+            expect('cancel', (0, 'fifo/cancelled'), second)
+            expect('dequeue', (0, 'fifo/dequeued'), first)
+            expect('front', (0, 'fifo/empty'))
+            (queue / 'queue.pending').write_text('partial')
+            expect('enqueue', (1, 'fifo/pending-unknown'), third)
+            (queue / 'queue.pending').unlink()
+            old = 'RGQ1\n'; new = old + first + '\n'
+            (queue / 'queue.intent').write_text('RGI1\n' + old + 'NEXT\n' + new)
+            expect('front', (1, 'fifo/pending-unknown'))
+            expect('recover', (0, 'fifo/aborted'))
+            if (queue / 'queue').read_text() != old: raise ValueError('aborted state changed')
+            (queue / 'queue').write_text(new)
+            (queue / 'queue.intent').write_text('RGI1\n' + old + 'NEXT\n' + new)
+            expect('recover', (0, 'fifo/recovered'))
+            expect('front', (0, 'fifo/front '+first))
+            (queue / 'queue').write_text(old)
+            with (queue / 'queue.lock').open('r+') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                expect('front', (1, 'fifo/busy'))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                tickets = [format(i, '064x') for i in range(8)]
+                outcomes = list(pool.map(lambda t: op('enqueue', t), tickets))
+            if any(x not in ((0, 'fifo/enqueued'), (1, 'fifo/busy')) for x in outcomes):
+                raise ValueError(('unexpected concurrent outcome', outcomes))
+            accepted = [ticket for ticket, outcome in zip(tickets, outcomes) if outcome == (0, 'fifo/enqueued')]
+            lines = (queue / 'queue').read_text().splitlines()
+            if lines[0] != 'RGQ1' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
+                raise ValueError('concurrent state mismatch')
             if COMPONENT.read_bytes() != raw_component or CASES.read_bytes() != raw_cases:
                 raise ValueError('source changed during run')
             if sha(compiler.read_bytes()) != a.compiler_sha256 or sha(packager.read_bytes()) != a.packager_sha256:
@@ -85,7 +137,9 @@ def main():
             print(json.dumps({'componentSha256':sha(raw_component), 'casesSha256':sha(raw_cases),
                               'fixtureSha256':sha(unity.encode()), 'compilerSha256':a.compiler_sha256,
                               'packagerSha256':a.packager_sha256, 'positiveExit':0, 'boundRemovalMutantExit':1,
-                              'scope':'diagnostic bounded reads; not provider or governor qualification'}))
+                              'fifoContractPassed':True, 'oldAndNewJournalRecoveryPassed':True,
+                              'concurrentAccepted':len(accepted), 'concurrentBusy':8-len(accepted),
+                              'scope':'local synthetic FIFO diagnostic; not provider or governor qualification'}))
         finally:
             if fd != 3:
                 if saved is None: os.close(3)
