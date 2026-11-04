@@ -149,6 +149,7 @@
 
 (defn- rt-refresh-decision [intact :bool until :i64 now :i64] :string
   (cond (not intact) "resident/head-refused"
+        (or (<= now 0) (> now (- 9007199254740991 900000))) "resident/clock-unknown"
         (> until (+ now 900000)) "resident/retention-ready"
         :else "resident/retention-refresh-needed"))
 
@@ -220,14 +221,16 @@
 ;; An optional host-provisioned private acknowledgement directory gates each
 ;; next turn on confirmed GitHub archival of the current admitted checkpoint.
 ;; The file is a local trust boundary, not a remote lease or a signed receipt.
+(defn- rt-archive-ack-valid? [ack :vector-i64 root :string now :i64] :bool
+  (and (> now 0) (<= now (- 9007199254740991 900000))
+       (json-canonical? ack) (= (json-kind ack 0) 1) (= (json-count ack 0) 4)
+       (= (cp-str ack 0 "kind") "itonami.github-archive-ack/1")
+       (= (cp-str ack 0 "checkpoint") root) (cp-hex? (cp-str ack 0 "tree") 40)
+       (> (cp-num ack 0 "until") now) (<= (cp-num ack 0 "until") (+ now 900000))))
 (defn- rt-archive-ack? [path :string root :string] :bool
   (if (= path "") true
     (if (not (cp-exists? path)) false
-      (let [ack (pr-read-bounded path 4096)]
-        (and (json-canonical? ack) (= (json-kind ack 0) 1) (= (json-count ack 0) 4)
-          (= (cp-str ack 0 "kind") "itonami.github-archive-ack/1")
-          (= (cp-str ack 0 "checkpoint") root) (cp-hex? (cp-str ack 0 "tree") 40)
-          (> (cp-num ack 0 "until") (rt-now)) (<= (cp-num ack 0 "until") (+ (rt-now) 900000)))))))
+      (rt-archive-ack-valid? (pr-read-bounded path 4096) root (rt-now)))))
 
 ;; Describe only a currently verified, replica-admitted head. A signed epoch and
 ;; parent are archive parameters, not an independent lease or new head grant.

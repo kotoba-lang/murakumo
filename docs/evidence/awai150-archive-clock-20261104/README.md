@@ -1,0 +1,46 @@
+# Archive acknowledgement clock refusal
+
+The acknowledgement gate previously compared its expiry against two separate
+wall-clock reads and did not require a usable clock. A failed read returning
+zero could accept a canonical acknowledgement with an expiry in the first
+900000 milliseconds after the epoch. Two different samples could also make
+its comparisons inconsistent. The later lease admission independently
+requires a positive clock; this finding does not establish a completed
+unauthorized inference or archive.
+
+The acknowledgement decision now samples the clock once, rejects nonpositive
+or out-of-range values, and uses that same sample for the expiry window.
+Retention refresh also returns `resident/clock-unknown` for those clock values
+instead of reporting a retained head ready. The legacy no-ack path remains
+unchanged; Flint separately requires an archive gate. The host must still
+provide an authenticated, trustworthy and suitably monotonic clock. These
+checks do not establish clock accuracy or eliminate rollback.
+
+On one local Apple Silicon Mac, a signed native diagnostic source unity used
+the current resident source and tests with historical assembled dependencies,
+a fixed test clock and a diagnostic FS2 provider. The existing file-boundary
+ack test and retention test passed, including zero, negative and overflow-range
+clocks, expiry boundaries, missing or malformed acknowledgements, and normal
+positive cases. A separately built mutant removing the positive-clock check
+failed. A second native fixture set the clock to zero, created a canonical
+acknowledgement with `until=500000` in its private FS2 scope, and verified the
+actual file-backed `rt-archive-ack?` refused it. A separately built mutant
+without the positive-clock check failed that same fixture. The private test
+acknowledgement was removed between positive and mutant runs.
+
+Resident source SHA-256:
+`257d0846959177b2b226065f59edf5b61b7d8a3e2edf3612c91e32de767d7fd3`.
+Test source SHA-256:
+`5cd336d70d31319771f5d9d099215c037d27ee59ebe1f4c75a0a47a1a4577ce8`.
+First unity/image SHA-256:
+`e7b667102a6781ac8a2815cfeb8f6f85dda66dbb059a2825ae393dc3e7de5f14` /
+`4bcf0a4f7b37494449b6f5b5ba4d0190d7a9612885b3643ce325279ecdab8c97`.
+Clock-zero file unity/image SHA-256:
+`3e4abd7ce3015f61a29b3d24934a1e48ad36cd375da3f520fc52fb513358b3f3` /
+`006ea104c812b45ab7d8505ab428a80264ba92637674444c3b0ac610fe451bbc`.
+Compiler SHA-256:
+`920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6`;
+packager SHA-256:
+`f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`.
+This is a diagnostic fixture, not a full source-locked selfhost build, actual
+clock failure, production FS2 qualification, GitHub archive or bot run.
