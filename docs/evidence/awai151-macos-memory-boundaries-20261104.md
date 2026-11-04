@@ -45,6 +45,14 @@ The observed outcome suffices to reject a single-PID limit as an aggregate
 process-tree boundary. Process groups alone also do not prove containment of
 children that create another group; see the existing AWAI-152 evidence.
 
+Amu main `16c32d4f0b34adf542939ce63941147f25e5f39f` contains a Darwin
+AMUH1 EXEC source path that sets an exec-preserved timer on the direct child
+and waits for that child. In a separate OS-level diagnostic on these three
+hosts, a parent armed for SIGALRM after one second forked a child. The parent
+exited by signal 14, but the child reported completion after two seconds. This
+was not an execution of the Amu artifact; its provenance and coverage remain
+unverified. A direct-child timer cannot be assumed to enforce a whole tree.
+
 ## Small MLX control
 
 Using existing MLX 0.29.3 and its GPU device, a separate single-process test
@@ -80,3 +88,4 @@ reproducible binaries:
 | `awai151-spawn-fork-inheritance.py` | `c9e7e1f57461149580d4e7a9aeb8e006a44f8a2565e7cd03b060d2487695704e` |
 | `awai151-mlx-jetsam-probe.py` | `013399ad7848c6499525cb55a1443651a1f9314992325faf99755a82af8ba8bb` |
 | `awai151-mlx-jetsam-256.py` | `3a76d483b5e5de6d784addc607b591029e1cc3c9439fbc072e9928b5101212b1` |
+| `awai152-alarm-fork-probe.py` | `959cc4232e1b876bf3c8cb4de742b53f5a90966d491fbde5ebfad84a8cd90636` |
