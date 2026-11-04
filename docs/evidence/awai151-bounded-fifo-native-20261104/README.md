@@ -41,3 +41,23 @@ Extended harness SHA-256:
 These are synthetic journal states, not killed-process or power-loss recovery;
 provider faults, short reads, adversarial replacement, resource limits and
 whole-workload termination remain unqualified.
+
+## Owned process termination at write boundaries
+
+On the same Mac, five source-instrumented test variants paused their own
+processes by filling an unread output pipe. The observer verified the marker,
+checked queue and intent, SIGKILLed only the paused child, and used a separately
+built, uninstrumented FIFO to inspect and reconcile the state. After intent,
+pending, rename and directory sync, `front` refused with `fifo/pending-unknown`;
+after intent archival it returned the enqueued ticket. Reconciliation returned
+`fifo/aborted` after intent, `fifo/recovery-unresolved` with the pending file,
+`fifo/recovered` after rename and sync, and `fifo/no-intent` after archival.
+The queue remained the expected old or new bytes after reconciliation.
+
+Extended harness SHA-256:
+`2a15775020ae45a9608d5c5defbc57a131273142443a026441a63e39c267da01`.
+This is a single instrumented process-kill sample per boundary using the
+diagnostic provider. It is not power loss, kernel I/O failure, full crash or
+workload recovery, resource governor qualification, or proof of what happened
+when an archived intent's response is lost. In particular `fifo/no-intent` is
+not independent proof that the original operation succeeded or failed.
