@@ -61,3 +61,22 @@ diagnostic provider. It is not power loss, kernel I/O failure, full crash or
 workload recovery, resource governor qualification, or proof of what happened
 when an archived intent's response is lost. In particular `fifo/no-intent` is
 not independent proof that the original operation succeeded or failed.
+
+## Source-injected sync failures during reconciliation
+
+The current bounded FIFO was separately compiled with test-only source
+substitutions making the queue, intent, first directory, or post-archive
+directory sync check fail. For each of the four points, both old-state and
+new-state journal fixtures returned `fifo/recovery-unknown` and retained the
+expected queue bytes. Before archival, the intent remained, `front` returned
+`fifo/pending-unknown`, and the unmodified program then reconciled old/new as
+`fifo/aborted`/`fifo/recovered`. After archival, the intent had already moved
+to `queue.last`: the unmodified program's `front` returned the visible queue
+and a subsequent `recover` returned `fifo/no-intent`. A trusted host must retain
+and reconcile the unknown operation rather than infer its outcome from either
+response.
+
+The extended harness SHA-256 was
+`47afb672cda7dbb7b602e424e0820c0e767e02d7a3e8457dbd5c56add8390f49`.
+This substitutes a false result in source; it does not inject a real kernel
+fsync failure, establish power-loss durability, or qualify a host or governor.
