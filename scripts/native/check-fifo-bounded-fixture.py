@@ -57,7 +57,7 @@ def main():
              '\n(defn main [] :i64 (if (and (test-fifo-meta-size) (test-fifo-bounded-reads "/cases")) 0 1))\n')
     with tempfile.TemporaryDirectory(prefix='awai151-fifo-boundary-', dir='/private/tmp') as tmp:
         root = Path(tmp); scope = root / 'cases'; scope.mkdir(mode=0o700)
-        for name, data in [('small', b'RGQ3\n'), ('queue-limit', b'x'*4165), ('queue-over', b'x'*4166),
+        for name, data in [('small', b'RGQ4\n'), ('queue-limit', b'x'*4165), ('queue-over', b'x'*4166),
                            ('journal-limit', b'x'*8340), ('journal-over', b'x'*8341), ('empty', b'')]:
             (scope / name).write_bytes(data)
         (root / 'fixture.kotoba').write_text(unity)
@@ -70,6 +70,11 @@ def main():
             raise ValueError('reservation guard mutation anchor changed')
         (root / 'reserve-bypass.kotoba').write_text(plain.replace(
             hold_guard, '(= hold-status "never") "fifo/reservation-held"'))
+        history_guard = '(not (rq-history-clear? root)) "fifo/reservation-unknown"'
+        if plain.count(history_guard) != 1:
+            raise ValueError('history guard mutation anchor changed')
+        (root / 'history-bypass.kotoba').write_text(plain.replace(
+            history_guard, 'false "fifo/reservation-unknown"'))
         pause = '(rq-test-pause)'
         helper = ('(defn- rq-test-pause [] :bool\n'
                   '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
@@ -100,6 +105,12 @@ def main():
             release_anchor, release_anchor.replace('(= (rq-fs "M" root "") "1")', 'false')))
         (root / 'release-pause.kotoba').write_text(plain.replace('(defn- rq-commit ', helper + '(defn- rq-commit ')
             .replace(release_anchor, release_anchor.replace('"1")\n', '"1") ' + pause + '\n', 1)))
+        settle_anchor = ('(= (rq-fs "L" release (str root "/queue.reservation.last")) "1")\n'
+                         '                               (= (rq-fs "M" root "") "1")')
+        if plain.count(settle_anchor) != 1:
+            raise ValueError('settle fault anchor changed')
+        (root / 'settle-sync-fault.kotoba').write_text(plain.replace(
+            settle_anchor, settle_anchor.replace('(= (rq-fs "M" root "") "1")', 'false')))
         recovery_start = plain.index('(defn- rq-recover ')
         recovery_end = plain.index('(defn- rq-commit ', recovery_start)
         recovery_source = plain[recovery_start:recovery_end]
@@ -146,13 +157,42 @@ def main():
             fifo = build('fifo')
             reserve_bypass = build('reserve-bypass')
             queue = root / 'queuecase'; queue.mkdir(mode=0o700)
-            (queue / 'queue.lock').write_text(''); (queue / 'queue').write_text('RGQ3\n')
+            (queue / 'queue.lock').write_text(''); (queue / 'queue').write_text('RGQ4\n')
             if legacy:
                 old = subprocess.run([str(legacy), '/queuecase', 'front'], cwd=root, pass_fds=(3,),
                                      capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
                 if old.returncode != 1 or old.stdout != b'fifo/state-invalid\n' or old.stderr:
-                    raise ValueError(('old FIFO did not refuse RGQ3', old.returncode, old.stdout, old.stderr))
+                    raise ValueError(('old FIFO did not refuse RGQ4', old.returncode, old.stdout, old.stderr))
             first, second, third = 'a'*64, 'b'*64, 'c'*64
+            # A lost settle sync acknowledgement must retain a barrier until
+            # the exact ticket and journal are explicitly reconciled.
+            lost_queue = root / 'settle-unknown'; lost_queue.mkdir(mode=0o700)
+            (lost_queue / 'queue.lock').write_text('')
+            (lost_queue / 'queue').write_text('RGQ4\n' + first + '\n' + second + '\n')
+            lost_image = build('settle-sync-fault')
+            history_bypass = build('history-bypass')
+            def lost_op(action, ticket=None, image=fifo):
+                args = [str(image), '/settle-unknown', action] + ([ticket] if ticket else [])
+                r = subprocess.run(args, cwd=root, pass_fds=(3,), capture_output=True,
+                                   timeout=15, env={'PATH':'/nonexistent'})
+                if r.stderr: raise RuntimeError(('unexpected settle test stderr', r.stderr))
+                return r.returncode, r.stdout.decode().strip()
+            for action, ticket, expected in [('reserve', first, (0, 'fifo/reserved')),
+                                              ('release', first, (0, 'fifo/release-pending')),
+                                              ('dequeue', first, (0, 'fifo/dequeued'))]:
+                if lost_op(action, ticket) != expected: raise ValueError(('settle setup failed', action))
+            if lost_op('settle', first, lost_image) != (1, 'fifo/reservation-unknown'):
+                raise ValueError('settle sync failure was not unknown')
+            if lost_op('front') != (1, 'fifo/reservation-unknown'):
+                raise ValueError('unknown settle exposed the next ticket')
+            if lost_op('front', image=history_bypass) != (0, 'fifo/front ' + second):
+                raise ValueError('history bypass did not expose the counterexample')
+            if lost_op('settle-recover', second) != (1, 'fifo/reservation-unknown'):
+                raise ValueError('wrong ticket reconciled settle')
+            if lost_op('settle-recover', first) != (0, 'fifo/settled'):
+                raise ValueError('matching settle could not be reconciled')
+            if lost_op('front') != (0, 'fifo/front ' + second):
+                raise ValueError('reconciled ticket was not exposed')
             def op(action, ticket=None):
                 args = [str(fifo), '/queuecase', action] + ([ticket] if ticket else [])
                 r = subprocess.run(args, cwd=root, pass_fds=(3,), capture_output=True,
@@ -167,6 +207,8 @@ def main():
             (queue / 'queue').write_text('RGQ2\n')
             expect('front', (1, 'fifo/state-invalid'))
             (queue / 'queue').write_text('RGQ3\n')
+            expect('front', (1, 'fifo/state-invalid'))
+            (queue / 'queue').write_text('RGQ4\n')
             expect('front', (0, 'fifo/empty'))
             expect('enqueue', (0, 'fifo/enqueued'), first)
             expect('enqueue', (0, 'fifo/enqueued'), second)
@@ -196,7 +238,7 @@ def main():
             expect('front', (1, 'fifo/release-pending'))
             expect('settle', (0, 'fifo/settled'), first)
             # Reset this private synthetic queue for the killed-owner case.
-            (queue / 'queue').write_text('RGQ3\n' + first + '\n' + second + '\n')
+            (queue / 'queue').write_text('RGQ4\n' + first + '\n' + second + '\n')
             for variant_name in ('release-sync-fault', 'release-pause'):
                 release_image = build(variant_name)
                 expect('reserve', (0, 'fifo/reserved'), first)
@@ -223,7 +265,7 @@ def main():
                 expect('dequeue', (0, 'fifo/dequeued'), first)
                 expect('front', (1, 'fifo/release-pending'))
                 expect('settle', (0, 'fifo/settled'), first)
-                (queue / 'queue').write_text('RGQ3\n' + first + '\n' + second + '\n')
+                (queue / 'queue').write_text('RGQ4\n' + first + '\n' + second + '\n')
             (queue / 'queue.reservation').write_text('partial')
             expect('front', (1, 'fifo/reservation-held'))
             expect('release', (1, 'fifo/reservation-unknown'), first)
@@ -255,11 +297,11 @@ def main():
             expect('settle', (0, 'fifo/settled'), first)
             expect('front', (0, 'fifo/front '+second))
             # Clear the private fixture only after the settled test.
-            (queue / 'queue').write_text('RGQ3\n')
+            (queue / 'queue').write_text('RGQ4\n')
             (queue / 'queue.pending').write_text('partial')
             expect('enqueue', (1, 'fifo/pending-unknown'), third)
             (queue / 'queue.pending').unlink()
-            old = 'RGQ3\n'; new = old + first + '\n'
+            old = 'RGQ4\n'; new = old + first + '\n'
             (queue / 'queue.intent').write_text('RGI1\n' + old + 'NEXT\n' + new)
             expect('front', (1, 'fifo/pending-unknown'))
             expect('recover', (0, 'fifo/aborted'))
@@ -279,7 +321,7 @@ def main():
                 raise ValueError(('unexpected concurrent outcome', outcomes))
             accepted = [ticket for ticket, outcome in zip(tickets, outcomes) if outcome == (0, 'fifo/enqueued')]
             lines = (queue / 'queue').read_text().splitlines()
-            if lines[0] != 'RGQ3' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
+            if lines[0] != 'RGQ4' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
                 raise ValueError('concurrent state mismatch')
             killed_phases = []; variants = {}
             for phase in anchors:
@@ -327,7 +369,7 @@ def main():
             for phase, variant in variants.items():
                 case = root / ('release-kill-' + phase); case.mkdir(mode=0o700)
                 (case / 'queue.lock').write_text('')
-                (case / 'queue').write_text('RGQ3\n' + first + '\n')
+                (case / 'queue').write_text('RGQ4\n' + first + '\n')
                 (case / 'queue.release.pending').write_text('RGH1\n' + first + '\n')
                 path = '/release-kill-' + phase
                 child = subprocess.Popen([str(variant), path, 'dequeue', first], cwd=root, pass_fds=(3,),

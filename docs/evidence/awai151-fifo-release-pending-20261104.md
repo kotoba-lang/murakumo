@@ -61,3 +61,38 @@ the earlier pinned diagnostics
 `f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`.
 A production provider, process supervisor, full workload termination, resource
 limits, durable host recovery, distributed fence and selfhost are unqualified.
+
+## RGQ4 settle acknowledgement barrier
+
+RGQ3 could expose the next ticket if settle moved the release marker but its
+final directory-sync acknowledgement was lost. The RGQ4 candidate requires a
+matching `queue.reservation.settled` receipt after the history marker is
+synced. With neither active reservation nor release pending, missing,
+mismatched, malformed or unsynchronizable history/receipt remains unknown.
+Before the next reservation the receipt is moved to `.previous` and synced;
+interruption while consuming it remains unknown. The explicit `settle-recover`
+operation requires the exact ticket, current queue, durable dequeue journal,
+absence of active transaction/hold/release and successful syncs before restoring
+the receipt. It does not prove workload termination; that remains a trusted
+host prerequisite. A stale journal after another queue operation may prevent
+reconciliation and requires separate host handling. No automatic migration is
+provided: RGQ1, RGQ2 and RGQ3 must be refused, and older callers must be
+excluded.
+
+A signed local native Darwin FS2 diagnostic tested a source-injected failure
+immediately after moving the release marker: settle returned unknown and front
+refused; the wrong ticket could not recover; the matching ticket recovered,
+and the next reservation/release/dequeue/settle completed. The current FIFO
+refused an RGQ3 queue. A separate history-guard bypass mutant exposed the next
+ticket in the same unknown state, so the control distinguished the fix. The
+source/image SHA-256 values were:
+
+- current: `0c336627beaa716305fc894d547504ee207b51b7a32117bc63989f8623cb30a9` / `abd117f8a18503fd3404bc94ea765683d928a4b25239285076f1a273f6374d51`
+- injected lost sync response: `ab05d2c9a27dec8b40c57db99d93c61d26529ffb27fc492ba97ead33a8929eaa` / `1d81531786efa4c7eb94fc7d631fb7023d6c8a784baa8fd7c46d45c9432f0367`
+- history guard bypass: `a66efa69756519c6bf3a6e42a4f8ce19f8a4fa6c2117799d713ae301850125c6` / `2c2dacb62c422b807c0f0cdd6c15fa2877b0220949712d614535091ba990abfc`
+
+Each native process had a three-second CPU cap. The repository fixture has
+been updated for RGQ4 and includes the injected acknowledgement-loss and
+bypass cases, but its complete suite was not run here. This is not a real
+kernel fsync failure, power loss, multihost recovery, process supervisor or
+qualified resource governor; do not deploy workloads on this evidence.

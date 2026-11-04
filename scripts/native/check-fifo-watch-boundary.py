@@ -26,7 +26,7 @@ def wait_exact(f,n,timeout):
   out+=chunk
  return out
 with tempfile.TemporaryDirectory(prefix='awai151-watch-fifo-',dir='/private/tmp') as d:
- root=Path(d);q=root/'q';q.mkdir();(q/'queue.lock').write_text('');(q/'queue').write_text('RGQ3\n')
+ root=Path(d);q=root/'q';q.mkdir();(q/'queue.lock').write_text('');(q/'queue').write_text('RGQ4\n')
  fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
  if fd!=3:os.dup2(fd,3)
  def op(action,ticket=None):
