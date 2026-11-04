@@ -21,3 +21,12 @@ files and source stubs; it is not a live systemd query, inference server,
 monotonic-clock qualification, full resident execution, or governor test.
 The recorded diagnostic references local absolute paths and is not a product
 runtime or deployment command.
+
+A follow-up diagnostic also simulated a clock rollback during the query and
+during the read. Both count and Flint generation refused, while a non-Flint
+control retained its prior behavior. Removing both post-checks made each
+rollback case fail. Updated count fixture SHA-256 was
+`dc13db3a894086833d40ab6c358f1006152481be27b14f193d843a3b1cc7e5d2`;
+updated generation fixture SHA-256 was
+`55c4d984fe8bd1b6b4466e62f6f3f221056ecbca5fb05dbaca177ba5723f5834`.
+This uses a simulated clock, not an independently qualified monotonic clock.
