@@ -78,6 +78,20 @@
               (= (checkpoint-problem b author profile policy environment epoch parent task) "checkpoint/ok")
               (cp-closure? store b)))))
 
+;; The remote manifest is untrusted. The provider must enforce the range
+;; bound, and the private host must exclude aliases and concurrent writes.
+;; Only legacy restores allow one trailing newline.
+(defn- ga-manifest-size? [actual :i64 expected :i64 legacy :bool] :bool
+  (and (> expected 0) (<= expected 8192)
+       (or (= actual expected) (and legacy (= actual (+ expected 1))))))
+(defn- ga-manifest-file-matches? [path :string expected :vector-i64 legacy :bool] :bool
+  (let [n (vector-count expected) size (cp-size path)]
+    (if (not (ga-manifest-size? size n legacy)) false
+      (let [actual (cp-range path 0 size)]
+        (and (= (vector-count actual) size) (= (cp-size path) size)
+             (or (= (cp-cid actual) (cp-cid expected))
+                 (and legacy (= (cp-cid actual) (cp-cid (cp-bytes (str (cp-text expected) "\n")))))))))))
+
 ;; A fixed private repository, non-force ref and independent fetch are
 ;; mandatory. A push acknowledgement alone is never success. Work is a fresh,
 ;; host-allocated task path: failure retains it for reconciliation. In
@@ -117,7 +131,7 @@
                   got (if (cp-ok? fetch) (cp-git readback "rev-parseARG_SEPFETCH_HEAD^{tree}") "refused")
                   check (if (and (cp-ok? got) (= (cp-line (cp-out got)) tree)) (cp-git readback "fsckARG_SEP--fullARG_SEP--strict") "refused")
                   checkout (if (cp-ok? check) (cp-git readback "checkoutARG_SEP--quietARG_SEPFETCH_HEADARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
-                  verified (and (cp-ok? checkout) (= (cp-cid (cp-read (str readback "/manifest.json"))) (cp-cid manifest))
+                  verified (and (cp-ok? checkout) (ga-manifest-file-matches? (str readback "/manifest.json") manifest false)
                                 (ga-verified? (str readback "/blocks") cid author profile policy environment epoch parent task))]
               (if verified (str "archive/stored " cid " " tree " " (if (cp-ok? push) "acknowledged" "unacknowledged"))
                 "archive/readback-unknown-or-conflict")))))))
@@ -160,7 +174,7 @@
               tree (cp-line (cp-out tree-result))
               check (if (and (cp-ok? tree-result) (cp-hex? tree 40)) (cp-git readback "fsckARG_SEP--fullARG_SEP--strict") "refused")
               checkout (if (cp-ok? check) (cp-git readback "checkoutARG_SEP--quietARG_SEPFETCH_HEADARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
-              verified (and (cp-ok? checkout) (ga-manifest-matches? (cp-read (str readback "/manifest.json")) manifest)
+              verified (and (cp-ok? checkout) (ga-manifest-file-matches? (str readback "/manifest.json") manifest true)
                             (ga-verified? blocks cid author profile policy environment epoch parent task))]
           (if verified (str "archive-restore/fetched " cid " " tree) "archive-restore/readback-refused"))))
 
