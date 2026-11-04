@@ -463,3 +463,21 @@ restart, and wall time is not a monotonic clock. These stubs do not exercise
 the production host clock, systemd, curl, lease fencing, model, GitHub state,
 or an end-to-end governor. Trusted monotonic timing, native process lifecycle,
 and the rest of the integration remain unqualified.
+
+## Lease-refresh clock samples (2026-11-05)
+
+The resident now retains the clock sample immediately before the second lease
+round, compares the sample after it against that value, and passes the latter
+as the generation phase's start. Previously the after sample was compared
+only with the initial admission time. With stubbed clock and lease in the
+selected-source native diagnostic, initial 106500 ms, pre-refresh 108000 ms,
+and post-refresh 107000 ms now refuse before generation; reverting that guard
+causes the regression case to fail. A forward 109000 ms sample reaches the
+stub generation phase and is passed to it as the start. Other existing
+wait, deadline, refresh and mutant controls also passed. Compiler, packager
+and CPU-limit conditions are as above.
+
+This comparison does not cover unsampled rollback or bind the last sample
+inside count to the resident's next sample. It does not make wall time
+monotonic, bound the lease round itself, qualify an actual lease, connect a
+Mac runtime, or establish a resource governor or GitHub state publication.

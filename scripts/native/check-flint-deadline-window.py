@@ -178,7 +178,7 @@ def main():
     refresh = 'again (rt-lease cfg (cp-num lease 0 "epoch"))'
     if dispatch.count(refresh) != 1:
         raise ValueError('resident lease refresh mutation anchor changed')
-    recheck_guard = '(< (pr-window-seconds now deadline (rt-now) budget) 1)'
+    recheck_guard = '(< (pr-window-seconds now deadline before budget) 1)'
     if dispatch.count(recheck_guard) != 1:
         raise ValueError('pre-refresh deadline guard anchor changed')
     resident_stubs = r'''
@@ -227,6 +227,38 @@ def main():
            (= e "profile/budget-refused") (= (vector-at timed 0) 1)
            (= (vector-at timed 1) 1) (= (vector-at timed 2) 0)) 0 1)))
 '''
+    lease_rollback_stubs = r'''
+(defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
+ (let [n (+ (vector-at cfg 0) 1) x (vector-assoc! cfg 0 n)
+       marker (if (= n 2) (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Ilease-after\u0000")) "none")] [1]))
+(defn- rt-now [] :i64
+ (cond (= (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Dlease-after\u0000")) "\u0000FS2\u00001") 107000
+       (= (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Dlease-before\u0000")) "\u0000FS2\u00001") 108000 :else 106500))
+(defn- rt-post-problem [cfg :vector-i64 head :vector-i64 lease :vector-i64 fresh :vector-i64 now :i64] :string "resident/admission-held")
+(defn- rf-budget [a :i64 b :i64 c :i64] :i64 10)
+(defn- rt-clock-window? [now :i64 margin :i64] :bool true)
+(defn- rt-runtime [cfg :vector-i64] :vector-i64 cfg)
+(defn- cp-num [b :vector-i64 i :i64 key :string] :i64 1)
+(defn- cp-str [b :vector-i64 i :i64 key :string] :string "/cache")
+(defn- pr-local-flint? [b :vector-i64] :bool true)
+(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 start :i64 deadline :i64 phase :i64] :string
+ (if (= phase 1)
+  (let [x (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Ilease-before\u0000"))] "profile/flint-count-ready")
+  (let [x (vector-assoc! runtime 4 start)] "profile/step-completed")))
+'''
+    lease_rollback_cases = '''
+(defn main [] :i64
+ (let [cfg (vector-alloc 5) out (rt-dispatch cfg [1] [1] "/test" 1)]
+  (if (and (= out "profile/budget-refused") (= (vector-at cfg 0) 2) (= (vector-at cfg 4) 0)) 0 1)))
+'''
+    lease_forward_cases = '''
+(defn main [] :i64
+ (let [cfg (vector-alloc 5) out (rt-dispatch cfg [1] [1] "/test" 1)]
+  (if (and (= out "profile/step-completed") (= (vector-at cfg 0) 2) (= (vector-at cfg 4) 109000)) 0 1)))
+'''
+    lease_guard = '(pr-window-seconds before deadline after budget)'
+    if dispatch.count(lease_guard) != 1:
+        raise ValueError('lease rollback guard anchor changed')
     def limit():
         resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
     with tempfile.TemporaryDirectory(prefix='awai-flint-window-', dir='/private/tmp') as tmp:
@@ -264,6 +296,9 @@ def main():
                 ('generation-rollback', window + rollback_stubs + gen_wait + rollback_gen_cases, 0),
                 ('generation-rollback-mutant', window + rollback_stubs + gen_wait.replace(poll_guard, '(pr-window-seconds started deadline now seconds)') + rollback_gen_cases, 1),
                 ('generation-forward', window + forward_stubs + gen_wait + forward_gen_cases, 0),
+                ('lease-rollback', window + lease_rollback_stubs + dispatch + lease_rollback_cases, 0),
+                ('lease-rollback-mutant', window + lease_rollback_stubs + dispatch.replace(lease_guard, '(pr-window-seconds now deadline after budget)') + lease_rollback_cases, 1),
+                ('lease-forward', window + lease_rollback_stubs.replace('107000', '109000') + dispatch + lease_forward_cases, 0),
                 ('resident-refresh', window + resident_stubs + dispatch + resident_cases, 0),
                 ('resident-refresh-mutant', window + resident_stubs + dispatch.replace(refresh, 'again lease') + resident_cases, 1),
                 ('pre-refresh-deadline-mutant', window + resident_stubs + dispatch.replace(recheck_guard, 'false') + resident_cases, 1),
@@ -284,7 +319,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(image)], check=True, capture_output=True)
                 shutil.rmtree(root / 'step-time', ignore_errors=True)
                 shutil.rmtree(root / 'poll-seen', ignore_errors=True)
-                for marker_name in ('gen-expired', 'gen-valid', 'gen-mtp', 'rollback-first', 'rollback-second'):
+                for marker_name in ('gen-expired', 'gen-valid', 'gen-mtp', 'rollback-first', 'rollback-second', 'lease-before', 'lease-after'):
                     shutil.rmtree(root / marker_name, ignore_errors=True)
                 run([image], expected)
                 print(name, 'source-sha256', hashlib.sha256(text.encode()).hexdigest(), 'image-sha256', digest(image))
