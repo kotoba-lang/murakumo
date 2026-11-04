@@ -1,0 +1,14 @@
+;; A qualified FS2 test host must supply a private directory with regular
+;; ASCII files: small = "RGQ1\n", queue-limit = 4165 bytes, queue-over = 4166
+;; bytes, journal-limit = 8340 bytes, journal-over = 8341 bytes, empty = zero
+;; bytes, and no file named missing. These cases have not been executed.
+(ns murakumo.resource-fifo-bounded-cases (:export [test-fifo-bounded-reads]))
+
+(defn test-fifo-bounded-reads [root :string] :bool
+  (and (= (rq-read-bounded (str root "/small") 4165) "RGQ1\n")
+       (= (string-length (rq-read-bounded (str root "/queue-limit") 4165)) 4165)
+       (= (rq-read-bounded (str root "/queue-over") 4165) "")
+       (= (string-length (rq-read-bounded (str root "/journal-limit") 8340)) 8340)
+       (= (rq-read-bounded (str root "/journal-over") 8340) "")
+       (= (rq-read-bounded (str root "/empty") 4165) "")
+       (= (rq-read-bounded (str root "/missing") 4165) "")))

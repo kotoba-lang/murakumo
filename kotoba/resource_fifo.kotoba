@@ -10,6 +10,35 @@
   (let [reply (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
     (if (and (>= (string-byte-length reply) 5) (= (string-substring reply 0 5) "\u0000FS2\u0000"))
       (string-substring reply 5 (string-length reply)) "")))
+;; Queue and journal are ASCII. Check metadata before requesting a bounded
+;; range, validate the FS2 frame and exact response, and check size again.
+;; The trusted provider must enforce the range bound; the host must exclude
+;; path aliases and same-size concurrent writes throughout each operation.
+(defn- rq-field [s :string wanted :i64] :string
+  (loop [i 0 start 0 field 0]
+    (cond (= i (string-length s)) (if (= field wanted) (string-substring s start i) "")
+          (= (string-substring s i (+ i 1)) " ")
+          (if (= field wanted) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ field 1)))
+          :else (recur (+ i 1) start field))))
+(defn- rq-size [path :string] :i64
+  (let [meta (rq-fs "O" path "") s (rq-field meta 1) n (string-length s)]
+    (if (or (not (= (rq-field meta 3) "0")) (= n 0) (> n 5)) -1
+      (loop [i 0 size 0]
+        (if (= i n) size
+          (let [c (string-code-point-at s i)]
+            (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* size 10) (- c 48))) -1)))))))
+(defn- rq-read-bounded [path :string maximum :i64] :string
+  (let [size (rq-size path)]
+    (if (or (< size 1) (> size maximum)) ""
+      (let [r (typed-cap-call 35 :string :bytes (str "\u0000FS2\u0000E" path "\u00000:" (string-from-i64 size)))
+            n (bytes-count r)
+            framed (and (= n (+ size 5)) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70)
+                        (= (bytes-at r 2) 83) (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
+            ascii (and framed (loop [i 5]
+                    (if (= i n) true
+                      (let [b (bytes-at r i)]
+                        (and (or (= b 10) (and (>= b 32) (<= b 126))) (recur (+ i 1)))))))]
+        (if (and ascii (= (rq-size path) size)) (string-from-utf8 (bytes-slice r 5 n)) "")))))
 ;; Use the byte FS2 form and verify its complete echo. The diagnostic
 ;; Darwin provider supports B as bytes; Linux supports this form as well.
 (defn- rq-write? [path :string value :string] :bool
@@ -66,7 +95,7 @@
            (rq-removal? old next))))
 (defn- rq-recover [root :string state :string pending-status :string intent-status :string] :string
   (let [intent (str root "/queue.intent")
-        journal (if (= intent-status "1") (rq-fs "A" intent "") "")
+        journal (if (= intent-status "1") (rq-read-bounded intent 8340) "")
         cut (string-index-of journal "NEXT\n")
         old (if (and (>= (string-length journal) 5) (>= cut 5)) (string-substring journal 5 cut) "")
         next (if (and (>= cut 5) (<= (+ cut 5) (string-length journal)))
@@ -97,14 +126,14 @@
     (and (= (rq-fs "D" intent "") "0") (= (rq-fs "D" tmp "") "0")
          (rq-write? intent (str "RGI1\n" original "NEXT\n" next)) (= (rq-fs "M" intent "") "1")
          (= (rq-fs "M" root "") "1") (rq-write? tmp next)
-         (= (rq-fs "M" tmp "") "1") (= (rq-fs "A" tmp "") next)
-         (= (rq-fs "A" state "") original) (= (rq-fs "L" tmp state) "1")
+         (= (rq-fs "M" tmp "") "1") (= (rq-read-bounded tmp 4165) next)
+         (= (rq-read-bounded state 4165) original) (= (rq-fs "L" tmp state) "1")
          (= (rq-fs "M" root "") "1") (= (rq-fs "L" intent (str root "/queue.last")) "1")
          (= (rq-fs "M" root "") "1"))))
 (defn- rq-apply [root :string op :string ticket :string] :string
   (let [state-path (str root "/queue") pending (str state-path ".pending") intent (str state-path ".intent")
         exists (rq-fs "D" state-path "") pending-status (rq-fs "D" pending "") intent-status (rq-fs "D" intent "")
-        state (if (= exists "1") (rq-fs "A" state-path "") "")]
+        state (if (= exists "1") (rq-read-bounded state-path 4165) "")]
     (cond (or (not (= exists "1")) (not (rq-valid? state))) "fifo/state-invalid"
           (= op "recover") (rq-recover root state pending-status intent-status)
           (or (not (= pending-status "0")) (not (= intent-status "0"))) "fifo/pending-unknown"
