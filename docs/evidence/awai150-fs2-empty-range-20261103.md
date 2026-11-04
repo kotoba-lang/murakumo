@@ -21,6 +21,13 @@ the five-byte FS2 prefix followed by the diagnostic's output newline, exit 0.
 An absent file with `0:0` and an empty file with `0:1` both exited -5 without
 output on this run: failure is a trap rather than a normal error response.
 
+On 2026-11-04 the same pinned diagnostic was rerun with a task-owned
+4097-byte ASCII file. Ranges `0:4096`, `4096:1` and `100:3997` returned the
+expected bytes. The request `100:4096` extended past EOF and exited with
+SIGTRAP rather than a recoverable short response. The updated probe asserts
+both successful byte comparisons and the failure. This emphasizes that a
+metadata/range race may terminate this diagnostic instead of returning false.
+
 The diagnostic requests a **string** response and prints it. The checkpoint
 candidate requests a **bytes** response, and the modified checkpoint code
 was not executed. This observation therefore does not qualify that ABI, its
