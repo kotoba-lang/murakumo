@@ -144,3 +144,14 @@ selected program SHA-256 was
 This exercises selected source with a stub, not the real probe, real oracle,
 full host suite, admission under actual load, or a qualified governor. It does
 not remedy a probe that silently misses holders.
+
+The consumer additionally preserves an unknown aperture itself, without
+asking `usable-bytes` to interpret it, and refuses admission with zero grant
+when usable capacity is unknown or outside the shared exact-integer range.
+Selected ClojureScript source passed an integrated case with an intentionally
+fail-open synthetic oracle that would otherwise convert unknown to capacity;
+removing the propagation guard failed the same case. Source SHA-256 was
+`f96c92196703813c4c5831039eff526842295e50f7e2e5ff613002a8bf3d486c`
+and the selected diagnostic program SHA-256 was
+`7964a4c3aa43dc1c41a70d3b202348ea9d75ececa04f962223feaa68a84cbcc7`.
+The synthetic oracle does not establish the actual oracle or host behavior.

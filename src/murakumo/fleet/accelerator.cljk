@@ -116,7 +116,12 @@
 
 (defn usable-bytes
   ([probe] (usable-bytes probe (headroom-default-milli)))
-  ([probe headroom-milli] (o "usable-bytes" [(aperture-bytes probe) headroom-milli])))
+  ([probe headroom-milli]
+   (let [aperture (aperture-bytes probe)]
+     ;; Do not rely on an unqualified oracle to propagate an unknown input.
+     (if (and (integer? aperture) (<= 0 aperture 9007199254740991))
+       (o "usable-bytes" [aperture headroom-milli])
+       unmeasured))))
 
 (defn committed
   "Claims folded into the two classes by a caller-supplied registry.
@@ -168,14 +173,18 @@
                              (= 75 (o "granted-bytes" [0 100 20 5])))
         unreadable (:unreadable-claims probe)
         observed? (and valid-claims? (integer? unreadable) (zero? unreadable))
-        code (if (and oracle-current? observed?) (o "admit-code" [k request-bytes usable res opp]) 7)
+        measured? (and (integer? usable) (<= 0 usable 9007199254740991))
+        code (cond (not (and oracle-current? observed?)) 7
+                   (not measured?) 1
+                   :else (o "admit-code" [k request-bytes usable res opp]))
         reason (cond (not oracle-current?) :oracle-unqualified
                      (not observed?) :invalid-observation
+                     (not measured?) :unmeasured
                      :else (keyword (o "code-name" [code])))]
     {:admitted? (zero? code)
      :code code
      :reason reason
-     :granted (if (and oracle-current? observed?) (o "granted-bytes" [k usable res opp]) 0)
+     :granted (if (and oracle-current? observed? measured?) (o "granted-bytes" [k usable res opp]) 0)
      :usable usable
      :resident res
      :opportunistic opp}))

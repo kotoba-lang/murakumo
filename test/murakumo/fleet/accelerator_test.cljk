@@ -44,6 +44,21 @@
                    {:vram-total 0}]]
       (is (= accel/unmeasured (accel/aperture-bytes probe))))))
 
+(deftest unknown-aperture-cannot-be-promoted-by-oracle
+  ;; This intentionally wrong oracle turns unknown into usable capacity.
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export args]
+                              (case export
+                                "usable-bytes" 100
+                                "admit-code" (if (= args [0 76 100 20 5]) 3 0)
+                                "granted-bytes" (if (= args [0 100 20 5]) 75 100)
+                                "code-name" "admitted"))]
+    (let [probe {:vram-total 9007199254740991 :gtt-total 1 :claims [] :unreadable-claims 0}
+          result (accel/admit probe {} :resident 1 0)]
+      (is (= :unmeasured (:reason result)))
+      (is (false? (:admitted? result)))
+      (is (= 0 (:granted result))))))
+
 (deftest unmeasured-refuses-and-never-admits
   (testing "a probe that read nothing yields an unmeasured aperture"
     (doseq [broken [{:vram-total accel/unmeasured :gtt-total (gb 23.3) :claims []}

@@ -29,13 +29,13 @@ def main():
     prelude = '''(ns awai151-probe (:require [clojure.string :as str]))
 (def unmeasured -1)
 (def classes {:resident 0 :opportunistic 1})
-(defn usable-bytes [& _] 100)
-(defn headroom-default-milli [] 0)
-(defn o [op args] (case op "aperture-bytes" (apply + args) "admit-code" (if (= args [0 76 100 20 5]) 3 0) "granted-bytes" (if (= args [0 100 20 5]) 75 100) "code-name" "admitted"))
+(defn o [op args] (case op "aperture-bytes" (apply + args) "headroom-default-milli" 0
+                       "usable-bytes" 100 "admit-code" (if (= args [0 76 100 20 5]) 3 0)
+                       "granted-bytes" (if (= args [0 100 20 5]) 75 100) "code-name" "admitted"))
 '''
     cases = r'''
 (let [p (parse-probe "vram-total\t100\ngtt-total\t0\nclaim\t1\t42garbage\tw\nclaim\t2\t9007199254740992\tw\nclaim\t3\t-1\tw\n")
-      good {:claims [] :unreadable-claims 0}
+      good {:vram-total 100 :gtt-total 0 :claims [] :unreadable-claims 0}
       bad [(dissoc good :claims) (assoc good :claims [42])
            (assoc good :claims [{:pid "1" :comm "w" :bytes -1}])
            (assoc good :claims [{:pid "1" :comm "w" :bytes 9007199254740991} {:pid "2" :comm "w" :bytes 1}]) p]]
@@ -45,6 +45,11 @@ def main():
              {:vram-total "1" :gtt-total 0} {:vram-total 0}]]
     (assert (= -1 (aperture-bytes x))))
   (assert (:admitted? (admit good {} :resident 1 1)))
+  ;; The deliberately fail-open synthetic oracle returns usable 100 even for
+  ;; unknown inputs; the host must refuse before it can produce a grant.
+  (let [d (admit (assoc good :vram-total 9007199254740991 :gtt-total 1) {} :resident 1 0)]
+    (assert (= :unmeasured (:reason d))) (assert (false? (:admitted? d)))
+    (assert (= 0 (:granted d))))
   (doseq [x bad] (let [d (admit x {} :resident 1 1)]
                    (assert (= :invalid-observation (:reason d))) (assert (= 0 (:granted d)))))
   (assert (= {:resident 0 :opportunistic 80}
@@ -52,7 +57,7 @@ def main():
   (println "PASS selected ClojureScript admission diagnostic"))
 '''
     program = (prelude + section('(defn- parse-long*', ';; ── budget')
-               + section('(defn aperture-bytes', '(defn headroom-default-milli')
+               + section('(defn aperture-bytes', '(defn committed')
                + section('(defn committed', ';; ── demand') + cases)
 
     def limit():
@@ -80,6 +85,15 @@ def main():
                              capture_output=True, text=True, timeout=15, preexec_fn=limit)
     if control.returncode == 0 or 'Assert failed' not in control.stderr:
         raise RuntimeError(('aperture guard-removal control not detected', control.returncode,
+                            control.stdout[-1000:], control.stderr[-1000:]))
+    propagation_guard = '(and (integer? aperture) (<= 0 aperture 9007199254740991))'
+    if program.count(propagation_guard) != 1:
+        raise ValueError('unknown propagation mutation anchor changed')
+    mutant = program.replace(propagation_guard, 'true', 1)
+    control = subprocess.run([str(node), str(nbb), '-e', mutant], cwd='/private/tmp',
+                             capture_output=True, text=True, timeout=15, preexec_fn=limit)
+    if control.returncode == 0 or 'Assert failed' not in control.stderr:
+        raise RuntimeError(('unknown propagation control not detected', control.returncode,
                             control.stdout[-1000:], control.stderr[-1000:]))
     if SOURCE.read_bytes() != raw:
         raise RuntimeError('source changed during diagnostic')
