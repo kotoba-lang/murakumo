@@ -11,6 +11,34 @@ established separately before reinitialization. This draft has no automatic
 enrollment/recovery procedure and must not be deployed as one. A valid but
 stale register can still be replayed; this check alone does not prevent rollback.
 
+The current candidate reads only regular registers of 1–131072 bytes through
+bounded FS2 ranges and refuses larger or unreadable files; it does not reset
+them. Register writes above that bound are refused. The host must qualify the
+FS2 O/E provider and exclusive path handling. Existing oversized state needs
+explicit reconciliation. The token and other input paths are not bounded by
+this change.
+
+With a topology, this candidate additionally requires the exact canonical
+six-field `lease-text` shape and a nonnegative bounded revision before an
+accept. Topology-free diagnostic mode keeps its prior behavior. An older
+accepted value outside this stricter profile can block future Paxos adoption;
+the host must inspect and reconcile existing registers before migration, not
+reset them. This does not authenticate quorum membership or fence effects.
+
+The draft also adds a read-only `inspect-register <absolute-path>` entry. It
+reports only `voter/state-no-accepted-value`, `voter/state-shape-compatible`,
+`voter/state-shape-incompatible`, or `voter/state-unknown`; it never prints the
+register or modifies it. Shape compatibility alone does not establish quorum,
+provenance, membership, freshness, or permission to reset. The entry and its
+FS2 provider have not yet been built or qualified, and no deployed register
+has been inspected with this candidate.
+
+The draft voter requires a newline before processing a request. A timeout,
+closed connection or receive limit can otherwise yield a valid-looking prefix
+that changes the durable register. A composed source check passes with line
+completion cases; actual socket truncation, timeout, authentication and
+unchanged-register cases have not yet been executed on this candidate.
+
 `init-fresh` returns `voter/init-created`, `voter/init-refused`, or
 `voter/init-unknown`; unknown means publication may have happened and must be
 reconciled before any retry. On ARM64 Linux/XFS, the native fixture in
@@ -387,17 +415,39 @@ The receipt is [evidence/lease-preemption-20261023.json](evidence/lease-preempti
 
 A voter with a topology follows changes to its topology file while it runs,
 as `replicated_topology`'s `accept!` does for a resident:
-- **Polling.** While idle, the voter looks at the file every 500 ms.
+- **Polling.** The voter checks before waiting, after accepting, after reading
+  an authenticated request and after handling it. If the last check fails it
+  closes without replying, but the register may already have been written;
+  the outcome remains unknown. Changes between checks can still race request
+  processing; this is not an atomic revocation fence.
+  Topology reads require FS2 no-follow metadata and an exact range response
+  within the existing 262144-byte verifier limit. Missing, non-regular,
+  oversized or failed reads close requests without processing them.
 - **Adopting.** A changed file is adopted only when all three hold:
   - it verifies against the trust (`topology-verdict`);
   - its revision is higher than the one held;
   - every node of the held topology keeps its `owner-id`. A node can be
     retired, but its name cannot be given to another owner.
-- **Otherwise** the voter keeps the topology it holds.
+- **Otherwise** the voter retains the last verified topology in memory but
+  closes requests until a valid current or newer document is available.
 
 The log says `voter topology <revision>` or `voter kept <reason>`. The
 comparison and the verification run in `arena-scope`, so only an adopted
 or newly seen document stays allocated.
+
+Qualification of this candidate needs a continuous-traffic test: publish a
+valid higher revision that disables a member, keep authenticated requests
+arriving without an idle gap, and verify that requests after adoption are
+refused. Also change or remove the file while the voter is waiting in accept,
+then connect and check that it sends no lease reply. Also change it while a
+request is being read and while the register is being written; check that the
+latter has an unknown, possibly durable outcome. Include unchanged and
+invalid-revision controls, and check the idle exit behavior. Source check alone does not establish that behavior. The
+per-connection file read and its effect on throughput have not been measured;
+the host must provision the topology file and a provider that enforces bounded
+FS2 range responses; separate metadata/read calls are not a stable snapshot.
+Requests already being handled and independent voters are not atomically
+fenced by this check.
 
 The voters start on revision 7 (b70 enabled, k16 not) and keep running
 while `live.json` is replaced:
@@ -411,8 +461,10 @@ There are two controls:
   change;
 - **`unchecked`** voters adopt any changed file.
 
-With the same `$G`, `$K`, `node.kotoba`, `node.elf` and `topology.json`
-(from Membership):
+The following historical gate was run with the then-current source. Its
+`ln-same-file?` mutation no longer targets the current voter and must not be
+used as validation of this candidate. With the historical `$G`, `$K`,
+`node.kotoba`, `node.elf` and `topology.json` (from Membership):
 
 ```sh
 python3 -I docs/evidence/lease-rotation-topology-20261023.py "$G"
