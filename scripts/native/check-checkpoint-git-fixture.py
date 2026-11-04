@@ -124,6 +124,30 @@ def main():
             if guest(['verify', *base]) != 'checkpoint/verified\n': raise ValueError('post-control verify failed')
             if not guest(['closure', *base]).endswith('checkpoint/closure-complete\n'):
                 raise ValueError('closure failed')
+            successor = guest(['capture', '/fixture3/repo', '/fixture3/store', '/fixture3/input/seed',
+                               '/fixture3/input/profile', '/fixture3/input/policy', '/fixture3/input/environment',
+                               '/fixture3/input/summary', '/fixture3/input/untracked', '2', cid, 'fixture'])
+            successor_line, successor_json = successor.split('\n', 1)
+            if not successor_line.startswith('checkpoint/created '):
+                raise ValueError('successor capture failed')
+            next_cid = successor_line.split(' ')[1]
+            successor_doc = json.loads(successor_json)
+            if successor_doc['payload']['parent'] != cid or successor_doc['payload']['epoch'] != 2:
+                raise ValueError('successor binding mismatch')
+            recovery = guest(['recovery', '/fixture3/store', cid, next_cid,
+                              '/fixture3/input/seed', 'fixture'])
+            recovery_line, recovery_json = recovery.split('\n', 1)
+            if not recovery_line.startswith('recovery/recorded '):
+                raise ValueError('recovery record failed')
+            recovery_cid = recovery_line.split(' ')[1]
+            if json.loads((fixture / 'store' / recovery_cid).read_text()) != json.loads(recovery_json):
+                raise ValueError('recovery record readback mismatch')
+            recovery_args = ['/fixture3/store', recovery_cid, v['did'], cid, next_cid, 'fixture', '2']
+            if guest(['verify-recovery', *recovery_args]) != 'recovery/verified\n':
+                raise ValueError('recovery verification failed')
+            wrong_epoch = recovery_args.copy(); wrong_epoch[-1] = '3'
+            if guest(['verify-recovery', *wrong_epoch], 1) != 'recovery/contract\n':
+                raise ValueError('wrong recovery epoch accepted')
             if snapshot('repo') != before or snapshot('restored') != after:
                 raise ValueError('source or restore changed')
             if helper.digest(compiler) != a.compiler_sha256 or helper.digest(packager) != a.packager_sha256:
@@ -132,6 +156,8 @@ def main():
                             'capture': True, 'verify': True, 'restoreMatches': True,
                             'wrongPolicyRefused': True, 'existingDestinationRefused': True,
                             'corruptedBlockRefused': True, 'closure': True,
+                            'successorCaptured': True, 'recoveryRecordedAndVerified': True,
+                            'wrongRecoveryEpochRefused': True,
                             'scope': 'local Git diagnostic; privileged adapter; not production'})
             print(json.dumps(receipt))
         finally:
