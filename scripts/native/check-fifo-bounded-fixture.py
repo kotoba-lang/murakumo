@@ -230,6 +230,8 @@ def main():
             lost_queue = root / 'settle-unknown'; lost_queue.mkdir(mode=0o700)
             (lost_queue / 'queue.lock').write_text('')
             (lost_queue / 'queue').write_text('RGQ5\n' + first + '\n' + second + '\n')
+            for ticket in (first, second):
+                (lost_queue / ('queue.used.' + ticket)).write_text('RGU1\n' + ticket + '\n')
             lost_image = build('settle-sync-fault')
             history_bypass = build('history-bypass')
             def lost_op(action, ticket=None, image=fifo):

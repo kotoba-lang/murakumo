@@ -263,6 +263,8 @@
           (= op "reserve")
             (cond (= state "RGQ5\n") "fifo/empty"
                   (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
+                  (not (= (rq-read-bounded (str root "/queue.used." ticket) 70)
+                          (str "RGU1\n" ticket "\n"))) "fifo/ticket-unknown"
                   (and (rq-consume-history? root) (rq-write? hold (str "RGH1\n" ticket "\n"))
                        (= (rq-fs "M" hold "") "1") (= (rq-fs "M" root "") "1")) "fifo/reserved"
                   :else "fifo/reservation-unknown")

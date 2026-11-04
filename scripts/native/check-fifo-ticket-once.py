@@ -50,6 +50,11 @@ def main():
     if source.count(guard) != 1:
         raise ValueError('claim guard mutation anchor changed')
     bypass = source.replace(guard, '(cond false "fifo/ticket-used"\n          false "fifo/ticket-unknown"')
+    reserve_guard = ('(not (= (rq-read-bounded (str root "/queue.used." ticket) 70)\n'
+                     '                          (str "RGU1\\n" ticket "\\n"))) "fifo/ticket-unknown"')
+    if source.count(reserve_guard) != 1:
+        raise ValueError('reserve marker guard mutation anchor changed')
+    reserve_bypass = source.replace(reserve_guard, 'false "fifo/ticket-unknown"')
     with tempfile.TemporaryDirectory(prefix='awai151-ticket-once-', dir='/private/tmp') as directory:
         root = Path(directory)
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
@@ -77,7 +82,8 @@ def main():
             subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(image)], check=True, capture_output=True)
             return image
         try:
-            image, failed_claim, bypass_image = build('fifo', source), build('claim-fault', fault), build('claim-bypass', bypass)
+            image, failed_claim = build('fifo', source), build('claim-fault', fault)
+            bypass_image, reserve_mutant = build('claim-bypass', bypass), build('reserve-marker-bypass', reserve_bypass)
             q = root / 'q'; q.mkdir(); (q / 'queue.lock').write_text(''); (q / 'queue').write_text('RGQ5\n')
             def op(img, action, expected, ticket=None, code=0):
                 command = [img, '/q', action] + ([ticket] if ticket else [])
@@ -88,6 +94,18 @@ def main():
             op(old, 'front', 'fifo/state-invalid', code=1)
             for ticket in (a, b):
                 op(image, 'enqueue', 'fifo/enqueued', ticket)
+                if ticket == a:
+                    marker = q / ('queue.used.' + ticket)
+                    content = marker.read_text()
+                    marker.unlink()
+                    op(image, 'reserve', 'fifo/ticket-unknown', ticket, 1)
+                    if (q / 'queue.reservation').exists():
+                        raise ValueError('missing marker created reservation')
+                    op(reserve_mutant, 'reserve', 'fifo/reserved', ticket)
+                    (q / 'queue.reservation').unlink()  # isolated mutant fixture only
+                    marker.write_text('malformed')
+                    op(image, 'reserve', 'fifo/ticket-unknown', ticket, 1)
+                    marker.write_text(content)
                 op(image, 'reserve', 'fifo/reserved', ticket)
                 if ticket == b:
                     op(image, 'release', 'fifo/reservation-unknown', a, 1)

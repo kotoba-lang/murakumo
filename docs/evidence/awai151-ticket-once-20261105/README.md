@@ -26,8 +26,8 @@ ticket. The prior RGQ4 native image refused RGQ5 and the candidate refused
 RGQ4. Each native process had a three-second CPU cap; no hard memory cap was
 applied. These tests use isolated temporary files.
 
-Source SHA-256 `6c3e9c48fc4337116b805f9ce4c6571baacaf34da84d58a66d5c7fdd1e89b762`;
-signed candidate image SHA-256
+The initial diagnostic source SHA-256 was `6c3e9c48fc4337116b805f9ce4c6571baacaf34da84d58a66d5c7fdd1e89b762`;
+its signed candidate image SHA-256 was
 `eefea18ec593be484b9c417e80ad3701820f860f09b376b756df86118b55af32`;
 compiler SHA-256 `920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6`;
 diagnostic packager SHA-256 `f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`;
@@ -56,3 +56,25 @@ RGQ4 integration scripts remain pinned to their own format and images.
 This regression used per-process three-second CPU limits and no hard memory
 cap. It did not simulate power loss, actual sync failures, claim-marker loss
 or rollback, or establish authenticated release or whole-workload lifetime.
+
+## Refuse reservations without an intact claim
+
+The reserve operation now requires a complete bounded read of its ticket's
+exact `RGU1` marker before consuming history or creating a hold. A native test
+removed the marker and then replaced it with malformed contents; both were
+refused and the missing-marker case created no reservation. A separately
+compiled mutant without that guard admitted the missing-marker reservation.
+The ticket-reuse and bounded-FIFO diagnostics were rerun successfully. One
+eight-caller sample admitted four requests and reported four busy; this is not
+a fairness measurement. The synthetic recovery fixture now seeds markers for
+its directly injected tickets; it is still not a valid migration procedure.
+
+The current source SHA-256 is
+`0142b7864d6ff5bd91cfd6455569049d09fcc39c08f5729f70f78a175b55e750`
+and the signed FIFO image SHA-256 is
+`d2aaa21b5a6d130dae28e34413b9759f9070fe2cf588a4be694950f19d21ac15`.
+The same compiler and packager pins and per-process CPU limit were used.
+This guard detects an absent or corrupt marker for the ticket being reserved;
+it cannot detect historical markers silently removed after their ticket left
+the queue, restore rollback, unauthenticated release, power loss or a malicious
+writer. The host must still preserve the complete marker namespace.
