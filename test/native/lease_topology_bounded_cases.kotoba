@@ -1,0 +1,12 @@
+;; A qualified FS2 fixture supplies private regular files: small contains
+;; "abc", limit contains 262144 bytes, over contains 262145 bytes, empty is
+;; zero length, and missing does not exist. The host must separately inject
+;; malformed frames, short replies, metadata errors and size changes.
+(ns murakumo.lease-topology-bounded-cases (:export [test-lease-topology-bounded]))
+
+(defn test-lease-topology-bounded [root :string] :bool
+  (and (= (vector-count (ln-load-doc (str root "/small"))) 3)
+       (= (vector-count (ln-load-doc (str root "/limit"))) 262144)
+       (= (vector-count (ln-load-doc (str root "/over"))) 0)
+       (= (vector-count (ln-load-doc (str root "/empty"))) 0)
+       (= (vector-count (ln-load-doc (str root "/missing"))) 0)))

@@ -271,11 +271,22 @@
                   z (ln-write c)]
               0)))))))
 
+;; Topology validation caps documents at 262144 bytes. Check a no-follow
+;; regular-file size before requesting exactly that bounded range, and check
+;; the size again. The provider must enforce response bounds; the host must
+;; exclude path replacement and same-size concurrent writes.
+(defn- ln-doc-size [path :string] :i64
+  (let [meta (ln-fs "O" path "") digits (ln-field meta 1) size (ln-int digits)]
+    (if (and (= (ln-field meta 3) "0") (<= (string-length digits) 6)
+             (> size 0) (<= size 262144)) size -1)))
+
 (defn- ln-load-doc [path :string] :vector-i64
-  (let [r (typed-cap-call :fs/app-data :string :bytes (ln-frame "A" path "")) n (bytes-count r)]
-    (if (and (>= n 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
-             (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
-      (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))
+  (let [size (ln-doc-size path)]
+    (if (< size 1) (vector-alloc 0)
+      (let [r (typed-cap-call :fs/app-data :string :bytes (ln-frame "E" path (str "0:" size))) n (bytes-count r)]
+        (if (and (= n (+ size 5)) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+                 (= (bytes-at r 3) 50) (= (bytes-at r 4) 0) (= (ln-doc-size path) size))
+          (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))))
 
 ;; does the topology file still hold the bytes last seen (or is it gone)?
 (defn- ln-same-file? [path :string seen :vector-i64] :bool

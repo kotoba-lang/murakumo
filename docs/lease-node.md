@@ -390,6 +390,11 @@ as `replicated_topology`'s `accept!` does for a resident:
 - **Polling.** The voter checks after every handled connection and after each
   empty wait slice (up to 500 ms). A request already in progress may still use
   the previous topology; this is not an atomic revocation fence.
+  Topology reads require FS2 no-follow metadata and an exact range response
+  within the existing 262144-byte verifier limit. Missing, non-regular,
+  oversized or failed reads produce no usable new document. As before, an
+  invalid or unavailable replacement does not revoke the previously held
+  topology; the host must define and enforce its fail-closed policy.
 - **Adopting.** A changed file is adopted only when all three hold:
   - it verifies against the trust (`topology-verdict`);
   - its revision is higher than the one held;
@@ -407,7 +412,8 @@ arriving without an idle gap, and verify that requests after adoption are
 refused. Include unchanged and invalid-revision controls, and check the idle
 exit behavior. Source check alone does not establish that behavior. The
 per-connection file read and its effect on throughput have not been measured;
-the host must provision and bound the topology file. Requests already being
+the host must provision the topology file and a provider that enforces bounded
+FS2 range responses; separate metadata/read calls are not a stable snapshot. Requests already being
 handled and independent voters are not atomically fenced by this check.
 
 The voters start on revision 7 (b70 enabled, k16 not) and keep running
