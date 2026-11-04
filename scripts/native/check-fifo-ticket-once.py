@@ -56,6 +56,8 @@ def main():
         raise ValueError('no-replace or lookup mutation anchor changed')
     bypass = source.replace(guard, '(cond false "fifo/ticket-used"\n          false "fifo/ticket-unknown"').replace(rename_guard, '(rq-fs "L" pending path)')
     false_missing = source.replace(missing_guard, 'status "0"')
+    no_rename = {name: source.replace(rename_guard, response)
+                 for name, response in [('no-rename', '"0"'), ('missing-frame', '""')]}
     reserve_guard = ('(not (= (string-substring state 5 69) ticket)) "fifo/not-front"\n'
                      '                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"')
     if source.count(reserve_guard) != 1:
@@ -105,6 +107,7 @@ def main():
             image, failed_claim = build('fifo', source), build('claim-fault', fault)
             bypass_image, reserve_mutant = build('claim-bypass', bypass), build('reserve-marker-bypass', reserve_bypass)
             false_missing_image = build('false-missing', false_missing)
+            no_rename_images = {name: build(name, text) for name, text in no_rename.items()}
             pause_images = {name: build(name, text) for name, text in pause_sources.items()}
             q = root / 'q'; q.mkdir(); (q / 'queue.lock').write_text(''); (q / 'queue').write_text('RGQ5\n')
             def op(img, action, expected, ticket=None, code=0):
@@ -176,6 +179,13 @@ def main():
             if marker.read_bytes() != original_marker:
                 raise ValueError('unreadable marker overwritten')
             print('PASS write-only existing marker not overwritten:', result)
+            for name, no_rename_image in no_rename_images.items():
+                case = root / name; case.mkdir()
+                (case / 'queue.lock').write_text(''); (case / 'queue').write_text('RGQ5\n')
+                result = run([no_rename_image, '/' + name, 'enqueue', c], 1).decode().strip()
+                if result != 'fifo/ticket-unknown' or (case / 'queue').read_text() != 'RGQ5\n' or (case / ('queue.used.' + c)).exists():
+                    raise ValueError(('unsupported rename admitted ticket', name, result))
+                print('PASS T failure refuses enqueue:', name)
             for phase, paused_image in pause_images.items():
                 case = root / phase; case.mkdir()
                 (case / 'queue.lock').write_text(''); (case / 'queue').write_text('RGQ5\n')

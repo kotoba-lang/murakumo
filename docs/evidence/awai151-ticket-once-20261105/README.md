@@ -137,6 +137,16 @@ These are diagnostic provider observations, not qualification of the target
 production provider. FS2 T support and refusal when unavailable require an
 independent production-host test.
 
+On the same three Macs and locally, two additional source-injected controls
+made FS2 T return failure (`"0"`) or an empty response after staging. Both
+returned `fifo/ticket-unknown` without a queue entry or published claim. The
+same run rechecked the actual write-only existing marker and both interruption
+points. The test observer SHA-256 was
+`2121522ca71a2877a20e80883320bf6f303aec454eebfb67917aff6221ba0143`;
+each host reported the same source/image hashes and temporary-directory
+removal. These simulate provider responses inside the source; they do not
+exercise a real unsupported or malicious production provider.
+
 ## Preserve the barrier when a claim is lost
 
 The current candidate also validates the exact claim before release, dequeue,
