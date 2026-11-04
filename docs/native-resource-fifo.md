@@ -94,7 +94,7 @@ checks queue order, head refusal, recovery and a single lock race on a local
 Mac diagnostic runtime. Cancellation is not yet integrated with workload
 identity or a production governor.
 
-The current `RGQ3` reservation and release-barrier source was retested on one
+The earlier `RGQ3` reservation and release-barrier source was retested on one
 local Mac with the diagnostic compiler and FS2 packager. The fixture exercised
 old-format refusal, reserve/release/dequeue/settle, synthetic release sync
 faults, process kills at injected points, recovery and a single contention
@@ -102,3 +102,11 @@ race; its source SHA-256 was
 `d9afabd660eb58465a59f1565fd51d28bf169946eebd47aee807ff3e5b96633a`.
 This does not establish real power-loss durability, host process supervision,
 actual workload termination or capacity admission.
+
+The current `RGQ4` format adds a durable settle-receipt barrier and refuses
+older queue formats. No automatic migration is provided. The
+[RGQ4 evidence](evidence/awai151-fifo-release-pending-20261104.md) records
+the complete local diagnostic suite, injected settle interruption and sync
+faults, and short tests on three Mac minis. These synthetic tests do not
+qualify a production provider, actual power-loss recovery, a native workload
+supervisor, complete process-tree termination or capacity admission.
