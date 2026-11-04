@@ -116,6 +116,34 @@ The generated full-step fixture and its deadline-bypass control hashed to
 The generation fixture used temporary builder SHA-256
 `cb59024c1ace9d3d634f56ff1d29d4ac48121c692f6aa5ea1c15f3984d6a77a9`.
 
+### Count-only busy marker and reconciliation with diagnostic FS2
+
+On one local Darwin ARM64 host, a source-unity fixture combined the current
+`pr-step-range`, busy-marker and `pr-reconcile-count` forms with the pinned
+diagnostic FS2 provider. It used private task-owned files and synthetic state.
+The count function was replaced by a stub that writes a synthetic matching
+count request, dispatch marker and completed response; unit state, wall clock
+and runtime validation were also stubbed. The generation submit stub would
+write an `unexpected-submit` file if called.
+
+The actual count-only phase returned `profile/flint-count-ready`, retained a
+busy marker and left `unexpected-submit` absent. An explicit subsequent
+`pr-reconcile-count` returned `profile/count-reconciled 1`; an independent
+filesystem check observed busy absent and last/settled markers present. In a
+separate fixture with a generation intent inserted, reconciliation returned
+unknown and the busy marker remained. The signed fixture was independently
+verified with `codesign --verify --strict`; compiler and fixture processes
+had a three-second CPU cap and no hard memory cap.
+
+The temporary generator and composed fixture SHA-256 values were
+`2a876be04a348e48f730350345da2e8c42efdcff44b9ff797d0090ff86263aae` and
+`1dfa58f72cd3462dc90fada36f64cfdf0cd715994e63eac5c3a37cbf2c143502`;
+the signed fixture image SHA-256 was
+`324d82a86a257b80714bfb756a3dbad080e35eff0ae05dac0adce7e0f4c38bf1`.
+Task-owned temporary files were retained. This tests diagnostic FS2 state,
+not an actual lease loss, systemd/curl, real count service, power failure,
+production filesystem provider, host serialization or qualified governor.
+
 ## Darwin diagnostic clock capability observation
 
 On one local Darwin ARM64 host (macOS 26.3.1, build `25D771280a`), a
