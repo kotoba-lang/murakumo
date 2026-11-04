@@ -242,4 +242,35 @@ the signed image SHA-256 values were
 `e1f2e024a855f4610854093d3c25222761bd9c19926e350e35379e7ca52d733c`.
 The diagnostic compiler/packager are pinned in the earlier section. This is
 not a real lease, clock, systemd/curl, model, output recovery, full source-lock
-build or qualified governor. The lease revalidation and fencing gaps remain.
+build or qualified governor. Atomic lease fencing remains unqualified.
+
+## Existing count reuse on Xavier systemd
+
+On 2026-11-04, a Tailscale SSH session with strict host-key verification
+used the source-derived Linux ARM64 F3 compiler SHA-256
+`46fce6f620a73d91c7ec482687856a3354646f416e05085a6fa61022d37a5e0b`
+to compile a selected-source fixture on Xavier. The fixture used the actual
+current `pr-count`, `pr-unit-state`, clock and FS2 functions with synthetic
+request, marker and response files. The source and ELF SHA-256 values were
+`d637a6dbc4fbb2789f169bcf56c6aef3fe3df038d6eb140a7e3abedfb3e012e9` and
+`9de3b4e83f6ef84fd3311fc0b891770b696bc6a4802a1a759e6adcefb8771dd1`.
+The temporary generator and operator script SHA-256 values were
+`793c1376c890a277ffec1b3d3c3b370e35224ee22d21ac46ba789059e364f9fa` and
+`1eb36f2436171eaffc29a74743a06b9a9d320c7f08b7b91ffbc864632f35f4f1`.
+
+The operator first confirmed the dedicated transient unit name was absent,
+then started `/usr/bin/true` as a oneshot unit and waited for its `exited`
+state. With matching files, reuse-only returned the synthetic count 2231;
+a bad marker returned unknown. After stopping that task-owned unit, an absent
+unit with no prior files also returned unknown, leaving no count request,
+marker or response files. Guest process spawn was granted only to
+`/usr/bin/systemctl`; the operator, not the guest, created the test unit.
+The test and a separate host-key-checked systemd query both observed the unit
+as `not-found` / `inactive` afterward. The remote test directory was retained.
+
+Compiler and fixture processes had 3/4-second soft/hard CPU limits, an 8 GiB
+virtual-address ceiling and 50 ms RSS sampling with a 200 MiB termination
+threshold; sampling is not a hard memory limit. This is one host and synthetic
+count data, not a real count service, full resident two-phase flow, lease
+quorum, curl, model, production provider, source-locked release or qualified
+governor. No existing service or model was stopped.
