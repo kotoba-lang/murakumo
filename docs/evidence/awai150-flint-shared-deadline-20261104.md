@@ -274,3 +274,40 @@ threshold; sampling is not a hard memory limit. This is one host and synthetic
 count data, not a real count service, full resident two-phase flow, lease
 quorum, curl, model, production provider, source-locked release or qualified
 governor. No existing service or model was stopped.
+
+## Two-phase resident seam on Xavier
+
+On 2026-11-04, a separate task-owned fixture combined the current actual
+`rt-dispatch`, `pr-step-range` and `pr-count` source with the source-derived
+Linux ARM64 F3 runtime, diagnostic FS2, host wall clock and real Xavier
+systemd unit-state queries. A strict-host-key SSH session compiled and ran
+the fixture. The operator confirmed the dedicated count-unit name was absent,
+started an `/usr/bin/true` oneshot unit, and waited until it was `exited`.
+Each case had separate private files containing a synthetic completed count.
+
+Lease acquisition and validation, runtime/profile validation, count ID and
+initial budget were test stubs. The generation submit stub wrote a marker
+and returned failure; it never called curl or a model. When the simulated
+lease remained the same, the actual two-phase flow reached the submit stub
+with 29 seconds, and the expected turn intent and busy marker remained. When
+the simulated lease changed after count, the flow returned lease-lost, never
+called the submit stub, created no turn intent and retained the busy marker.
+A separate strict-host-key SSH check independently inspected those files. The
+test and another independent systemd query confirmed the task-owned unit was
+`not-found` / `inactive` after cleanup. Test directories were retained.
+
+Fixture source and Linux ELF SHA-256 values were
+`24f94613f6e7628f85c6eee41eeb5cfe49f5d61d89fcc2cdeb8563c0c1c0c09d` and
+`6e9aad8e0c010fb813aa81a481fd6b7c3b9ee3d3593ef98e560869181cdcff65`;
+the temporary generator and operator scripts hashed to
+`61b9d24c1e9cd032123f1f3157bbec7caa7902f841eb8cfaded5f1d7d5a423c9` and
+`6c9a4fa43e3ce62b467adae72ec695b8f345051c1077197e1ef710a5c1b20cd2`.
+Compiler and fixture processes had 3/4-second CPU limits, an 8 GiB address
+space ceiling and sampled RSS termination at 200 MiB; sampling is not a hard
+memory cap. The earlier pinned F3 hash applies.
+
+This is a real systemd/FS2 integration seam with simulated lease and count,
+not a real quorum, model request, atomic fence, source-locked product,
+production provider or qualified governor. It does not prove survival across
+power loss, complete process lifetime, or safe three-host deployment. No
+existing service or model was stopped.
