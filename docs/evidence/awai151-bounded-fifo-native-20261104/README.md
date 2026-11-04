@@ -100,3 +100,27 @@ The executable is a local diagnostic build, not a rebuilt or qualified
 release runtime. These three-host samples did not exercise forced process
 death, full fault injection, hostile mutation, capacity enforcement, a model,
 resource reservations or process-tree control. No persistent service started.
+
+## Target Mac process-death samples
+
+The same bounded FIFO was built on jacob along with five test-only variants
+which pause at the write boundaries described above. The signed normal image
+and each signed variant were pinned in a manifest with SHA-256
+`c730650e103b90f79406e6af1be41b01232869c87922cecbb650cece58447675`;
+the normal image retained SHA-256
+`ca7c780cf88ab7c84792300fc89d85f483ec7217a345d184e4612f689845e188`.
+The manifest, signatures and image hashes were verified independently on
+naphtali, benjamin and judah over pinned Tailscale SSH. On each Mac, an
+observer started and SIGKILLed only its own paused child at intent, pending,
+rename, sync and archive. The uninstrumented FIFO's subsequent front and
+reconcile results and the old/new queue bytes matched the local observations.
+The task-owned directories were removed. Observer SHA-256:
+`98643c0a336bd97f49aed655e0ae5aa84bb8c6755385628b0d1c3f4204682f5a`;
+local builder SHA-256:
+`f83daee59fb5809840145e85df87d35f876a0178d5626f7360bfd7613e572b29`.
+
+These are single instrumented samples on each host using a diagnostic
+provider. They do not prove power-loss durability, actual fsync failure,
+workload termination, resource control, model operation, or a qualified
+release. After archive, `fifo/no-intent` remains insufficient to infer a lost
+operation's outcome.
