@@ -51,9 +51,18 @@ does not submit; the normal control reaches submission. A mutant comparing
 with the original start is detected. Its generated source SHA-256 was
 `e0cc6fa3110eeaaf73ece0366c803d51cb54c0d4be831beb170efbb17e4a8a94`.
 The post-query diagnostic also tests the shared floor on generation polling.
-These are diagnostic fixtures, not a live service or model test. The second
-response read and later publication operations do not yet carry all clock
-observations; the other limitations below still apply.
+These are diagnostic fixtures, not a live service or model test.
+
+Before publication, the second response read is now independently validated,
+and its completion sample is checked against the shared floor. The
+`publication.py` selected-source native diagnostic used stubbed I/O and
+response validation: the normal case advanced state; a late clock rollback
+and an invalid second response retained it without publishing. Removing each
+guard caused its respective negative control to fail. Source SHA-256 was
+`d9f0c5bc8ea9ffce6296ca39c65d6c06bb8a4dcebd4abe0d5daba016d8a0d2a0`.
+This does not test the real response parser or filesystem race. Publication
+operations after this last sample may still outlive the deadline; the other
+limitations below still apply.
 
 This does not qualify the actual clock provider or monotonicity, protect
 against clock changes between observations, retain the floor across crashes,

@@ -725,22 +725,28 @@
                 (if (or (not submitted) (not (pr-wait unit response runtime started deadline seconds clock))) "profile/inference-unavailable-state-retained"
                   (let [raw (pr-read-response response)
                         answer (pr-local-compact runtime raw)
+                        valid (and (not (= (pr-answer raw) "")) (pr-local-response? runtime raw))
+                        observed (if (pr-local-flint? runtime) (pr-wall-ms) 0)
+                        timely (if (pr-local-flint? runtime)
+                                 (if (and valid (> (pr-window-seconds (vector-at clock 0) deadline observed seconds) 0))
+                                   (let [saved (vector-assoc! clock 0 observed)] true) false) true)
                         cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
                         newstate (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
                         tmp (str repo "/state.json.tmp")
-                        usable (pr-replicable? answer)
+                        usable (and valid timely (pr-replicable? answer))
                         ok (and usable
                                 (cp-mkdir outdir) (= (cp-fs "M" repo "") "1")
                                 (pr-save-output output answer cid) (cp-write tmp newstate))
                         rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs "M" repo "") "0")]
+                    (if (or (not valid) (not timely)) "profile/inference-unavailable-state-retained"
                     (if (not usable) "profile/response-not-replicable"
                       ;; Rename or directory sync may have taken effect even
                       ;; when its acknowledgement is lost. Preserve that
                       ;; ambiguity for host reconciliation; the host must not
                       ;; retry inference without resolving the outcome.
-                      (if (= sync "1") (pr-flint-finish runtime cache turn count-id (str "profile/step-completed " next " " cid)) "profile/state-publication-unknown")))))))))))))))))
+                      (if (= sync "1") (pr-flint-finish runtime cache turn count-id (str "profile/step-completed " next " " cid)) "profile/state-publication-unknown"))))))))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
   (if (pr-local-flint? runtime) (cp-num runtime 0 "maxTokens")
