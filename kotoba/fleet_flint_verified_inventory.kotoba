@@ -2,7 +2,7 @@
 ;; bind both frames and IDs to held FDs, verify their no-follow parent-child
 ;; relationship, and exclude writers, aliases and replacement through use.
 ;; This candidate is not a durable publication or a model execution grant.
-(ns murakumo.fleet-flint-verified-inventory (:export [model-flint-verified-inventory?]))
+(ns murakumo.fleet-flint-verified-inventory (:export [model-flint-verified-inventory? model-flint-parent-verified-inventory?]))
 
 ;; Compare all seven pinned tar entries with the stage while hashing the full
 ;; archive, including padding and terminal blocks. The metadata file helper
@@ -61,3 +61,14 @@
          (= (md-observe (str stage "/experts.safetensors") experts experts-size) "model/digest-observed")
          (fv-tar-match? (ol-blob-path layout assets) stage assets-size assets)
          (fk-stage-manifest? stage base-size experts-size))))
+
+;; This composes frame checks only; actual FD provenance, helper identity,
+;; output/exit binding and no-mutation enforcement are trusted host duties.
+(defn model-flint-parent-verified-inventory? [layout :string manifest :string manifest-size :i64
+                                            base :string base-size :i64 experts :string experts-size :i64
+                                            assets :string assets-size :i64 stage :string
+                                            parent-frame :string root-frame :string root-dev :string root-ino :string
+                                            child-frame :string child-ino :string] :bool
+  (and (flint-parent-frame? parent-frame root-dev root-ino root-dev child-ino)
+       (model-flint-verified-inventory? layout manifest manifest-size base base-size experts experts-size
+                                       assets assets-size stage root-frame root-dev root-ino child-frame root-dev child-ino)))

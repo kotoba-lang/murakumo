@@ -3,7 +3,7 @@
 ;; a trusted host must bind successful helper output to open directory FDs,
 ;; exclude concurrent mutation and verify the child FD is the parent's actual
 ;; no-follow `.kapitsa` entry. Neither match is permission to load a model.
-(ns murakumo.fleet-flint-directory-inventory (:export [flint-bound-inventory?]))
+(ns murakumo.fleet-flint-directory-inventory (:export [flint-bound-inventory? flint-parent-frame?]))
 
 (defn- fi-root-name [id :i64] :string
   (if (< id 6) (ft-name id)
@@ -52,3 +52,16 @@
          (not (= ino "0000000000000000"))
          (= (string-substring s 16 32) dev) (= (string-substring s 32 48) ino)
          (fi-inventory? (str "41444931" (string-substring s 8 16) (string-substring s 48 n)) root receipt))))
+
+;; ADP1 is only meaningful when a qualified host binds a successful helper
+;; result and the expected IDs to the same held directory FDs. This parser
+;; cannot authenticate the frame, protect the names or establish that binding.
+(defn flint-parent-frame? [s :string root-dev :string root-ino :string child-dev :string child-ino :string] :bool
+  (and (= (string-length s) 81) (di-hex? s)
+       (= (string-substring s 0 16) "4144503100000000")
+       (di-id-hex? root-dev) (di-id-hex? root-ino) (di-id-hex? child-dev) (di-id-hex? child-ino)
+       (= (string-substring root-dev 8 16) "00000000") (= root-dev child-dev)
+       (not (= root-ino "0000000000000000")) (not (= child-ino "0000000000000000"))
+       (not (= root-ino child-ino))
+       (= (string-substring s 16 32) root-dev) (= (string-substring s 32 48) root-ino)
+       (= (string-substring s 48 64) child-dev) (= (string-substring s 64 80) child-ino)))

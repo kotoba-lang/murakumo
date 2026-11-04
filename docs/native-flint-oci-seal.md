@@ -40,6 +40,14 @@ comparison of every tar entry, and the manifest file-list check. It accepts
 only the no-receipt form. This helper is not yet called by staging, publication
 or recovery and cannot establish those host bindings itself.
 
+`flint-parent-frame?` parses the proposed fixed `ADP1` parent/child identity
+frame from Amu draft #1823. The optional
+`model-flint-parent-verified-inventory?` composition also compares that frame
+with the two ADI2 identities before the existing staged-content checks. The
+helper image has not been generated or run; none of these frames authenticate
+their origin or exclude later replacement. The host must bind all three to
+the same retained FDs and maintain isolation through use.
+
 The separate `model-flint-assets-pack-main` candidate accepts a pinned
 `awai.flint-source-observation/1` containing exactly the seven metadata files
 and two weight descriptors. It validates the file list against the Kapitsa
