@@ -120,11 +120,11 @@
   for either class. Its release must be verified before capacity is reused."
   [{:keys [claims]} registry]
   (reduce (fn [acc {:keys [pid comm bytes]}]
-            (let [k (or (get registry pid)
-                        (some (fn [[pat klass]]
-                                (when (and (string? pat) (str/includes? comm pat)) klass))
-                              registry)
-                        :opportunistic)]
+            (let [selected (or (get registry pid)
+                               (some (fn [[pat klass]]
+                                       (when (and (string? pat) (str/includes? comm pat)) klass))
+                                     registry))
+                  k (if (contains? classes selected) selected :opportunistic)]
               (update acc k + bytes)))
           {:resident 0 :opportunistic 0}
           claims))

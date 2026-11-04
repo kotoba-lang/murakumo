@@ -84,3 +84,15 @@ claim and a too-large combined claim total were refused. A separate Node
 expression confirmed the prior `parseInt` prefix behavior. This is not a
 ClojureScript execution of the application, the whole host suite, a real
 observation provider, a corrected KIR or a qualified governor.
+
+## Unknown registry classification
+
+The legacy commitment fold accepted arbitrary registry values as map keys,
+although admission only reads the resident and opportunistic totals. A
+CPU-limited local Babashka evaluation of the prior selected source with an
+80-byte claim and `:unknown` registry value raised an exception when adding
+to the missing key. The fold now treats any unrecognized value as
+opportunistic, preserving the holder in the total. Selected-form diagnostics
+passed unknown values by PID and by name, a known resident and an absent
+registry. These are synthetic tests, not the complete host suite, a
+ClojureScript runtime, a real probe or governor qualification.

@@ -162,6 +162,12 @@
     (is (= (gb 30) (:opportunistic c))
         "an unknown holder must reduce what opportunistic work may take")))
 
+(deftest invalid-registry-class-still-counts-the-holder
+  (let [probe {:claims [{:pid "9" :bytes 80 :comm "worker"}]}]
+    (doseq [registry [{"9" :unknown} {"worker" :unknown}]]
+      (is (= {:resident 0 :opportunistic 80}
+             (accel/committed probe registry))))))
+
 ;; ── demand: who should be HOLDING the device, not just what fits ───────
 ;;
 ;; Measured on gad over the same 24 hours, 2026-08-31:
