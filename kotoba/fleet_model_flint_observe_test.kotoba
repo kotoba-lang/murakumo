@@ -1,0 +1,11 @@
+;; Pure output-shape vectors only; no model files are read.
+(ns murakumo.fleet-model-flint-observe-test (:export [test-flint-observation-shape]))
+
+(defn test-flint-observation-shape [] :bool
+  (let [digest "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        row (fo-row "config.json" digest 12) b (ms-bytes row)]
+    (and (= (fo-name 0) "config.json") (= (fo-name 6) ".kapitsa/manifest.json")
+         (= (fo-name 7) "model.safetensors") (= (fo-name 8) "experts.safetensors")
+         (json-valid? b) (json-canonical? b) (= (json-count b 0) 3)
+         (= (ol-text b 0 "path") "config.json") (= (ol-text b 0 "sha256") digest)
+         (= (ol-int b 0 "size") 12))))

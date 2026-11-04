@@ -37,6 +37,16 @@ weight descriptors but does not hash or copy the weights. The host must pin the
 observation and prevent aliases and concurrent changes; partial tar outputs
 require reconciliation.
 
+`model-flint-observe-main` is a separate observation candidate: it streams
+the seven metadata and two weight files, emits their names, sizes and hashes,
+and checks the observed Kapitsa file list before writing a new observation.
+The output is explicitly untrusted: an operator must independently establish
+the source's provenance and approve its pin before passing it to the packer.
+It requires the same private 0700 source directories and exclusive ownership.
+The observer cannot exclude unexpected directory entries or authenticate a
+publisher, and metadata rechecks do not make path-based reads a snapshot.
+Its native implementation and real-model path have not been executed.
+
 The observed converted Flint 0.2.26 directory contains `model.safetensors`,
 `experts.safetensors`, metadata files and `.kapitsa/manifest.json`. A full
 manifest verifier, inventory and publication/recovery procedure are still
