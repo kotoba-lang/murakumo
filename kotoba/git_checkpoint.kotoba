@@ -462,8 +462,9 @@
 (defn- cp-restore [] :i64
   (let [store (cp-arg 1) cid (cp-arg 2)]
     (if (not (cp-block? store cid)) (cp-result "checkpoint/missing-or-corrupt-root")
-      (let [b (cp-load store cid)
-            v (checkpoint-problem b (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6) (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9))]
+      (let [b (cp-capture-read (str store "/" cid))
+            valid (cp-reloaded-block-valid? store cid b)
+            v (if valid (checkpoint-problem b (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6) (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9)) "checkpoint/missing-or-corrupt-root")]
         (cond (not (= v "checkpoint/ok")) (cp-result v)
               (not (cp-closure? store b)) (cp-result "checkpoint/missing-or-corrupt-block")
               (= (cp-arg 0) "verify") (cp-result "checkpoint/verified")
@@ -476,8 +477,9 @@
   (let [store (cp-arg 1) from (cp-arg 2) to (cp-arg 3) seed (cp-seed (cp-arg 4)) task (cp-arg 5)]
     (if (or (not (= (vector-count seed) 32)) (not (cp-block? store from)) (not (cp-block? store to)))
       (cp-result "recovery/missing-input")
-      (let [a (cp-load store from) b (cp-load store to)]
-        (if (or (not (json-canonical? a)) (not (json-canonical? b))
+      (let [a (cp-capture-read (str store "/" from)) b (cp-capture-read (str store "/" to))]
+        (if (or (not (cp-reloaded-block-valid? store from a)) (not (cp-reloaded-block-valid? store to b))
+                (not (json-canonical? a)) (not (json-canonical? b))
                 (< (cp-payload a) 0) (< (cp-payload b) 0)) (cp-result "recovery/noncanonical")
           (let [pa (cp-payload a) pb (cp-payload b) did (did-from-public (public-from-seed seed))
                 ea (if (>= pa 0) (cp-num a pa "epoch") -1) eb (if (>= pb 0) (cp-num b pb "epoch") -1)
@@ -492,13 +494,14 @@
                            ",\"kind\":\"itonami.recovery/1\",\"resumed\":\"" to "\",\"task\":\"" task "\"}")
                     envelope (cp-bytes (str "{\"payload\":" text ",\"signature\":\"" (sign-statement seed text) "\"}"))
                     cid (cp-put store envelope)]
-                (cp-result (str "recovery/recorded " cid "\n" (cp-text envelope)))))))))))
+                (if (= cid "") (cp-result "recovery/publication-unknown")
+                  (cp-result (str "recovery/recorded " cid "\n" (cp-text envelope))))))))))))
 
 (defn- cp-verify-recovery [] :i64
   (let [store (cp-arg 1) cid (cp-arg 2)]
     (if (not (cp-block? store cid)) (cp-result "recovery/missing-or-corrupt")
-      (let [b (cp-load store cid)]
-        (if (not (json-canonical? b)) (cp-result "recovery/noncanonical")
+      (let [b (cp-capture-read (str store "/" cid))]
+        (if (or (not (cp-reloaded-block-valid? store cid b)) (not (json-canonical? b))) (cp-result "recovery/noncanonical")
           (let [p (cp-payload b) did (cp-arg 3)]
             (cond (or (< p 0) (not (= (json-kind b 0) 1)) (not (= (json-count b 0) 2))
                       (not (= (json-kind b p) 1)) (not (= (json-count b p) 6))) (cp-result "recovery/schema")
