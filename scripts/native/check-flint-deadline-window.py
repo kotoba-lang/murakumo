@@ -86,7 +86,7 @@ def main():
     wait_start = source.index('(defn- pr-count-wait ')
     wait_end = source.index(';; Flint generation', wait_start)
     count_wait = source[wait_start:wait_end]
-    wait_guard = '(< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1)'
+    wait_guard = '(< (pr-window-seconds last deadline now seconds) 1)'
     if count_wait.count(wait_guard) != 1:
         raise ValueError('count wait deadline guard anchor changed')
     wait_stubs = r'''
@@ -109,7 +109,7 @@ def main():
     gen_wait_start = source.index('(defn- pr-wait ')
     gen_wait_end = source.index('(defn- pr-runtime? ', gen_wait_start)
     gen_wait = source[gen_wait_start:gen_wait_end]
-    gen_wait_guard = '(and (pr-local-flint? runtime) (< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1))'
+    gen_wait_guard = '(and flint (< (pr-window-seconds last deadline now seconds) 1))'
     if gen_wait.count(gen_wait_guard) != 1:
         raise ValueError('generation wait deadline guard anchor changed')
     gen_wait_stubs = r'''
@@ -135,6 +135,42 @@ def main():
    (if (and (not expired) (= absent "\u0000FS2\u00000")
             valid (= valid-seen "\u0000FS2\u00001") mtp (= mtp-seen "\u0000FS2\u00001")) 0 1)))
 '''
+    rollback_stubs = r'''
+(defn- pr-wall-ms [] :i64
+ (if (= (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Drollback-first\u0000")) "\u0000FS2\u00001") 103500 106500))
+(defn- pr-unit-code [unit :string] :i64
+ (if (= (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Drollback-first\u0000")) "\u0000FS2\u00001")
+  (let [x (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Irollback-second\u0000"))] 1)
+  (let [x (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Irollback-first\u0000"))] 0)))
+(defn- pr-local-flint? [runtime :vector-i64] :bool true)
+(defn- cp-exists? [path :string] :bool true)
+(defn- pr-read-response [path :string] :vector-i64 [1])
+(defn- pr-answer [b :vector-i64] :string "answer")
+(defn- pr-local-response? [runtime :vector-i64 b :vector-i64] :bool true)
+(defn- pr-read-bounded [path :string limit :i64] :vector-i64 [1])
+(defn- pr-count-value [b :vector-i64] :i64 12)
+(defn- pr-pause [] :bool true)
+'''
+    rollback_count_cases = r'''
+(defn main [] :i64
+ (let [out (pr-count-wait "u" "r" 100000 110000 10)
+       first (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Drollback-first\u0000"))
+       second (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Drollback-second\u0000"))]
+  (if (and (= out -1) (= first "\u0000FS2\u00001") (= second "\u0000FS2\u00000")) 0 1)))
+'''
+    rollback_gen_cases = r'''
+(defn main [] :i64
+ (let [out (pr-wait "u" "r" [1] 100000 110000 10)
+       first (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Drollback-first\u0000"))
+       second (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Drollback-second\u0000"))]
+  (if (and (not out) (= first "\u0000FS2\u00001") (= second "\u0000FS2\u00000")) 0 1)))
+'''
+    poll_guard = '(pr-window-seconds last deadline now seconds)'
+    if count_wait.count(poll_guard) != 1 or gen_wait.count(poll_guard) != 1:
+        raise ValueError('last-observation mutation anchor changed')
+    forward_stubs = rollback_stubs.replace('103500', '107000')
+    forward_count_cases = rollback_count_cases.replace('(= out -1)', '(= out 12)').replace('(= second "\\u0000FS2\\u00000")', '(= second "\\u0000FS2\\u00001")')
+    forward_gen_cases = rollback_gen_cases.replace('(not out)', 'out').replace('(= second "\\u0000FS2\\u00000")', '(= second "\\u0000FS2\\u00001")')
     resident = (ROOT / 'kotoba/profile_resident.kotoba').read_text()
     resident_start = resident.index('(defn- rt-dispatch ')
     resident_end = resident.index('(defn- rt-turn ', resident_start)
@@ -222,6 +258,12 @@ def main():
                 ('count-wait-deadline-mutant', window + wait_stubs + count_wait.replace(wait_guard, 'false') + wait_cases, 1),
                 ('generation-wait-deadline', window + gen_wait_stubs + gen_wait + gen_wait_cases, 0),
                 ('generation-wait-deadline-mutant', window + gen_wait_stubs + gen_wait.replace(gen_wait_guard, 'false') + gen_wait_cases, 1),
+                ('count-rollback', window + rollback_stubs + count_wait + rollback_count_cases, 0),
+                ('count-rollback-mutant', window + rollback_stubs + count_wait.replace(poll_guard, '(pr-window-seconds started deadline now seconds)') + rollback_count_cases, 1),
+                ('count-forward', window + forward_stubs + count_wait + forward_count_cases, 0),
+                ('generation-rollback', window + rollback_stubs + gen_wait + rollback_gen_cases, 0),
+                ('generation-rollback-mutant', window + rollback_stubs + gen_wait.replace(poll_guard, '(pr-window-seconds started deadline now seconds)') + rollback_gen_cases, 1),
+                ('generation-forward', window + forward_stubs + gen_wait + forward_gen_cases, 0),
                 ('resident-refresh', window + resident_stubs + dispatch + resident_cases, 0),
                 ('resident-refresh-mutant', window + resident_stubs + dispatch.replace(refresh, 'again lease') + resident_cases, 1),
                 ('pre-refresh-deadline-mutant', window + resident_stubs + dispatch.replace(recheck_guard, 'false') + resident_cases, 1),
@@ -242,7 +284,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(image)], check=True, capture_output=True)
                 shutil.rmtree(root / 'step-time', ignore_errors=True)
                 shutil.rmtree(root / 'poll-seen', ignore_errors=True)
-                for marker_name in ('gen-expired', 'gen-valid', 'gen-mtp'):
+                for marker_name in ('gen-expired', 'gen-valid', 'gen-mtp', 'rollback-first', 'rollback-second'):
                     shutil.rmtree(root / marker_name, ignore_errors=True)
                 run([image], expected)
                 print(name, 'source-sha256', hashlib.sha256(text.encode()).hexdigest(), 'image-sha256', digest(image))

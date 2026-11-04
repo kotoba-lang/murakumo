@@ -435,3 +435,31 @@ Compiler sampled peak RSS was 62,928 KiB; the same, changed and invalid-MAC
 guests sampled at 3,988, 3,196 and 2,668 KiB. Native processes had 3/4-second
 CPU limits and an 8 GiB address-space ceiling; RSS was sampled and processes
 were terminated above 200 MiB, which is not a hard RSS limit.
+# Wait-loop clock rollback guard (2026-11-05)
+
+The count and Flint generation wait loops previously compared each wall-clock
+sample only with the initial start. A sample of 106500 ms followed by 103500
+ms, both after a 100000 ms start and before a 110000 ms deadline, was therefore
+not detected as a rollback. Each loop now compares against its immediately
+preceding sample. A detected rollback returns unknown/failure and does not by
+itself prove the unit stopped; the existing dispatch and occupancy recovery
+rules still apply. Non-Flint generation does not sample this clock.
+
+`scripts/native/check-flint-deadline-window.py` compiled and ran selected
+source-unity Darwin diagnostics with a stub clock and stub unit. For count
+and generation, the rollback case refused before a second unit poll; the
+original comparison mutant polled again and failed the assertion. A
+106500-to-107000 ms forward control completed after a second poll. Existing
+deadline, expired, reuse and resident-refresh controls and their mutants also
+passed. Compiler SHA-256 was
+`920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6`,
+packager SHA-256
+`df0e94211a35d84901ebcf2a8620cb653140d957732474ff77bd0cdd5b5bf4c5`;
+each diagnostic used a 3-second CPU limit without a hard memory limit.
+
+The guard observes only samples within an individual wait invocation. It
+cannot detect clock changes between samples, across phases, or across a
+restart, and wall time is not a monotonic clock. These stubs do not exercise
+the production host clock, systemd, curl, lease fencing, model, GitHub state,
+or an end-to-end governor. Trusted monotonic timing, native process lifecycle,
+and the rest of the integration remain unqualified.

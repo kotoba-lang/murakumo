@@ -275,14 +275,15 @@
         (json-int b i) -1))))
 
 (defn- pr-count-wait [unit :string response :string started :i64 deadline :i64 seconds :i64] :i64
-  (loop [i 0]
+  (loop [i 0 last started]
     ;; Expiry or an unknown clock is not proof that the unit stopped. The
     ;; caller keeps the busy marker and requires host reconciliation.
-    (if (< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1) -1
-      (let [state (pr-unit-code unit)]
-        (cond (= state 1) (pr-count-value (pr-read-bounded response 1024))
-              (or (= state -1) (> i 900)) -1
-              :else (let [z (pr-pause)] (if z (recur (+ i 1)) -1)))))))
+    (let [now (pr-wall-ms)]
+      (if (< (pr-window-seconds last deadline now seconds) 1) -1
+        (let [state (pr-unit-code unit)]
+          (cond (= state 1) (pr-count-value (pr-read-bounded response 1024))
+                (or (= state -1) (> i 900)) -1
+                :else (let [z (pr-pause)] (if z (recur (+ i 1) now) -1))))))))
 
 ;; Flint generation must be bound to the same host-pinned process instance as
 ;; its count. Rotation creates a different request identity; a retained turn
@@ -560,18 +561,19 @@
           "profile/count-reconciliation-unknown")))))
 
 (defn- pr-wait [unit :string response :string runtime :vector-i64 started :i64 deadline :i64 seconds :i64] :bool
-  (loop [i 0]
+  (loop [i 0 last started]
     ;; An expired Flint deadline does not prove that the unit has stopped.
     ;; Preserve the request, dispatch marker and occupancy for reconciliation.
-    (if (and (pr-local-flint? runtime) (< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1)) false
-      (let [state (pr-unit-code unit)]
-        (cond (= state 1)
-              (and (cp-exists? response)
-                   (let [b (pr-read-response response)]
-                     (and (not (= (pr-answer b) ""))
-                          (pr-local-response? runtime b))))
-              (or (= state -1) (> i 900)) false
-              :else (let [z (pr-pause)] (if z (recur (+ i 1)) false)))))))
+    (let [flint (pr-local-flint? runtime) now (if flint (pr-wall-ms) last)]
+      (if (and flint (< (pr-window-seconds last deadline now seconds) 1)) false
+        (let [state (pr-unit-code unit)]
+          (cond (= state 1)
+                (and (cp-exists? response)
+                     (let [b (pr-read-response response)]
+                       (and (not (= (pr-answer b) ""))
+                            (pr-local-response? runtime b))))
+                (or (= state -1) (> i 900)) false
+                :else (let [z (pr-pause)] (if z (recur (+ i 1) now) false))))))))
 
 (defn- pr-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64] :bool
   (and (json-canonical? runtime)
