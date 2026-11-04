@@ -63,8 +63,42 @@
                    (= (ta-fs "M" stage "") "1"))
             "flint-assets/staged" "flint-assets/staging-unknown"))))))
 
-;; Stage only, never publish or approve loading. The manifest semantic checks,
-;; independent directory inventory, publication and crash recovery are absent.
+;; This checks the observed Kapitsa 0.2.26 file-list contract, not tensor
+;; contents, model provenance, other manifest fields, or loader compatibility.
+(defn- fk-file-name [id :i64] :string
+  (if (< id 6) (ft-name id) (case id 6 "model.safetensors" 7 "experts.safetensors" "")))
+(defn- fk-file-id [name :string] :i64
+  (loop [i 0] (if (= i 8) -1 (if (= name (fk-file-name i)) i (recur (+ i 1))))))
+(defn- fk-manifest-valid? [b :vector-i64 base-size :i64 experts-size :i64 metadata-sizes :vector-i64] :bool
+  (if (or (not (ol-read-ok? b)) (= (vector-count b) 0) (> (vector-count b) 16384)
+          (not (= (vector-count metadata-sizes) 6)) (not (json-valid? b))) false
+    (let [root (ol-root b) files (json-member b root "files")]
+      (and (= (json-kind b root) 1) (= (ol-text b root "name") "flint-ud-iq2_xxs")
+           (= (ol-text b root "kapitsa") "0.2.26") (= (ol-text b root "variant") "gguf IQ2_XXS")
+           (>= files 0) (= (json-kind b files) 2) (= (json-count b files) 8)
+           (loop [i 0 seen 0 total 0]
+             (if (= i 8) (and (= seen 255) (= (ol-int b root "total_bytes") total))
+               (let [item (json-element b files i) id (if (>= item 0) (fk-file-id (ol-text b item "path")) -1)
+                     size (if (>= item 0) (ol-int b item "size") -1)
+                     expected (cond (< id 0) -1 (< id 6) (vector-at metadata-sizes id)
+                                    (= id 6) base-size :else experts-size)]
+                 (and (>= item 0) (= (json-kind b item) 1) (= (json-count b item) 2)
+                      (>= id 0) (= (bit-and seen (i64-shift-left 1 id)) 0)
+                      (> expected 0) (= size expected)
+                      (recur (+ i 1) (bit-or seen (i64-shift-left 1 id)) (+ total size))))))))))
+(defn- fk-stage-manifest? [stage :string base-size :i64 experts-size :i64] :bool
+  (let [sizes (loop [i 0 out (vector-alloc 6)]
+                (if (= i 6) out
+                  (let [p (str stage "/" (ft-name i))
+                        meta (typed-cap-call 35 :string :string (ol-frame "O" p ""))
+                        n (if (and (md-regular? meta) (mp-mode? p "384" "0")) (ol-size meta 16777216) -1)]
+                    (recur (+ i 1) (vector-assoc! out i n)))))
+        path (str stage "/.kapitsa/manifest.json")
+        b (if (mp-mode? path "384" "0") (ma-read path 16384) (ol-failed))]
+    (fk-manifest-valid? b base-size experts-size sizes)))
+
+;; Stage only, never publish or approve loading. Independent directory
+;; inventory, complete Kapitsa semantics, publication and recovery are absent.
 (defn model-flint-oci-stage-main [] :i64
   (let [layout (md-arg 0) manifest (md-arg 1) manifest-size (md-decimal (md-arg 2))
         base (md-arg 3) base-size (md-decimal (md-arg 4)) experts (md-arg 5) experts-size (md-decimal (md-arg 6))
@@ -78,7 +112,8 @@
                    (if (not (= staged "flint-assets/staged")) "flint-artifact/staging-unknown"
                      (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
                               (tw-copy (ol-blob-path layout experts) (str stage "/experts.safetensors") experts experts-size)
+                              (fk-stage-manifest? stage base-size experts-size)
                               (= (ta-fs "M" stage "") "1"))
-                       "flint-artifact/staged-unverified-manifest" "flint-artifact/staging-unknown"))))
+                       "flint-artifact/staged-file-list-verified" "flint-artifact/staging-unknown"))))
         x (md-out result)]
-    (if (= result "flint-artifact/staged-unverified-manifest") 0 1)))
+    (if (= result "flint-artifact/staged-file-list-verified") 0 1)))

@@ -1,5 +1,5 @@
 ;; Pure name vectors only. These do not execute tar staging or filesystem I/O.
-(ns murakumo.fleet-model-flint-oci-stage-test (:export [test-flint-asset-names]))
+(ns murakumo.fleet-model-flint-oci-stage-test (:export [test-flint-asset-names test-flint-file-list]))
 
 (defn- ft-test-header [name :string] :vector-i64
   (let [b (vector-i64-from-bytes (string-to-utf8 name))]
@@ -18,3 +18,17 @@
        (= (ft-id (ft-test-header "experts.safetensors")) -1)
        (= (ft-id (ft-test-header "../config.json")) -1)
        (= (ft-id (ft-test-header ".kapitsa/other.json")) -1)))
+
+(defn test-flint-file-list [] :bool
+  (let [text (str "{\"name\":\"flint-ud-iq2_xxs\",\"kapitsa\":\"0.2.26\",\"variant\":\"gguf IQ2_XXS\",\"total_bytes\":381,\"files\":["
+                  "{\"path\":\"config.json\",\"size\":11},{\"path\":\"tokenizer.json\",\"size\":12},"
+                  "{\"path\":\"tokenizer_config.json\",\"size\":13},{\"path\":\"chat_template.jinja\",\"size\":14},"
+                  "{\"path\":\"generation_config.json\",\"size\":15},{\"path\":\"model.safetensors.index.json\",\"size\":16},"
+                  "{\"path\":\"model.safetensors\",\"size\":100},{\"path\":\"experts.safetensors\",\"size\":200}]}")
+        sizes [11 12 13 14 15 16]]
+    (and (fk-manifest-valid? (ms-bytes text) 100 200 sizes)
+         (not (fk-manifest-valid? (ms-bytes text) 101 200 sizes))
+         (not (fk-manifest-valid? (ms-bytes text) 100 200 [11 12 13 14 15 17]))
+         (not (fk-manifest-valid? (ms-bytes (string-replace-all text "experts.safetensors" "model.safetensors")) 100 200 sizes))
+         (not (fk-manifest-valid? (ms-bytes (string-replace-all text "0.2.26" "0.2.25")) 100 200 sizes))
+         (not (fk-manifest-valid? (ms-bytes (string-replace-all text "381" "380")) 100 200 sizes)))))
