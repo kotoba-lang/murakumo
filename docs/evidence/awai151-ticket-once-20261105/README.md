@@ -161,6 +161,29 @@ each host reported its temporary directory removed. These are process-kill
 and single concurrency samples, not power-loss durability, fairness or
 production-provider qualification.
 
+## Existing Mac bootstrap provider observation
+
+On one local Darwin ARM64 host, the Mac bootstrap packager from Amu #1824's
+`ff630cb3` worktree, SHA-256
+`c2badb1aac7911f430e398f1b3695a55b3b0ced8bb3681c48c00e9340606812a`,
+and the diagnostic packager `f726f9dd...` above each packaged the same small
+FS2 probe with compiler SHA-256 `703709f8...`. Strict signatures were
+verified. Both returned the expected D existence response. Against a private
+existing destination, stock T trapped with SIGTRAP and no output; diagnostic
+T returned the framed refusal `0`. Both test files stayed unchanged. The
+task-owned directory was removed and native children had a three-second CPU
+limit. `scripts/native/check-fifo-stock-provider.py` records this observation;
+its SHA-256 was
+`86e10d914362fd976e5532ae560e6752dd81e289130d6ecadc01261c1ff44cf9`.
+
+A separate RGQ5 fixture packaged by that stock image trapped before enqueue
+and left the queue empty without a published marker. That observation alone
+does not identify the first unsupported operation. These are observations of
+specific pinned artifacts on one host; they do not prove all stock providers
+or hosts behave the same. A trapping child is an unknown outcome that a host
+must handle, not a successful FIFO refusal. Production FS2 T and host error
+handling remain unqualified.
+
 ## Preserve the barrier when a claim is lost
 
 The current candidate also validates the exact claim before release, dequeue,
