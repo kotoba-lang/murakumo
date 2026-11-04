@@ -311,3 +311,44 @@ not a real quorum, model request, atomic fence, source-locked product,
 production provider or qualified governor. It does not prove survival across
 power loss, complete process lifetime, or safe three-host deployment. No
 existing service or model was stopped.
+
+## Native lease client against synthetic loopback voters
+
+On 2026-11-04, a Tailscale session with strict advertised host-key
+verification compiled a selected-source Linux ARM64 guest on Xavier with the
+previously pinned source-derived F3 compiler. The guest executed actual
+`rt-lease` twice and then actual `rt-post-problem`. Twelve selected lease,
+HMAC, voter-list and admission function bodies were compared byte-for-byte
+with the current worktree. Other dependencies came from the historical unity
+and were not all independently pinned as a source-locked product.
+
+Three test-only Python voter servers listened on three distinct loopback
+addresses on the same Xavier. They verified the guest's request HMACs and
+returned synthetically constructed HMAC-protected replies using a synthetic
+token. With the same chosen value, the guest returned
+`resident/admission-held` (four requests per server). When the servers
+deliberately returned a changed accepted node in the second round, it returned
+`resident/lease-lost` (four per server). When two servers deliberately sent
+invalid reply MACs in the second round, it returned `resident/lease-lost`
+(three per server). All three guest invocations exited zero because their
+expected assertions passed; an in-band random completion marker was required.
+The test listeners were closed and their threads joined. Test artifacts and
+the synthetic token were retained in a private temporary directory.
+
+Fixture source and ELF SHA-256 were
+`8bb7ef2fa8eb82590d3b29d1e259c17124e2f8aa4fe2a80f702f5d9c7a34becf` and
+`e11e14c1e1367e35ad64ac3b3442118a71513e5e71f40cae3abc7d6e61f84b76`.
+Temporary generator and operator script SHA-256 values were
+`6eae6359c73de73051b7de93c7b7b6045e5caf10d20cfd3dbadeabba8424b14c` and
+`341c639e478f3fa4e274b7967ca87b4b19c70f1ab700fc8e59e85f44a672e6a8`.
+The compiler had a sampled peak of 61,588 KiB; the three guests sampled at
+1,780, 484 and 484 KiB. Native processes had 3/4-second CPU limits, an 8 GiB
+address-space ceiling and RSS sampling with termination above 200 MiB;
+sampling is not a hard memory limit.
+
+The servers were scripted mocks, not the actual native voter implementation;
+all ran on one machine and the changed value was deliberately injected. This
+tests the selected native client's loopback/HMAC and lease comparison, not a
+real authenticated fleet quorum, real lease loss during count, the full
+two-phase resident, receiver fencing, model inference or governor
+qualification. No persistent service or model was started.
