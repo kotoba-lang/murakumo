@@ -44,7 +44,7 @@ def main():
     count_end = source.index('(defn- pr-flint-output-budget ', count_start)
     count_source = source[count_start:count_end]
     count_guard = '(pr-window-seconds started deadline (pr-wall-ms) seconds)'
-    if count_source.count(count_guard) != 1:
+    if count_source.count(count_guard) != 1 or count_source.count('(not reuse-only)') != 1:
         raise ValueError('count deadline mutation anchor changed')
     count_stubs = '''
 (defn- pr-local-flint? [r :vector-i64] :bool true)
@@ -65,11 +65,69 @@ def main():
 '''
     count_cases = '''
 (defn main [] :i64
- (let [normal (vector-alloc 2) expired (vector-alloc 2)
-       a (pr-count normal "/test" 10 [1] 100000 110000)
-       b (pr-count expired "/test" 10 [1] 100000 105000)]
+ (let [normal (vector-alloc 2) expired (vector-alloc 2) reuse (vector-alloc 2)
+       a (pr-count normal "/test" 10 [1] 100000 110000 false)
+       b (pr-count expired "/test" 10 [1] 100000 105000 false)
+       c (pr-count reuse "/test" 10 [1] 100000 110000 true)]
    (if (and (= a 12) (= (vector-at normal 0) 1) (= (vector-at normal 1) 3)
-            (= b -1) (= (vector-at expired 0) 0)) 0 1)))
+            (= b -1) (= (vector-at expired 0) 0) (= c -1) (= (vector-at reuse 0) 0)) 0 1)))
+'''
+    reuse_stub_anchor = ':string "profile/new-unit")'
+    reuse_decision = '(= decision "profile/reuse-unit")'
+    if count_stubs.count(reuse_stub_anchor) != 1 or count_source.count(reuse_decision) != 1:
+        raise ValueError('existing-count control anchor changed')
+    reuse_stubs = count_stubs.replace(reuse_stub_anchor, ':string "profile/reuse-unit")', 1)
+    reuse_cases = '''
+(defn main [] :i64
+ (let [runtime (vector-alloc 2)
+       result (pr-count runtime "/test" 10 [1] 100000 110000 true)]
+  (if (and (= result 12) (= (vector-at runtime 0) 0)) 0 1)))
+'''
+    resident = (ROOT / 'kotoba/profile_resident.kotoba').read_text()
+    resident_start = resident.index('(defn- rt-dispatch ')
+    resident_end = resident.index('(defn- rt-turn ', resident_start)
+    dispatch = resident[resident_start:resident_end]
+    refresh = 'again (rt-lease cfg (cp-num lease 0 "epoch"))'
+    if dispatch.count(refresh) != 1:
+        raise ValueError('resident lease refresh mutation anchor changed')
+    resident_stubs = '''
+(defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
+  (let [n (+ (vector-at cfg 0) 1) x (vector-assoc! cfg 0 n)]
+    (cond (and (= n 2) (= (vector-at cfg 3) 1)) [2]
+          (and (= n 2) (= (vector-at cfg 3) 3)) [3] :else [1])))
+(defn- rt-now [] :i64 106500)
+(defn- rt-post-problem [cfg :vector-i64 head :vector-i64 lease :vector-i64 fresh :vector-i64 now :i64] :string
+  (cond (= (vector-at fresh 0) 1) "resident/admission-held"
+        (= (vector-at fresh 0) 3) "resident/retention-expired-proposal-retained"
+        :else "resident/lease-lost"))
+(defn- rf-budget [a :i64 b :i64 c :i64] :i64 10)
+(defn- rt-clock-window? [now :i64 margin :i64] :bool true)
+(defn- rt-runtime [cfg :vector-i64] :vector-i64 cfg)
+(defn- cp-num [b :vector-i64 i :i64 key :string] :i64 1)
+(defn- cp-str [b :vector-i64 i :i64 key :string] :string "/cache")
+(defn- pr-local-flint? [b :vector-i64] :bool true)
+(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 start :i64 deadline :i64 phase :i64] :string
+  (if (= phase 1)
+    (let [x (vector-assoc! runtime 1 (+ (vector-at runtime 1) 1))]
+      (if (= (vector-at runtime 3) 2) "profile/context-budget-unknown-or-insufficient" "profile/flint-count-ready"))
+    (let [x (vector-assoc! runtime 2 (+ (vector-at runtime 2) 1))] "profile/step-completed")))
+'''
+    resident_cases = '''
+(defn main [] :i64
+ (let [good (vector-alloc 4) changed (vector-alloc 4) unavailable (vector-alloc 4) expired (vector-alloc 4)
+       x (vector-assoc! changed 3 1) y (vector-assoc! unavailable 3 2) z (vector-assoc! expired 3 3)
+       a (rt-dispatch good [1] [1] "/test" 1)
+       b (rt-dispatch changed [1] [1] "/test" 1)
+       c (rt-dispatch unavailable [1] [1] "/test" 1)
+       d (rt-dispatch expired [1] [1] "/test" 1)]
+  (if (and (= a "profile/step-completed") (= (vector-at good 0) 2)
+           (= (vector-at good 1) 1) (= (vector-at good 2) 1)
+           (= b "resident/lease-lost") (= (vector-at changed 0) 2)
+           (= (vector-at changed 1) 1) (= (vector-at changed 2) 0)
+           (= c "profile/context-budget-unknown-or-insufficient") (= (vector-at unavailable 0) 1)
+           (= (vector-at unavailable 1) 1) (= (vector-at unavailable 2) 0)
+           (= d "resident/retention-expired-proposal-retained") (= (vector-at expired 0) 2)
+           (= (vector-at expired 1) 1) (= (vector-at expired 2) 0)) 0 1)))
 '''
     def limit():
         resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
@@ -95,6 +153,11 @@ def main():
                 ('count-bypass-mutant', window + count_stubs + count_source.replace(count_guard, 'seconds') + count_cases, 1),
                 ('expired-bypass-mutant', window + count_stubs + count_source.replace(
                     count_guard, '(if (> (pr-wall-ms) deadline) seconds ' + count_guard + ')') + count_cases, 1),
+                ('reuse-bypass-mutant', window + count_stubs + count_source.replace('(not reuse-only)', 'true') + count_cases, 1),
+                ('count-reuse', window + reuse_stubs + count_source + reuse_cases, 0),
+                ('count-reuse-mutant', window + reuse_stubs + count_source.replace(reuse_decision, 'false') + reuse_cases, 1),
+                ('resident-refresh', window + resident_stubs + dispatch + resident_cases, 0),
+                ('resident-refresh-mutant', window + resident_stubs + dispatch.replace(refresh, 'again lease') + resident_cases, 1),
             ]
             for name, part, expected in fixtures:
                 text = '(ns flint-window-test (:export [main]))\n' + part

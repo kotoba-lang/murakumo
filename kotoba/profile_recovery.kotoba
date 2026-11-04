@@ -316,7 +316,7 @@
     (let [remaining (quot (- deadline now) 1000)]
       (if (< remaining 1) -1 (if (< remaining limit) remaining limit)))))
 
-(defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64 started :i64 deadline :i64] :i64
+(defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64 started :i64 deadline :i64 reuse-only :bool] :i64
   (if (or (not (pr-local-flint? runtime)) (= (vector-count body) 0)) -1
     (let [id (pr-count-id runtime body)
           unit (str "itonami-count-" (string-substring id 0 24) ".service")
@@ -331,7 +331,7 @@
           marker-matches (if marked (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n") false)
           decision (if known (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
           submitted (cond (= decision "profile/reuse-unit") true
-                          (= decision "profile/new-unit") (and (pr-prepare-submit request marker body)
+                          (= decision "profile/new-unit") (and (not reuse-only) (pr-prepare-submit request marker body)
                             (let [remaining (pr-window-seconds started deadline (pr-wall-ms) seconds)]
                               (and (> remaining 0) (pr-submit-kind unit request response remaining runtime true))))
                           :else false)]
@@ -608,7 +608,10 @@
        (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
        (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
 
-(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64 started :i64 deadline :i64] :string
+;; Flint phase 1 records a completed count without generation; phase 2 only
+;; reuses an already recorded count after the resident's lease revalidation.
+;; Busy state is retained across the gap and any unknown outcome.
+(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64 started :i64 deadline :i64 phase :i64] :string
   (let [dir (str repo "/profile") meta (pr-read-bounded (str dir "/itonami.edn") 131072) role (pr-read-bounded (str dir "/SOUL.md") 131072)
         growth (= (cp-str runtime 0 "profile") "awai-growth-steward")
         work-path (str dir "/tasks/first-turn.md") context-path (str dir "/context.md")
@@ -617,6 +620,8 @@
         state (pr-read-bounded (str repo "/state.json") 16384) task (cp-str runtime 0 "task")]
     (cond (or (< seconds 1) (> seconds 840)) "profile/budget-refused"
           (not (or (pr-runtime? runtime meta role) (pr-growth-runtime? runtime meta role work context))) "profile/runtime-refused"
+          (or (< phase 0) (> phase 2)) "profile/phase-invalid"
+          (and (pr-local-flint? runtime) (= phase 0)) "profile/flint-resident-required"
           (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
           :else
@@ -650,13 +655,14 @@
                     turn (if (pr-local-flint? runtime) (pr-flint-turn-id task next state) "")
                     count-id (if (pr-local-flint? runtime) (pr-count-id runtime count-body) "")
                     occupied (if (pr-local-flint? runtime) (pr-flint-busy-reserve cache (cp-str runtime 0 "serverInstance") turn count-id) true)
-                    counted (if (pr-local-flint? runtime) (if occupied (pr-count runtime cache seconds count-body started deadline) -1) 0)
+                    counted (if (pr-local-flint? runtime) (if occupied (pr-count runtime cache seconds count-body started deadline (= phase 2)) -1) 0)
                     counted-at (if (pr-local-flint? runtime) (pr-wall-ms) 0)
                     budget (if (pr-local-flint? runtime) (pr-flint-output-budget counted tokens) tokens)]
               (if (not occupied) "profile/server-busy-or-unknown"
               (if (< budget 1)
                 (if (pr-flint-count-only-release runtime cache turn count-id counted)
                   "profile/context-budget-insufficient" "profile/context-budget-unknown-or-insufficient")
+              (if (and (pr-local-flint? runtime) (= phase 1)) "profile/flint-count-ready"
                 (let [body (str (if (pr-local-flint? runtime) "{\"chat_template_kwargs\":{\"enable_thinking\":true},\"max_tokens\":" "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":") budget ",\"messages\":["
                       "{\"content\":" (pr-json-quote system-text) ",\"role\":\"system\"}," history "],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
                       (if (pr-local-flint? runtime) ",\"stream\":false,\"temperature\":1,\"top_k\":20,\"top_p\":0.95}"
@@ -705,7 +711,7 @@
                       ;; when its acknowledgement is lost. Preserve that
                       ;; ambiguity for host reconciliation; the host must not
                       ;; retry inference without resolving the outcome.
-                      (if (= sync "1") (pr-flint-finish runtime cache turn count-id (str "profile/step-completed " next " " cid)) "profile/state-publication-unknown"))))))))))))))))
+                      (if (= sync "1") (pr-flint-finish runtime cache turn count-id (str "profile/step-completed " next " " cid)) "profile/state-publication-unknown")))))))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
   (if (pr-local-flint? runtime) (cp-num runtime 0 "maxTokens")
@@ -714,10 +720,10 @@
     (if resident 256 32))))
 
 (defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false) 0 0))
+  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false) 0 0 0))
 
-(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 started :i64 deadline :i64] :string
-  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true) started deadline))
+(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 started :i64 deadline :i64 phase :i64] :string
+  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true) started deadline phase))
 
 (defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
   (pr-step-bounded repo runtime cache next 840))

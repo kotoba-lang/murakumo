@@ -67,6 +67,55 @@ This is a synthetic seam test, not an actual clock, systemd/curl, lease,
 generation, source-locked application or governor test. The lease refresh,
 atomic fence, wall-clock and workload-lifetime limitations above remain open.
 
+## Relearn lease between count and generation
+
+The resident candidate now separates Flint into a count-only phase and a
+generation phase. A completed count leaves the busy marker in place and
+returns `profile/flint-count-ready` without generation. The resident then
+relearns the same lease, checks its binding and retention again, and checks
+the original absolute time window before entering generation. The second
+phase is reuse-only: if its count unit is absent rather than reusable, it
+cannot create a new count unit. A standalone phase-zero Flint step and an
+invalid phase are refused; non-Flint resident steps keep their single phase.
+
+This reduces the earlier gap but does not make the lease check atomic with
+generation. The second phase still reads state, queries the existing count
+unit and prepares the request after the lease check. A lease can change during
+that interval. The host must exclude other writers and server users and
+reconcile retained markers after unknown outcomes. A receiver-side effect
+fence, monotonic deadlines, actual process lifetime and resource enforcement
+remain necessary; this candidate does not authorize deployment.
+
+On one local Darwin ARM64 host, selected actual source and historical
+dependencies passed the existing Amu source `check`. Separate signed native
+fixtures exercised: the actual `rt-dispatch` with stubbed lease, time and
+profile steps (same lease proceeds, changed lease or expired retention does
+not, failed count does not refresh or generate); actual `pr-count` with
+stubbed systemd/filesystem/clock (reuse-only refuses a new unit and can reuse
+a reported existing one); and actual `pr-step-range` with stubbed count,
+clock, unit, submit and persistence (count-only submits no generation,
+generation uses reuse-only, expired generation submits nothing, standalone
+and invalid phases refuse). Mutants bypassing the lease refresh, reuse-only
+guard, existing-count reuse or generation deadline failed their respective
+fixtures. These are separate synthetic tests, not one integrated live run;
+the actual lease quorum, durable files, process transport and model were not
+exercised. Each compiler/native fixture had a three-second CPU cap and no
+hard memory cap.
+
+Current recovery and resident source SHA-256 values were
+`c8b8f736960a08185803792a65f8f2a5b9953de32faf53ab75d67380f08afc96` and
+`0c88ef2836413c3934f8363bc1ba26cef1c8a0591e1c04d518c21e537aa720f0`.
+The native test script SHA-256 was
+`d44b84ee3c47c6dad76f6d2094ccb817371131ae1e8f0a92efd25bd38de88fcc`.
+The signed resident-refresh and refresh-bypass images hashed to
+`71fd54978e6eebabbcbcea26530b04738dc2da223d129b56af763fefa2c7cb55` and
+`e4d08d3a93b467252f1f630f7d6d27676a091f873ccf5777d27d4e07587b4651`.
+The generated full-step fixture and its deadline-bypass control hashed to
+`a8d860ea5c77a33e2106dabca4040d8bd9ba564c96e3695405a4fefbf3dc82cd` and
+`1def7d87aa3501caf47284b8bbb3c073b6611da3646a5e5a9449f05d8bc2ff57`.
+The generation fixture used temporary builder SHA-256
+`cb59024c1ace9d3d634f56ff1d29d4ac48121c692f6aa5ea1c15f3984d6a77a9`.
+
 ## Darwin diagnostic clock capability observation
 
 On one local Darwin ARM64 host (macOS 26.3.1, build `25D771280a`), a
