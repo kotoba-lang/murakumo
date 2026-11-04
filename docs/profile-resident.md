@@ -642,3 +642,8 @@ private runtime files to 128 KiB. Empty or unavailable environment and policy
 reads cannot satisfy their CID pins. Existing installations using empty files
 or files beyond these caps must provision compatible inputs before enabling the
 updated resident. The same host isolation and FS2 provider requirements apply.
+
+The standalone fenced recovery entry does not yet coordinate the GitHub
+archive acknowledgement and publication path. It explicitly refuses Flint
+runtime dispatch; use an archive-gated, otherwise qualified resident flow until
+an equivalent recovery coordinator exists.

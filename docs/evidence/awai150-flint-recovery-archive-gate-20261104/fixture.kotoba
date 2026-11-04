@@ -1,0 +1,50 @@
+(ns recovery-predispatch-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [v :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 v)))
+(defn- cp-num [v :vector-i64 i :i64 k :string] :i64
+  (if (= k "until") (if (= (vector-count v) 1) (vector-at v 0) 10000) 1))
+(defn- cp-str [v :vector-i64 i :i64 k :string] :string
+ (cond (and (= k "observedLease") (= (vector-at v 0) 5)) "bad"
+       (and (= k "environment") (= (vector-at v 0) 42)) "flint"
+       (and (= k "kind") (= (vector-at v 0) 42)) "itonami.readonly-profile-runtime-local-flint/1"
+       :else "x"))
+(defn- cp-write [p :string b :vector-i64] :bool (not (= p "bad")))
+(defn- cp-load [s :string c :string] :vector-i64 (if (= c "flint") [42] [1]))
+(defn- cp-say [s :string] :i64 0)
+(defn- rf-learn [p :vector-i64 prev :bool] :string (if (= (vector-at p 0) 1) "same" (if (= (vector-at p 0) 2) "changed" "")))
+(defn- rf-now [] :i64 100)
+(defn- rf-budget [a :i64 b :i64 now :i64] :i64 (if (= b 200) 0 4))
+(defn- recovery-lease-problem [v :vector-i64 task :string node :string epoch :i64 now :i64] :string
+ (if (= (cp-text v) "same") "recovery/lease-admitted" "recovery/refused"))
+(defn- pr-step-bounded [dest :string runtime :vector-i64 cache :string next :i64 budget :i64] :string "stub/dispatched")
+(defn- rf-dispatch [plan :vector-i64 pins :vector-i64 contract :vector-i64
+                    lease :vector-i64 dest :string] :string
+  (let [saved (cp-write (cp-str plan 0 "observedLease") lease)
+        runtime (if saved (cp-load (cp-str plan 0 "store") (cp-str contract 0 "environment")) (vector-alloc 0))
+        fresh (if saved (cp-bytes (rf-learn plan false)) (vector-alloc 0)) now (rf-now)
+        task (cp-str plan 0 "task") node (cp-str plan 0 "node") epoch (cp-num plan 0 "epoch")
+        budget (rf-budget (cp-num lease 0 "until") (cp-num pins 0 "until") now)]
+    (cond (not saved) "recovery/lease-record-failed"
+          (<= (cp-num pins 0 "until") now) "recovery/retention-expired"
+          (or (not (= (cp-text lease) (cp-text fresh)))
+              (not (= (recovery-lease-problem fresh task node epoch now) "recovery/lease-admitted")))
+            "recovery/lease-lost-before-dispatch"
+          (< budget 1) "profile/budget-refused"
+          ;; This standalone recovery lane has no GitHub archive acknowledgement
+          ;; or durable publication coordinator for a Flint turn. Use the
+          ;; archive-gated resident path until that integration is qualified.
+          (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-flint/1")
+            "recovery/flint-archive-gate-required"
+          :else (let [event (cp-say "recovery/lease-and-replicas-admitted")]
+                  (pr-step-bounded dest runtime (cp-str plan 0 "cache") (cp-num contract 0 "next") budget)))))
+
+
+(defn main [] :i64
+ (let [lease (cp-bytes "same")]
+  (if (and (= (rf-dispatch [1] [10000] [1] lease "/x") "stub/dispatched")
+           (= (rf-dispatch [1] [10000] [42] lease "/x") "recovery/flint-archive-gate-required")
+           (= (rf-dispatch [2] [10000] [1] lease "/x") "recovery/lease-lost-before-dispatch")
+           (= (rf-dispatch [3] [10000] [1] lease "/x") "recovery/lease-lost-before-dispatch")
+           (= (rf-dispatch [1] [100] [1] lease "/x") "recovery/retention-expired")
+           (= (rf-dispatch [1] [200] [1] lease "/x") "profile/budget-refused")
+           (= (rf-dispatch [5] [10000] [1] lease "/x") "recovery/lease-record-failed")) 0 1)))

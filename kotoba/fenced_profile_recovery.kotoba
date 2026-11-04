@@ -43,6 +43,11 @@
               (not (= (recovery-lease-problem fresh task node epoch now) "recovery/lease-admitted")))
             "recovery/lease-lost-before-dispatch"
           (< budget 1) "profile/budget-refused"
+          ;; This standalone recovery lane has no GitHub archive acknowledgement
+          ;; or durable publication coordinator for a Flint turn. Use the
+          ;; archive-gated resident path until that integration is qualified.
+          (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-flint/1")
+            "recovery/flint-archive-gate-required"
           :else (let [event (cp-say "recovery/lease-and-replicas-admitted")]
                   (pr-step-bounded dest runtime (cp-str plan 0 "cache") (cp-num contract 0 "next") budget)))))
 
