@@ -21,6 +21,7 @@
                 tools (if (>= message 0) (json-member raw message "tool_calls") -1)]
             (cond (or (< first 0) (>= second 0)) "flint/choices-refused"
                   (>= tools 0) "flint/tool-calls-refused"
+                  (not (= (cp-str raw message "role") "assistant")) "flint/role-refused"
                   (= (pr-answer raw) "") "flint/incomplete"
                   :else "flint/ok"))))
 
@@ -30,6 +31,6 @@
 (defn flint-compact [expected :string raw :vector-i64] :vector-i64
   (if (not (= (flint-response-problem expected raw) "flint/ok")) (vector-alloc 0)
     (let [compact (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":"
-                      (pr-json-quote (pr-answer raw)) "}}],\"model\":" (pr-json-quote expected)
+                      (pr-json-quote (pr-answer raw)) ",\"role\":\"assistant\"}}],\"model\":" (pr-json-quote expected)
                       ",\"rawResponseDigest\":\"sha256:" (sha256-hex raw) "\"}"))]
       (if (pr-replicable? compact) compact (vector-alloc 0)))))
