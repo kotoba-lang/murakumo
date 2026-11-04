@@ -7,7 +7,7 @@ Amu selfhost, built and run directly on this Mac's architecture
 the path.
 
 Status: plan. Nothing below is implemented by this document. The numbers in
-"Where it stands" are measured; every later number is a target.
+"Where it stands" and "Measured since" are measured; every later number is a target.
 
 ## Where it stands (measured 2026-11-03, MacBook Pro M1 Max)
 
@@ -33,9 +33,23 @@ Correction, same day: this document first listed surface floats as refused. They
 spelling `f32+`, which does not exist (E2101): the probe used the wrong names. Gap 1 and S1 below are rewritten
 accordingly.
 
+## Measured since
+
+S7, first slice (2026-11-04, kotoba-lang/amu#1822, amu ADR 0405, JUN-819): a binary built by `bin/amu` runs the Q8_0
+kernel on this Mac's GPU through Metal, with no C loader. Its answer equals the CPU and C twins at 4,864 × 896, and a
+mutated kernel differs. Evidence: amu `docs/evidence/macos-metal-20261104/`. Diagnostic only (shared host, load average
+19 to 24), and no model ran, so there is no token rate here.
+
+- One 4,864 × 896 product takes about 300 µs, against 2.42 ms for the Kotoba scalar kernel and 1.40 ms for C.
+- About 275 µs of that is the floor of one command buffer. Above the floor the plain loop runs at about 50 G MACs/s, a
+  kernel-only bound of about 101 tok/s for Qwen2.5-0.5B. llama.cpp Metal's 218.4 tok/s is about 108 G MACs/s over the
+  whole model.
+- The floor can matter more than the slope: for illustration, 100 dispatches in separate command buffers would cap
+  decode near 36 tok/s. A decode step has to batch its kernels, and that cost is not measured yet.
+
 ## What stops a Kotoba engine on this Mac
 
-Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`.
+Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`; row 7 was updated for `15aef330f`.
 
 | # | Gap | Where | Effect on inference |
 | --- | --- | --- | --- |
@@ -45,7 +59,7 @@ Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`.
 | 4 | No byte arrays; weights live in `:vector-i64` words | spec | 8 bytes per word plus unpacking; no `ldrsb`/`ld1` |
 | 5 | The Mac CLI host gives guests no filesystem, a 5-second `run` deadline and a 1 MiB source limit; the full-root route reads whole files only (wire 35, no range) | amu `examples/foundation-starter/MACOS-ARM64.md`, `docs/native-public-entry.md` | a 531 MB GGUF cannot reach a guest |
 | 6 | One thread | Mac runtime | 1 of 8 performance cores |
-| 7 | No GPU route on macOS: wire 42 refused (E2115), C loader removed (amu #1459/#1460). ADR 0375 item 5: on macOS, route B is a Kotoba Mach-O loader for libSystem and Metal.framework, kernels in MSL | amu ADR 0374/0375 | MSL emission and simdgroup reduction exist (ADR 0373, AWAI-41) with nothing to launch them |
+| 7 | GPU on macOS reaches one kernel only. The default profile traps at wire 42 and the C loader is gone (amu #1459/#1460); the opt-in `amu-program-metal` profile reaches Metal through dyld and one `boot` function, and its kernel is MSL text written by hand | amu ADR 0375, ADR 0405 | one command buffer per dispatch and no model. MSL emission and simdgroup reduction exist (ADR 0373, AWAI-41) but are not connected to this route |
 | 8 | Static Linux images: 64 MiB address space, no `mmap` after start (ADR 0371); vector access through helper calls (≈ 60 ns each, this run) | amu ADR 0371, kotoba-lang/amu#1667 | not the Mac route; listed so Linux nodes follow |
 
 ## Principles
@@ -77,7 +91,7 @@ Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`.
 | S4 · model access | a `:model/read` capability naming one file and its sha256, granted per run; the Mac runtime maps it read-only through libSystem (`mmap`) and exposes it as `:bytes`; granted engines leave the 5-second `run` deadline | GGUF header and tensor-table admission on the real file (port of the AIUEOS `qwen35-gguf-*` objects to `qwen2`); a wrong digest is refused | 531 MB mapped, zero copies |
 | S5 · first token | Qwen2.5-0.5B forward pass in Kotoba on one core: embedding, RMSNorm, RoPE, GQA attention with a KV cache, SwiGLU, tied output head, argmax | prompt ids `760 6511 314 9338 369` → greedy `314 746 600 220`, the f64 oracle and llama.cpp continuation recorded on 2026-10-19; a mutant changes a token | ≥ 1-thread llama.cpp, 90.7 tok/s |
 | S6 · threads | a structured `parallel-rows` form: rows partitioned across performance cores, no shared mutable state, a reduction order fixed by the spec | identical tokens on 1 and 8 threads | ≥ 8-thread llama.cpp on an idle host |
-| S7 · Metal | ADR 0375 route B on macOS: a Kotoba Mach-O loader that binds libSystem and Metal.framework and dispatches Amu's KIR v2 → MSL kernels | kernels vs the f64 oracle; same tokens as S5 | ≥ llama.cpp Metal 218 and MLX 249 tok/s decode (AWAI-18 G1) |
+| S7 · Metal | ADR 0375 route B on macOS, through dyld (amu ADR 0405, owner decision 2026-11-04, in place of a Kotoba Mach-O loader). **First slice merged:** one hand-written MSL kernel, exact against its C twin. Still to do: dispatch Amu's KIR v2 → MSL kernels, and batch a decode step's kernels into few command buffers | kernels vs the f64 oracle; same tokens as S5 | ≥ llama.cpp Metal 218 and MLX 249 tok/s decode (AWAI-18 G1) |
 | S8 · murakumo serves it | `murakumo node join` with the Kotoba engine on a Mac: `/v1/chat/completions` from the S5–S7 binary, no external model server | the node's answer equals S5's tokens | JUN-740 on Apple silicon |
 
 S1–S3 are compiler and spec work with no model; S4–S5 need the host
@@ -105,6 +119,7 @@ kotoba-lang/amu#1667 (inline vector access) removes gap 8 first.
 - JUN-701 / JUN-740: Amu-native engine through route C on the Xavier, and
   murakumo serving it.
 - JUN-377 (ADR 0375): GPU through Amu selfhost; S7 is its macOS route B.
+- JUN-819 (ADR 0405): S7's first slice.
 - KOTOBA-168 (kotoba-lang/amu#1667): inline vector access for the plain
   emitter, which removes gap 8.
 - KOTOBA-161: f64 admission on static targets, the Linux side of S1.
