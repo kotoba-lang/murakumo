@@ -67,3 +67,20 @@ non-numeric claims as unreadable, and the selected consumer returned
 suite, a ClojureScript execution, a real oracle or probe, or resource-governor
 qualification. The underlying probe can still miss holders without reporting
 an unreadable claim.
+
+## Strict numeric and caller-supplied claim validation
+
+The ClojureScript parser previously used `parseInt`, which accepts a numeric
+prefix such as `42garbage`. It now requires an entire decimal integer within
+the cross-platform exact-integer range. Admission also refuses missing,
+malformed, negative or oversized caller-supplied claims and totals above that
+range before folding commitments; callers can supply a probe directly without
+using the parser. The same total bound prevents lossy JavaScript addition.
+
+Local CPU-limited selected-form Babashka diagnostics used actual parser and
+consumer forms with a synthetic oracle: ordinary input admitted, while bad
+numeric text, out-of-range text, a missing claims vector, a negative direct
+claim and a too-large combined claim total were refused. A separate Node
+expression confirmed the prior `parseInt` prefix behavior. This is not a
+ClojureScript execution of the application, the whole host suite, a real
+observation provider, a corrected KIR or a qualified governor.

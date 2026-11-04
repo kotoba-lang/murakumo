@@ -70,7 +70,10 @@
        "done"))
 
 (defn- parse-long* [s]
-  (try #?(:clj (Long/parseLong (str/trim s)) :cljs (js/parseInt (str/trim s) 10))
+  (try (let [text (str/trim s)]
+         (when (re-matches #"-?[0-9]+" text)
+           (let [n #?(:clj (Long/parseLong text) :cljs (js/parseInt text 10))]
+             (when (<= -9007199254740991 n 9007199254740991) n))))
        (catch #?(:clj Exception :cljs :default) _ nil)))
 
 (defn parse-probe
@@ -134,7 +137,21 @@
   that made 262 core dumps unreadable."
   [probe registry klass request-bytes & [headroom-milli]]
   (let [usable (usable-bytes probe (or headroom-milli (headroom-default-milli)))
-        {res :resident opp :opportunistic} (committed probe registry)
+        claims (:claims probe)
+        valid-claims? (and (vector? claims)
+                           (every? (fn [claim]
+                                     (and (map? claim)
+                                          (let [{:keys [pid comm bytes]} claim]
+                                            (and (string? pid) (string? comm) (integer? bytes)
+                                                 (<= 0 bytes 9007199254740991))))) claims)
+                           (loop [remaining (seq claims) total 0]
+                             (if-let [claim (first remaining)]
+                               (let [bytes (:bytes claim)]
+                                 (and (<= bytes (- 9007199254740991 total))
+                                      (recur (next remaining) (+ total bytes))))
+                               true)))
+        {res :resident opp :opportunistic} (if valid-claims? (committed probe registry)
+                                              {:resident 0 :opportunistic 0})
         k (get classes klass -1)
         ;; The shipped KIR can lag the native source. Refuse this consumer's
         ;; known overcommit counterexample before trusting an admission or
@@ -143,7 +160,7 @@
         oracle-current? (and (= 3 (o "admit-code" [0 76 100 20 5]))
                              (= 75 (o "granted-bytes" [0 100 20 5])))
         unreadable (:unreadable-claims probe)
-        observed? (and (integer? unreadable) (zero? unreadable))
+        observed? (and valid-claims? (integer? unreadable) (zero? unreadable))
         code (if (and oracle-current? observed?) (o "admit-code" [k request-bytes usable res opp]) 7)
         reason (cond (not oracle-current?) :oracle-unqualified
                      (not observed?) :invalid-observation
