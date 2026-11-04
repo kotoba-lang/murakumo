@@ -203,6 +203,35 @@ into the source rather than caused by kernel I/O errors; the known same-size
 concurrent-write limitation and the host ownership requirement remain. These
 tests do not qualify a production provider, power-loss behavior or governor.
 
+## Read-only ticket inspection
+
+`inspect <ticket>` is a bounded, lock-protected observation for a future
+trusted host. With a valid claim and a valid stable queue, it reports
+`fifo/claim-queued` if that ticket is present, or `fifo/claim-recorded` if it
+is not. A missing or malformed claim, malformed hold/release marker, pending
+queue update or invalid queue refuses. A nonzero exit, trap, truncated output
+or lost response must be treated as unknown. Inspection never releases a
+reservation or changes the queue.
+
+`fifo/claim-recorded` does not distinguish a failed pre-enqueue claim, a
+cancelled ticket or a completed one. Neither result proves whether a workload
+started, finished or has descendants. The host must use its own authenticated
+launch records, complete process-lifetime evidence and durable reconciliation;
+it must not launch, retry or release solely on an inspection result.
+
+The current native source and diagnostic tests covered queued/recorded,
+missing claim, pending journal, corrupt hold and release markers, and the
+publication interruption cases. They passed locally and on naphtali,
+benjamin and judah using the #1796 diagnostic packager `28aa2445...`; the
+adapted bounded FIFO regression also passed locally. Source SHA-256 was
+`b5075148bf29d925a8af6a4e8339bb676c869e89a5fa3efcc6834a96f1e59908`,
+signed FIFO SHA-256
+`bdb1d68966535efc951b053ba0d7604c5a9d46df1c792671b1a2d114c509b4f6`, and
+observer SHA-256
+`9a6496c56bf058672e83b54f49ee9fc71ea9a8d3b435484c1af2aa99479c537a`.
+The hosts reported task directory removal. These are synthetic observations,
+not production-host, power-loss, authenticated-supervisor or governor proof.
+
 ## Existing Mac bootstrap provider observation
 
 On one local Darwin ARM64 host, the Mac bootstrap packager from Amu #1824's

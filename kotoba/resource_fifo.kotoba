@@ -228,6 +228,17 @@
           (not (or (= hold-status "0") (= hold-status "1"))) "fifo/reservation-unknown"
           (not (or (= release-status "0") (= release-status "1"))) "fifo/reservation-unknown"
           (and (= hold-status "1") (= release-status "1")) "fifo/reservation-unknown"
+          ;; Read-only reconciliation observation. A recorded but nonqueued
+          ;; ticket may have completed, been cancelled, or never been queued;
+          ;; it is not proof that any workload stopped or never started.
+          (= op "inspect")
+            (cond (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+                  (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
+                  (and (= hold-status "1") (not (rq-hold-valid? (rq-read-bounded hold 70)))) "fifo/reservation-unknown"
+                  (and (= release-status "1") (not (rq-hold-valid? (rq-read-bounded release 70)))) "fifo/reservation-unknown"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
+                  (< (string-index-of state (str ticket "\n")) 0) "fifo/claim-recorded"
+                  :else "fifo/claim-queued")
           (= op "settle-recover")
             (if (and (= hold-status "0") (= release-status "0"))
               (rq-settle-recover root state ticket pending-status intent-status) "fifo/reservation-unknown")
@@ -302,7 +313,7 @@
   (let [root (rq-arg 0) op (rq-arg 1) ticket (rq-arg 2) lock (str root "/queue.lock")]
     (if (or (not (rq-root? root)) (not (= (rq-arg 3) ""))
             (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "cancel") (= op "recover")
-                     (= op "reserve") (= op "release") (= op "settle") (= op "settle-recover")))
+                     (= op "reserve") (= op "release") (= op "settle") (= op "settle-recover") (= op "inspect")))
             (and (or (= op "front") (= op "recover")) (not (= ticket ""))))
       (let [z (rq-out "fifo/input-invalid")] 2)
       (if (not (= (rq-fs "D" lock "") "1")) (let [z (rq-out "fifo/lock-unavailable")] 2)
@@ -313,5 +324,6 @@
                 z (rq-out (if released result "fifo/unlock-unknown"))]
             (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued") (= result "fifo/cancelled")
                                   (= result "fifo/reserved") (and (= op "release") (= result "fifo/release-pending")) (= result "fifo/settled")
+                                  (= result "fifo/claim-queued") (= result "fifo/claim-recorded")
                                   (= result "fifo/empty") (= result "fifo/recovered") (= result "fifo/aborted")
                                   (= (string-index-of result "fifo/front ") 0))) 0 1)))))))

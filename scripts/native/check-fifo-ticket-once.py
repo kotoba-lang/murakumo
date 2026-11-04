@@ -126,12 +126,16 @@ def main():
                     raise ValueError((action, actual, expected))
             a, b, c = 'a' * 64, 'b' * 64, 'c' * 64
             op(old, 'front', 'fifo/state-invalid', code=1)
+            op(image, 'inspect', 'fifo/ticket-invalid', 'bad', 1)
+            op(image, 'inspect', 'fifo/ticket-unknown', a, 1)
             for ticket in (a, b):
                 op(image, 'enqueue', 'fifo/enqueued', ticket)
+                op(image, 'inspect', 'fifo/claim-queued', ticket)
                 if ticket == a:
                     marker = q / ('queue.used.' + ticket)
                     content = marker.read_text()
                     marker.unlink()
+                    op(image, 'inspect', 'fifo/ticket-unknown', ticket, 1)
                     op(image, 'reserve', 'fifo/ticket-unknown', ticket, 1)
                     if (q / 'queue.reservation').exists():
                         raise ValueError('missing marker created reservation')
@@ -141,7 +145,12 @@ def main():
                     op(image, 'reserve', 'fifo/ticket-unknown', ticket, 1)
                     marker.write_text(content)
                 op(image, 'reserve', 'fifo/reserved', ticket)
+                op(image, 'inspect', 'fifo/claim-queued', ticket)
                 if ticket == a:
+                    hold = q / 'queue.reservation'; hold_content = hold.read_text()
+                    hold.write_text('malformed')
+                    op(image, 'inspect', 'fifo/reservation-unknown', ticket, 1)
+                    hold.write_text(hold_content)
                     marker.unlink()
                     op(image, 'release', 'fifo/ticket-unknown', ticket, 1)
                     if not (q / 'queue.reservation').exists():
@@ -150,13 +159,19 @@ def main():
                 if ticket == b:
                     op(image, 'release', 'fifo/reservation-unknown', a, 1)
                 op(image, 'release', 'fifo/release-pending', ticket)
+                op(image, 'inspect', 'fifo/claim-queued', ticket)
                 if ticket == a:
+                    pending_release = q / 'queue.release.pending'; release_content = pending_release.read_text()
+                    pending_release.write_text('malformed')
+                    op(image, 'inspect', 'fifo/reservation-unknown', ticket, 1)
+                    pending_release.write_text(release_content)
                     marker.write_text('bad')
                     op(image, 'dequeue', 'fifo/ticket-unknown', ticket, 1)
                     if not (q / 'queue.release.pending').exists():
                         raise ValueError('corrupt claim removed release barrier')
                     marker.write_text(content)
                 op(image, 'dequeue', 'fifo/dequeued', ticket)
+                op(image, 'inspect', 'fifo/claim-recorded', ticket)
                 if ticket == a:
                     marker.unlink()
                     op(image, 'settle', 'fifo/ticket-unknown', ticket, 1)
@@ -168,7 +183,11 @@ def main():
                     op(image, 'settle-recover', 'fifo/settled', ticket)
                 else:
                     op(image, 'settle', 'fifo/settled', ticket)
+                op(image, 'inspect', 'fifo/claim-recorded', ticket)
             op(image, 'enqueue', 'fifo/ticket-used', a, 1)
+            (q / 'queue.pending').write_text('uncertain')
+            op(image, 'inspect', 'fifo/pending-unknown', a, 1)
+            (q / 'queue.pending').unlink()
             op(failed_claim, 'enqueue', 'fifo/ticket-unknown', c, 1)
             op(image, 'enqueue', 'fifo/ticket-used', c, 1)
             op(image, 'front', 'fifo/empty')
@@ -202,6 +221,9 @@ def main():
                 published = (case / ('queue.used.' + c)).exists()
                 if result != 'fifo/ticket-unknown' or (case / 'queue').read_text() != 'RGQ5\n' or published != (name == 'published-read-fault'):
                     raise ValueError(('claim read failure admitted ticket', name, result, published))
+                observed = run([image, '/' + name, 'inspect', c], 0 if published else 1).decode().strip()
+                if observed != ('fifo/claim-recorded' if published else 'fifo/ticket-unknown'):
+                    raise ValueError(('claim read failure inspect', name, observed))
                 retry = run([image, '/' + name, 'enqueue', c], 1 if published else 0).decode().strip()
                 if retry != ('fifo/ticket-used' if published else 'fifo/enqueued'):
                     raise ValueError(('claim read failure retry', name, retry))
@@ -227,7 +249,11 @@ def main():
                     if child.poll() is None:
                         child.kill(); child.wait(timeout=3)
                     child.stdout.close(); child.stderr.close()
-                result = run([image, '/' + phase, 'enqueue', c], 0 if phase == 'after-write' else 1).decode().strip()
+                before_publish = phase == 'after-write'
+                observed = run([image, '/' + phase, 'inspect', c], 1 if before_publish else 0).decode().strip()
+                if observed != ('fifo/ticket-unknown' if before_publish else 'fifo/claim-recorded'):
+                    raise ValueError(('post-kill inspect', phase, observed))
+                result = run([image, '/' + phase, 'enqueue', c], 0 if before_publish else 1).decode().strip()
                 expected = 'fifo/enqueued' if phase == 'after-write' else 'fifo/ticket-used'
                 expected_queue = 'RGQ5\n' + (c + '\n' if phase == 'after-write' else '')
                 if result != expected or (case / 'queue').read_text() != expected_queue:
