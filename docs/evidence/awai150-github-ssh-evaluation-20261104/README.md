@@ -111,3 +111,36 @@ compiler and packager remain the diagnostic pins above. This one synthetic
 round trip does not qualify a production host credential broker, bot identity,
 concurrent or crash recovery, the full source-locked runtime, resource governor,
 or actual agent/bot inference.
+
+## HTTPS push acknowledgement loss and absent-ref controls
+
+On the same local Darwin diagnostic setup, an instrumented privileged test
+adapter first allowed the real HTTPS `git push` to finish successfully and
+then withheld that success response from the actual native archive function.
+The archive independently fetched and verified the expected tree and returned
+`archive/stored ... unacknowledged`; the synthetic checkpoint then restored to
+the matching staged/unstaged/untracked snapshot. The native privacy check also
+refused the public and inaccessible repository controls. Independent GitHub API
+readback observed root commit `ab4ce56d5daba77b791d3d3ad7a0157a8b01234f`
+and tree `9f5fba98122ac32988180d4b18e328cfbb9fef17` at the retained ref
+`refs/heads/itonami/eval-native/10f6ddf28e301844/bafkreiack3fzmpwy22ffnuufdrbhpnfomkihyz262oeddnh2cxbgaugiji`.
+
+A separate test-only adapter refused to invoke `git push`, leaving its unique
+evaluation ref absent. The real archive code attempted readback and returned
+`archive/readback-unknown-or-conflict`, not success. A separate GitHub API
+request reported HTTP 404 for the exact ref. Both fixtures used the actual
+HTTPS URL and native privacy predicate, with the same operator credential and
+test-only askpass boundary described above; only their evaluation refs were
+substituted.
+
+The successful-ack-loss fixture SHA-256 was
+`8d953522b973eda075dbb9fa1a14479d6fe49bcf192804f3c815c11ec6e6326c`.
+The ack-loss observer/generator hashes were
+`eeb700e9b22d8b13092bd0eae62afac386753488f530f188152202ac0298253e` /
+`c7c8f940311cf61d43506294d40995f6a1fdfd6836cdc776d252fb1c12fe270f`;
+the no-push observer/generator hashes were
+`1d022f16ae108272847e996ee9559aeaf53115e40ec88bbb077e8a2b83f5c9b9` /
+`bbd3d24882e2de2a416343a2647c351f6a1dbe17dff4adabab1af5a63aa57c38`.
+These are source-injected outcomes, not an actual network interruption, timeout,
+concurrent writer or power failure. They do not qualify a production credential
+broker, bot execution, process supervisor, resource governor or retry policy.
