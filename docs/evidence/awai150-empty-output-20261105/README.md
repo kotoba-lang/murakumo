@@ -36,7 +36,7 @@ return a controlled refusal. The host must preserve this interruption as an
 unknown outcome. This real permission failure does not distinguish the new
 guard from the prior implementation, because the provider traps earlier;
 the injected failure test above covers that branch. Generated source SHA-256:
-`e444758bd6e2387ce254f8fab31893afb8ff164b81f4bde05837b7a433f878cf`
-after the metadata validation update.
+`9d56a362fdb92422215e060cfed45c122a4bfee11ddea5f4ca91df97827abe70`
+after resolving the base branch's metadata validation update.
 The task-owned temporary directory was removed. This does not qualify the
 production provider, actual GitHub archive, or governor.

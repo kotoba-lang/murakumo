@@ -14,7 +14,7 @@ for name in ('cp-frame','cp-fs','cp-read-op','cp-cid','cp-range','cp-meta-field'
  if base[a:b]!=extract(checkpoint,name):raise RuntimeError('historical fixture differs: '+name)
 a,b=h.form(base,'cp-size');base=base[:a]+extract(checkpoint,'cp-size')+base[b:]
 a,b=h.form(base,'main');base=base[:a]+base[b:]
-base+='\n'+extract(checkpoint,'cp-empty-readable?')+'\n'+extract(output,'jo-put')+'\n'
+base+='\n'+'\n'.join(extract(checkpoint,n) for n in ('cp-meta-digits?','cp-meta-size','cp-empty-readable?'))+'\n'+extract(output,'jo-put')+'\n'
 base+=r'''(defn main [] :i64
  (let [mode (cp-arg 0) payload (if (= mode "nonempty") [7] (vector-alloc 0))
        expected (cp-cid payload) result (jo-put "/store" payload)]

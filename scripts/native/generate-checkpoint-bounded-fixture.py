@@ -16,7 +16,7 @@ COMPONENT = ROOT / 'kotoba/git_checkpoint.kotoba'
 CASES = ROOT / 'test/native/checkpoint_bounded_write_cases.kotoba'
 NAMES = ('cp-bytes', 'cp-arg', 'cp-frame', 'cp-fs', 'cp-read-op', 'cp-cut',
          'cp-piece', 'cp-written-equal?', 'cp-write', 'cp-int', 'cp-meta-field',
-         'cp-size', 'cp-range', 'cp-empty-readable?')
+         'cp-meta-digits?', 'cp-meta-size', 'cp-size', 'cp-range', 'cp-empty-readable?')
 
 
 def form(source, name):

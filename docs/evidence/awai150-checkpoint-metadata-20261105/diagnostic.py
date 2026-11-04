@@ -10,15 +10,15 @@ def form(name):a,b=h.form(src,name);return src[a:b]
 pre=r'''(ns checkpoint-metadata-fixture (:export [main]))
 (defn- cp-fs [op :string path :string tail :string] :string
  (let [m (typed-cap-call 38 :string :string "0")]
-  (cond (= m "valid") "384 12 1 0" (= m "empty") "384 0 0 0" (= m "bad-mode") "oops 12 1 0"
+  (cond (= m "valid") "384 12 1 0" (= m "empty") "384 0 0 0" (= m "wide-blocks") "384 12 12345678901234567890 0" (= m "bad-mode") "oops 12 1 0"
         (= m "mode-range") "512 12 1 0" (= m "bad-blocks") "384 12 bad 0"
         (= m "extra") "384 12 1 0 extra" (= m "missing") "384 12 0"
-        (= m "bad-size") "384 1x 1 0" (= m "directory") "448 12 1 1" :else "")))
+        (= m "bad-size") "384 1x 1 0" (= m "wide-overflow") "384 12 123456789012345678901 0" (= m "directory") "448 12 1 1" :else "")))
 '''
 main=r'''(defn main [] :i64
- (let [m (typed-cap-call 38 :string :string "0") expected (cond (= m "valid") 12 (= m "empty") 0 :else -1)]
+ (let [m (typed-cap-call 38 :string :string "0") expected (cond (or (= m "valid") (= m "wide-blocks")) 12 (= m "empty") 0 :else -1)]
   (if (= (cp-size "/x") expected) 0 1)))'''
-source=pre+'\n'.join(form(n) for n in ('cp-bytes','cp-int','cp-meta-field','cp-size'))+'\n'+main
+source=pre+'\n'.join(form(n) for n in ('cp-bytes','cp-int','cp-meta-field','cp-meta-digits?','cp-meta-size','cp-size'))+'\n'+main
 compiler=Path('/tmp/codex-amu-1762/seed/bootstrap/aarch64-macos/amu-full-root.macho');pack=Path('/private/tmp/awai154-fs2-darwin-gate/candidate.macho')
 for p,pin in ((compiler,'920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6'),(pack,'f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d')):
  if hashlib.sha256(p.read_bytes()).hexdigest()!=pin:raise RuntimeError('pin mismatch')
@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='awai150-meta-',dir='/private/tmp') as d
   if not m or int(m[2])!=(root/(name+'.raw')).stat().st_size:raise RuntimeError('extract')
   run([pack,name+'-unsigned.macho',name+'.raw','fs2-cli-stdio-general',m[1].decode()]);img=root/(name+'.macho');shutil.copyfile(root/(name+'-unsigned.macho'),img);img.chmod(0o700);subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(img)],check=True,capture_output=True);return img
  img=build('fixture',source)
- for mode in ('valid','empty','bad-mode','mode-range','bad-blocks','extra','missing','bad-size','directory'):
+ for mode in ('valid','empty','wide-blocks','wide-overflow','bad-mode','mode-range','bad-blocks','extra','missing','bad-size','directory'):
   run([img,mode]);print('PASS metadata',mode,flush=True)
  old='(defn- cp-size [p :string] :i64 (let [m (cp-fs "O" p "")] (if (= (cp-meta-field m 3) "0") (cp-int (cp-meta-field m 1)) -1)))'
  start,end=h.form(source,'cp-size');mutant=build('mutant',source[:start]+old+source[end:])
