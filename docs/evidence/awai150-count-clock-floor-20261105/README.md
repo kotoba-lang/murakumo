@@ -43,6 +43,18 @@ SHA-256 was `e091c8b912cf4696550bd3a02794edbc243288334f33b891afc5fb4c30719066`.
 The post-query diagnostic additionally checks a rollback between submission
 and polling and rejects a mutant that ignores the shared floor.
 
+Generation submission now saves its pre-submit observation and generation
+polling begins at the shared floor, saving the successful response observation.
+`generation.py` executes the actual `pr-step-range` with stubbed count, clock,
+and submission: a rollback during preparation preserves busy and state and
+does not submit; the normal control reaches submission. A mutant comparing
+with the original start is detected. Its generated source SHA-256 was
+`e0cc6fa3110eeaaf73ece0366c803d51cb54c0d4be831beb170efbb17e4a8a94`.
+The post-query diagnostic also tests the shared floor on generation polling.
+These are diagnostic fixtures, not a live service or model test. The second
+response read and later publication operations do not yet carry all clock
+observations; the other limitations below still apply.
+
 This does not qualify the actual clock provider or monotonicity, protect
 against clock changes between observations, retain the floor across crashes,
 bound an in-flight query, fence the remote receiver, verify a real lease or
