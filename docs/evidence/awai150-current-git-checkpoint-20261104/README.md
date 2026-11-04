@@ -35,3 +35,17 @@ seed. It is not a production isolation boundary and must not be used with
 untrusted inputs. It does not exercise GitHub, bot inference, a governor,
 concurrent hostile changes, faults, power loss, a production provider, a
 release compiler, or CI; it does not qualify deployment.
+
+## Successor and recovery record
+
+The extended harness also captured an epoch-2 successor whose parent matched
+its epoch-1 checkpoint, wrote a signed recovery record, independently read
+back its stored JSON, and verified it against the expected signer, checkpoints,
+task and epoch. Supplying epoch 3 was refused with `recovery/contract`. The
+same capture, restore, corruption and closure controls above also passed.
+The generated source SHA-256 for this run was
+`8dadca904318d639c1612cc849eada61957b20eb8abf36b858f05909bf2dce65`
+(including its unique temporary path); extended harness SHA-256 was
+`8fbd938516d7c1eacf397c96fec765d122f9a7004c854a8b4b1b2f456a2e2cde`.
+This verifies a local signed recovery record, not process crash recovery,
+node failover, distributed fencing, or GitHub publication.
