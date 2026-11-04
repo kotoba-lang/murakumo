@@ -96,3 +96,24 @@ opportunistic, preserving the holder in the total. Selected-form diagnostics
 passed unknown values by PID and by name, a known resident and an absent
 registry. These are synthetic tests, not the complete host suite, a
 ClojureScript runtime, a real probe or governor qualification.
+
+## Selected ClojureScript source diagnostic
+
+On 2026-11-04, the existing local nbb checkout and Node v26.9.0 executed the
+selected actual `parse-long*`, `parse-probe`, `committed`, and `admit` forms
+as ClojureScript. The diagnostic supplied synthetic oracle and capacity
+functions. It admitted one valid empty observation; rejected a missing claim
+vector, a non-map claim, a negative claim, an overflowing aggregate and a
+parser result containing malformed decimal text, an out-of-range integer and
+a negative claim; and counted an unknown registry class as opportunistic.
+The Node process had an inherited three-second CPU limit; no hard memory cap
+was applied. The actual source SHA-256 was
+`bff4671f89ec2f7bb18a7774ac4c470664b222a00e8e8f0d8e6751b403db54f7`;
+the extracted temporary diagnostic source was
+`c774a5cc6ef1705b53ccc9470175b99920dbb0d5dd4af45ad38e3b81bd5ac053`.
+The local nbb `nbb_core.js` SHA-256 was
+`3a8db4430000d8f0132e0c85ca73168efb01995039047a2e13ef10a6d123c381`.
+
+This is an extracted source diagnostic with stubs, not the complete host
+suite, source-locked build, real oracle or probe, or a qualified governor. It
+adds no Node or nbb dependency to the deployment or CI path.
