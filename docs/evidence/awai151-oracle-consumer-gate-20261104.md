@@ -128,3 +128,19 @@ The test extracts source using checked unique anchors and refuses a source
 change during execution. The complete host application and real oracle and
 probe are still not covered; supplying Node and nbb is an explicit diagnostic
 choice, not an operational requirement.
+
+## Exact aperture sum at the host boundary
+
+The legacy consumer now treats VRAM/GTT as unmeasured unless both are
+nonnegative exact integers and their sum stays within 9007199254740991, the
+shared exact-integer range. This prevents a ClojureScript host from passing a
+rounded sum to the oracle. The selected actual `aperture-bytes` form passed
+local ClojureScript diagnostics with a synthetic oracle for the exact boundary,
+overflow, fractional, string and missing values. Removing the sum guard made
+the same diagnostic fail. Source SHA-256 was
+`87c2a76ab279c3babf7f6510d7b6aabf7d792fd5e3c92a8686d75c360f942c91`;
+selected program SHA-256 was
+`e21ac0d0f3cb7ce7e6cc7163f5937ea917b65b856ff16f75ce926ca1eefea7eb`.
+This exercises selected source with a stub, not the real probe, real oracle,
+full host suite, admission under actual load, or a qualified governor. It does
+not remedy a probe that silently misses holders.

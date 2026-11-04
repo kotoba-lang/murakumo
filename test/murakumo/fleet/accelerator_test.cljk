@@ -31,6 +31,19 @@
     (is (= (+ (gb 48.0) (gb 23.3)) (accel/aperture-bytes gad)))
     (is (< 71.0 (/ (accel/aperture-bytes gad) (double gib)) 71.4))))
 
+(deftest aperture-rejects-inexact-or-malformed-measurements
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export args]
+                              (if (= export "aperture-bytes") (apply + args) -1))]
+    (is (= 9007199254740991 (accel/aperture-bytes {:vram-total 9007199254740990 :gtt-total 1})))
+    (doseq [probe [{:vram-total 9007199254740991 :gtt-total 1}
+                   {:vram-total 9007199254740992 :gtt-total 0}
+                   {:vram-total -1 :gtt-total 0}
+                   {:vram-total 1.5 :gtt-total 0}
+                   {:vram-total "1" :gtt-total 0}
+                   {:vram-total 0}]]
+      (is (= accel/unmeasured (accel/aperture-bytes probe))))))
+
 (deftest unmeasured-refuses-and-never-admits
   (testing "a probe that read nothing yields an unmeasured aperture"
     (doseq [broken [{:vram-total accel/unmeasured :gtt-total (gb 23.3) :claims []}

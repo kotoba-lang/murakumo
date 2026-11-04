@@ -103,7 +103,14 @@
 ;; ── budget (pure, via the oracle) ──────────────────────────────────────
 
 (defn aperture-bytes [{:keys [vram-total gtt-total]}]
-  (o "aperture-bytes" [(or vram-total unmeasured) (or gtt-total unmeasured)]))
+  ;; Both values and their sum must remain exact in the ClojureScript host.
+  ;; A rounded aperture can overstate capacity, so treat it as unmeasured.
+  (if (and (integer? vram-total) (integer? gtt-total)
+           (<= 0 vram-total 9007199254740991)
+           (<= 0 gtt-total 9007199254740991)
+           (<= vram-total (- 9007199254740991 gtt-total)))
+    (o "aperture-bytes" [vram-total gtt-total])
+    unmeasured))
 
 (defn headroom-default-milli [] (o "headroom-default-milli" []))
 
