@@ -44,3 +44,25 @@ compiler and diagnostic packager SHA-256 were respectively
 The signed good and rollback-mutant fixture hashes were
 `674c07eb5a30d50a07cb02b5b6e24b8ce6ca7e05e87ea294cade726df044211a` and
 `708f9e47d7a598c60215e3ab84739d83ca753578a9393f17d72be0b14996420d`.
+
+## Count submission seam with synthetic dependencies
+
+The local signed Darwin diagnostic was extended to compile the actual
+`pr-count` and `pr-window-seconds` source together. Test-only stubs supply
+time, systemd state, filesystem responses and the submit operation. With a
+10-second initial allowance and 3.5 seconds remaining, the positive case
+returned the synthetic count only when the submit stub saw a three-second
+timeout. An already-expired case returned unknown. A source mutation that
+passed the original ten seconds instead of the remaining window failed the
+fixture. The test does not independently observe whether the submit stub was
+called in the expired case. Each native process had a three-second CPU limit;
+no hard memory cap was applied.
+
+The updated script SHA-256 was
+`b67831c2d5e0db85f9306a982c51c14a84690516101e6f0e798fc8077c5f3ee7`.
+The signed count-seam and bypass-mutant images hashed respectively to
+`c704c95707b1129b7f70aff54ab818394ed63f54096ce2d0994740a5981fab1f` and
+`3c3c77bd83f9b72e62111ec99fe39dd0dea7092cf13e6fb7d40687582ef64282`.
+This is a synthetic seam test, not an actual clock, systemd/curl, lease,
+generation, source-locked application or governor test. The lease refresh,
+atomic fence, wall-clock and workload-lifetime limitations above remain open.

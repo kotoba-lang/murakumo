@@ -40,6 +40,33 @@ def main():
           (= (pr-window-seconds 0 110000 100000 10) -1)
           (= (pr-window-seconds 100000 110000 100000 0) -1)) 0 1))
 '''
+    count_start = source.index('(defn- pr-count [')
+    count_end = source.index('(defn- pr-flint-output-budget ', count_start)
+    count_source = source[count_start:count_end]
+    count_guard = '(pr-window-seconds started deadline (pr-wall-ms) seconds)'
+    if count_source.count(count_guard) != 1:
+        raise ValueError('count deadline mutation anchor changed')
+    count_stubs = '''
+(defn- pr-local-flint? [r :vector-i64] :bool true)
+(defn- pr-count-id [r :vector-i64 b :vector-i64] :string "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+(defn- cp-fs [op :string path :string tail :string] :string "0")
+(defn- cp-str [b :vector-i64 i :i64 key :string] :string "value")
+(defn- pr-read-bounded [path :string limit :i64] :vector-i64 (vector-alloc 0))
+(defn- cp-cid [b :vector-i64] :string "cid")
+(defn- cp-text [b :vector-i64] :string "")
+(defn- pr-unit-state [unit :string] :string "absent")
+(defn- pr-run-decision [state :string present :bool matches :bool marked :bool marker-matches :bool response :bool] :string "profile/new-unit")
+(defn- pr-prepare-submit [request :string marker :string body :vector-i64] :bool true)
+(defn- pr-wall-ms [] :i64 106500)
+(defn- pr-submit-kind [unit :string request :string response :string seconds :i64 runtime :vector-i64 count :bool] :bool
+  (and count (= seconds 3)))
+(defn- pr-count-wait [unit :string response :string] :i64 12)
+'''
+    count_cases = '''
+(defn main [] :i64
+ (if (and (= (pr-count [1] "/test" 10 [1] 100000 110000) 12)
+          (= (pr-count [1] "/test" 10 [1] 100000 105000) -1)) 0 1))
+'''
     def limit():
         resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
     with tempfile.TemporaryDirectory(prefix='awai-flint-window-', dir='/private/tmp') as tmp:
@@ -57,8 +84,14 @@ def main():
                 raise RuntimeError((argv[0], result.returncode, result.stdout[-500:], result.stderr[-500:]))
             return result.stdout
         try:
-            for name, part, expected in [('good', window, 0), ('rollback-mutant', window.replace(anchor, 'false'), 1)]:
-                text = '(ns flint-window-test (:export [main]))\n' + part + cases
+            fixtures = [
+                ('good', window + cases, 0),
+                ('rollback-mutant', window.replace(anchor, 'false') + cases, 1),
+                ('count-submit', window + count_stubs + count_source + count_cases, 0),
+                ('count-bypass-mutant', window + count_stubs + count_source.replace(count_guard, 'seconds') + count_cases, 1),
+            ]
+            for name, part, expected in fixtures:
+                text = '(ns flint-window-test (:export [main]))\n' + part
                 (root / (name + '.kotoba')).write_text(text)
                 run([compiler, 'compile', name + '.kotoba', '--target', 'aarch64-macos', '--output', name + '.kseed'], 0)
                 output = run([compiler, 'extract-native', name + '.kseed', '--symbol', 'main', '--output', name + '.raw'], 0)
