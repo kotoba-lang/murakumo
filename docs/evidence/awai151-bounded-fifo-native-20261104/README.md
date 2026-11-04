@@ -80,3 +80,23 @@ The extended harness SHA-256 was
 `47afb672cda7dbb7b602e424e0820c0e767e02d7a3e8457dbd5c56add8390f49`.
 This substitutes a false result in source; it does not inject a real kernel
 fsync failure, establish power-loss durability, or qualify a host or governor.
+
+## Target Mac basic operations
+
+The current component was compiled and packaged on jacob using the diagnostic
+compiler and FS2 packager above; the resulting signed FIFO image SHA-256 was
+`ca7c780cf88ab7c84792300fc89d85f483ec7217a345d184e4612f689845e188`.
+It was sent with a task-owned observer over host-key-pinned Tailscale SSH to
+naphtali, benjamin and judah, all Darwin ARM64 build 25G332. Each host verified
+the image hash and strict signature, used a fresh private FD3 scope, and passed
+empty/front, two enqueues, wrong-front refusal, dequeue, pending refusal and
+synthetic old/new journal reconciliation. Task-owned files and directories
+were removed. Host observer SHA-256:
+`edb227503af1479525d63795e27687e501dc9e82b47c1abdc3f59aa62591f3b6`;
+local builder/observer SHA-256:
+`2a4c592333330b3ea663947c63e27c2e9a62bed1cc6b5529cd53a70fcd6dd80f`.
+
+The executable is a local diagnostic build, not a rebuilt or qualified
+release runtime. These three-host samples did not exercise forced process
+death, full fault injection, hostile mutation, capacity enforcement, a model,
+resource reservations or process-tree control. No persistent service started.
