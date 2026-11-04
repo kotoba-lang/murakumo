@@ -387,20 +387,19 @@ The receipt is [evidence/lease-preemption-20261023.json](evidence/lease-preempti
 
 A voter with a topology follows changes to its topology file while it runs,
 as `replicated_topology`'s `accept!` does for a resident:
-- **Polling.** The voter checks after every handled connection and after each
-  empty wait slice (up to 500 ms). A request already in progress may still use
-  the previous topology; this is not an atomic revocation fence.
+- **Polling.** The voter checks before accepting each connection and after
+  each empty wait slice (up to 500 ms). A request already in progress may
+  still use the previous topology; this is not an atomic revocation fence.
   Topology reads require FS2 no-follow metadata and an exact range response
   within the existing 262144-byte verifier limit. Missing, non-regular,
-  oversized or failed reads produce no usable new document. As before, an
-  invalid or unavailable replacement does not revoke the previously held
-  topology; the host must define and enforce its fail-closed policy.
+  oversized or failed reads close requests without processing them.
 - **Adopting.** A changed file is adopted only when all three hold:
   - it verifies against the trust (`topology-verdict`);
   - its revision is higher than the one held;
   - every node of the held topology keeps its `owner-id`. A node can be
     retired, but its name cannot be given to another owner.
-- **Otherwise** the voter keeps the topology it holds.
+- **Otherwise** the voter retains the last verified topology in memory but
+  closes requests until a valid current or newer document is available.
 
 The log says `voter topology <revision>` or `voter kept <reason>`. The
 comparison and the verification run in `arena-scope`, so only an adopted
@@ -413,8 +412,9 @@ refused. Include unchanged and invalid-revision controls, and check the idle
 exit behavior. Source check alone does not establish that behavior. The
 per-connection file read and its effect on throughput have not been measured;
 the host must provision the topology file and a provider that enforces bounded
-FS2 range responses; separate metadata/read calls are not a stable snapshot. Requests already being
-handled and independent voters are not atomically fenced by this check.
+FS2 range responses; separate metadata/read calls are not a stable snapshot.
+Requests already being handled and independent voters are not atomically
+fenced by this check.
 
 The voters start on revision 7 (b70 enabled, k16 not) and keep running
 while `live.json` is replaced:
@@ -428,8 +428,10 @@ There are two controls:
   change;
 - **`unchecked`** voters adopt any changed file.
 
-With the same `$G`, `$K`, `node.kotoba`, `node.elf` and `topology.json`
-(from Membership):
+The following historical gate was run with the then-current source. Its
+`ln-same-file?` mutation no longer targets the current voter and must not be
+used as validation of this candidate. With the historical `$G`, `$K`,
+`node.kotoba`, `node.elf` and `topology.json` (from Membership):
 
 ```sh
 python3 -I docs/evidence/lease-rotation-topology-20261023.py "$G"

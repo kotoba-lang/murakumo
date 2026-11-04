@@ -2,7 +2,7 @@
 ;; "abc", limit contains 262144 bytes, over contains 262145 bytes, empty is
 ;; zero length, and missing does not exist. The host must separately inject
 ;; malformed frames, short replies, metadata errors and size changes.
-(ns murakumo.lease-topology-bounded-cases (:export [test-lease-topology-bounded]))
+(ns murakumo.lease-topology-bounded-cases (:export [test-lease-topology-bounded test-lease-topology-observation]))
 
 (defn test-lease-topology-bounded [root :string] :bool
   (and (= (vector-count (ln-load-doc (str root "/small"))) 3)
@@ -10,3 +10,12 @@
        (= (vector-count (ln-load-doc (str root "/over"))) 0)
        (= (vector-count (ln-load-doc (str root "/empty"))) 0)
        (= (vector-count (ln-load-doc (str root "/missing"))) 0)))
+
+;; With the same fixture, a missing or failed read must remain unknown rather
+;; than matching the last accepted bytes. Rotation and socket behavior still
+;; require an integration fixture with signed revisions and traffic.
+(defn test-lease-topology-observation [root :string] :bool
+  (and (= (ln-doc-state (str root "/small") [97 98 99]) 0)
+       (= (ln-doc-state (str root "/small") [97 98 100]) 1)
+       (= (ln-doc-state (str root "/missing") [97 98 99]) 2)
+       (= (ln-doc-state (str root "/over") [97 98 99]) 2)))

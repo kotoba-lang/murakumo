@@ -256,10 +256,11 @@
           :else (ln-reply false st))))
 
 ;; one connection, or none within ms: 0 when one was answered, else 1
-(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string] :i64
+(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string permitted :bool] :i64
   (arena-scope
     (let [c (ln-accept (str l " " ms))]
       (if (< (ln-int c) 1) 1
+        (if (not permitted) (let [z (ln-write c)] 0)
         (let [raw (ln-line (ln-recv c true))
               line (if (= token "") raw (ln-rest raw))
               ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))]
@@ -269,7 +270,7 @@
                   out (if (= token "") rep (str (ln-mac token (str "rep " line "\n" rep)) " " rep))
                   w (ln-write (str c " " (hex (ln-bytes (string-concat out "\n")))))
                   z (ln-write c)]
-              0)))))))
+              0))))))))
 
 ;; Topology validation caps documents at 262144 bytes. Check a no-follow
 ;; regular-file size before requesting exactly that bounded range, and check
@@ -288,12 +289,17 @@
                  (= (bytes-at r 3) 50) (= (bytes-at r 4) 0) (= (ln-doc-size path) size))
           (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))))
 
-;; does the topology file still hold the bytes last seen (or is it gone)?
-(defn- ln-same-file? [path :string seen :vector-i64] :bool
-  (if (not (ln-exists? path)) true
-    (let [d (ln-load-doc path)]
-      (and (= (vector-count d) (vector-count seen))
-           (loop [i 0] (cond (= i (vector-count d)) true (= (vector-at d i) (vector-at seen i)) (recur (+ i 1)) :else false))))))
+(defn- ln-doc-equal? [a :vector-i64 b :vector-i64] :bool
+  (and (= (vector-count a) (vector-count b))
+       (loop [i 0]
+         (if (= i (vector-count a)) true
+           (and (= (vector-at a i) (vector-at b i)) (recur (+ i 1)))))))
+
+;; 0 = exact match, 1 = changed, 2 = unavailable or unreadable. Empty
+;; documents cannot be valid topology; never treat a failed read as a match.
+(defn- ln-doc-state [path :string seen :vector-i64] :i64
+  (let [d (ln-load-doc path)]
+    (cond (= (vector-count d) 0) 2 (ln-doc-equal? d seen) 0 :else 1)))
 
 ;; a changed topology file, as replicated_topology accept!: adopt it (0) when it
 ;; verifies against the trust, advances the revision held and keeps every
@@ -306,25 +312,30 @@
     (if (= why "") (let [x (ln-say (str "voter topology " (topology-revision doc)))] 0)
       (let [x (ln-say (string-concat "voter kept " why))] 1))))
 
-;; Check after every handled connection as well as each empty wait slice, so
-;; a busy voter cannot postpone a topology change indefinitely. A request in
-;; progress may still use the previous topology; this is not a revocation fence.
-;; Only an adopted or newly seen document stays allocated; comparison and
-;; verification run in arena-scope.
+;; Check before accepting each connection and after empty wait slices. An
+;; unavailable or rejected topology closes requests without processing them.
+;; A change during an in-flight request is not an atomic revocation fence.
+;; The path-empty mode is the existing topology-free diagnostic mode.
 (defn- ln-voter [addr :string file :string idle :i64 topo :vector-i64 now :i64 live-clock :bool
                  path :string trust :string threshold :i64 token :string] :i64
   (let [l (ln-listen (ln-addr addr))]
-    (loop [n 0 left idle cur topo seen topo]
-      (let [r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token)
-            next-n (if (= r 0) (+ n 1) n)
-            next-left (if (= r 0) idle (- left 500))]
-        (if (and (not (= r 0)) (<= left 500)) n
-          (if (or (= path "") (= (arena-scope (if (ln-same-file? path seen) 0 1)) 0))
-            (recur next-n next-left cur seen)
-            (let [d (ln-load-doc path)]
-              (if (= (arena-scope (ln-rotate d cur trust threshold)) 0)
-                (recur next-n next-left d d)
-                (recur next-n next-left cur d)))))))))
+    (loop [n 0 left idle cur topo seen topo seen-ok true]
+      (let [state (if (= path "") 0 (arena-scope (ln-doc-state path seen)))]
+        (if (= state 1)
+          (let [d (ln-load-doc path)]
+            (cond (= (vector-count d) 0)
+                    (let [r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token false)]
+                      (if (and (not (= r 0)) (<= left 500)) n
+                        (recur (if (= r 0) (+ n 1) n) (if (= r 0) idle (- left 500)) cur seen false)))
+                  (ln-doc-equal? d cur) (recur n left cur d true)
+                  (= (arena-scope (ln-rotate d cur trust threshold)) 0) (recur n left d d true)
+                  :else (recur n left cur d false)))
+          (let [permitted (or (= path "") (and (= state 0) seen-ok))
+                r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token permitted)
+                next-n (if (= r 0) (+ n 1) n)
+                next-left (if (= r 0) idle (- left 500))]
+            (if (and (not (= r 0)) (<= left 500)) n
+              (recur next-n next-left cur seen seen-ok))))))))
 
 ;; the voter's topology: none, or the verified document; "" and the reason
 ;; when it does not verify. A token file that is named but missing or short
