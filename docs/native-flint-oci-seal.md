@@ -34,7 +34,11 @@ explicit root-with-receipt mode. Caller-supplied frames and IDs are not
 authority. Before using this as a boundary, a qualified host must bind both
 helper results to held directory FDs, verify the child FD is the root's actual
 no-follow `.kapitsa` entry, and exclude replacement, hard-link aliases and
-concurrent mutation. This parser is not yet connected to staging or recovery.
+concurrent mutation. `model-flint-verified-inventory?` combines both parsers
+with pinned OCI descriptor validation, streamed stage weight digests, byte
+comparison of every tar entry, and the manifest file-list check. It accepts
+only the no-receipt form. This helper is not yet called by staging, publication
+or recovery and cannot establish those host bindings itself.
 
 The separate `model-flint-assets-pack-main` candidate accepts a pinned
 `awai.flint-source-observation/1` containing exactly the seven metadata files
