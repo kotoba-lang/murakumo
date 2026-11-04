@@ -30,7 +30,13 @@
 ;; outcome is a refusal. The host must still restrict the child environment and
 ;; network/credential authority; Git configuration is not the whole boundary.
 (defn- ga-config-safe? [repo-dir :string] :bool
-  (= (cp-git repo-dir (str "config" (cp-a) "--name-only" (cp-a) "--get-regexp" (cp-a)
+  ;; Inspect configuration without cp-git's own -c overrides: those include
+  ;; core.hooksPath and similar safe values and would reject every repository.
+  ;; Disable config includes while inspecting; include directives themselves
+  ;; remain visible and are refused by the expression. The trusted host must
+  ;; still restrict the child environment, Git binary and configuration scope.
+  (= (cp-spawn (str "/usr/bin/git" (cp-a) "--no-pager" (cp-a) "-C" (cp-a) repo-dir
+    (cp-a) "config" (cp-a) "--no-includes" (cp-a) "--name-only" (cp-a) "--get-regexp" (cp-a)
     "^(url[.].*[.](insteadof|pushinsteadof)|http([.].*)?[.](proxy|sslverify|sslcainfo|followredirects)|remote[.].*[.]proxy|credential([.].*)?[.]helper|(include|includeif)([.].*)?[.]path|core[.](hookspath|fsmonitor|attributesfile|sshcommand)|filter[.].*|commit[.]gpgsign|gpg[.].*)$")) "1\n"))
 
 ;; Transport explicitly enforces TLS verification and disables redirects. The
