@@ -27,10 +27,20 @@ validate every Kapitsa manifest field or tensor, independently inventory the
 directory, atomically publish the stage, recover an interruption, or grant
 permission to load it.
 
+The separate `model-flint-assets-pack-main` candidate accepts a pinned
+`awai.flint-source-observation/1` containing exactly the seven metadata files
+and two weight descriptors. It validates the file list against the Kapitsa
+manifest and hashes metadata before and during deterministic USTAR creation.
+It expects the source root and `.kapitsa` directory to be private mode 0700;
+the observed naphtali source currently has mode 0755 for both. It checks the
+weight descriptors but does not hash or copy the weights. The host must pin the
+observation and prevent aliases and concurrent changes; partial tar outputs
+require reconciliation.
+
 The observed converted Flint 0.2.26 directory contains `model.safetensors`,
-`experts.safetensors`, metadata files and `.kapitsa/manifest.json`. A tar
-producer, full manifest verifier, inventory and publication/recovery procedure are
-still required. Their exact content pins must be independently established; file
+`experts.safetensors`, metadata files and `.kapitsa/manifest.json`. A full
+manifest verifier, inventory and publication/recovery procedure are still
+required. Their exact content pins must be independently established; file
 sizes in Kapitsa's manifest are not content hashes. Real hashing, copies and
 deployment require the qualified native resource governor. This candidate's
 source checks do not establish native execution or OCI interoperability.
