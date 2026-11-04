@@ -343,6 +343,14 @@
          (= (cp-fs "D" path "") "1") (= (cp-cid (pr-read-bounded path 256)) (cp-cid expected))
          (= (cp-fs "M" path "") "1") (= (cp-fs "L" path last) "1") (= (cp-fs "M" cache "") "1"))))
 
+;; A completed count can be released without generation only when the durable
+;; turn marker is explicitly absent. Unknown count, marker or sync outcomes
+;; remain occupied. The host must exclude pre-migration in-flight work.
+(defn- pr-flint-count-only-release [runtime :vector-i64 cache :string turn :string count-id :string counted :i64] :bool
+  (and (pr-local-flint? runtime) (> counted 0)
+       (= (cp-fs "D" (str cache "/turn-" turn ".intent") "") "0")
+       (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id)))
+
 (defn- pr-flint-finish [runtime :vector-i64 cache :string turn :string count-id :string result :string] :string
   (if (or (not (pr-local-flint? runtime)) (not (= (string-index-of result "profile/step-completed ") 0))) result
     (if (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id)
@@ -484,7 +492,9 @@
                     counted (if (pr-local-flint? runtime) (if occupied (pr-count runtime cache seconds count-body) -1) 0)
                     budget (if (pr-local-flint? runtime) (pr-flint-output-budget counted tokens) tokens)]
               (if (not occupied) "profile/server-busy-or-unknown"
-              (if (< budget 1) "profile/context-budget-unknown-or-insufficient"
+              (if (< budget 1)
+                (if (pr-flint-count-only-release runtime cache turn count-id counted)
+                  "profile/context-budget-insufficient" "profile/context-budget-unknown-or-insufficient")
                 (let [body (str (if (pr-local-flint? runtime) "{\"chat_template_kwargs\":{\"enable_thinking\":true},\"max_tokens\":" "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":") budget ",\"messages\":["
                       "{\"content\":" (pr-json-quote system-text) ",\"role\":\"system\"}," history "],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
                       (if (pr-local-flint? runtime) ",\"stream\":false,\"temperature\":1,\"top_k\":20,\"top_p\":0.95}"

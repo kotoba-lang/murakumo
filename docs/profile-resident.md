@@ -592,7 +592,7 @@ retained after completion. This is host-local crash evidence, not a lease,
 distributed fence or proof of process identity. The host must preserve and
 exclusively serialize the same cache across restarts; migration, lost cache,
 rollback and marker retention need explicit reconciliation. The marker does
-does not authorize replay after a server restart: the host must rotate the
+not authorize replay after a server restart: the host must rotate the
 server identifier and reconcile the prior turn marker. A changed count that
 would change an already reserved generation request is refused.
 
@@ -601,8 +601,10 @@ binding the turn and exact count-request identities. The separate turn marker
 binds the generation request. Another turn using the same instance and retained
 cache is refused until the first turn's verified response and state update have
 been synchronized, then the busy marker is moved aside and the cache synced.
-A failed count, insufficient budget or uncertain release retains occupancy and
-requires host reconciliation. This cooperative marker assumes every caller
+A completed count with insufficient budget releases occupancy only when the
+turn's generation marker is explicitly absent and the release is synchronized.
+Unknown count, present/unknown generation marker or uncertain release retains
+occupancy for host reconciliation. This cooperative marker assumes every caller
 uses the same exclusively serialized cache; it neither limits memory nor
 controls other clients. Before issuing a new server identifier, the host must
 independently establish that the previous process and its work have stopped.
