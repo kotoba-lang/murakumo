@@ -117,3 +117,14 @@ The local nbb `nbb_core.js` SHA-256 was
 This is an extracted source diagnostic with stubs, not the complete host
 suite, source-locked build, real oracle or probe, or a qualified governor. It
 adds no Node or nbb dependency to the deployment or CI path.
+
+The selected-form ClojureScript diagnostic is now reproducible with
+`scripts/native/check-accelerator-consumer-cljs.py --node <node> --nbb-cli <cli>`.
+On the same Mac, script SHA-256
+`fee8a6be4902067bed2e503a33c5473bb16e2f44bcf413f61a4ca090d1e85543`
+passed against the source above and detected a source-injected removal of the
+invalid-claims guard. Each Node child inherited a three-second CPU limit.
+The test extracts source using checked unique anchors and refuses a source
+change during execution. The complete host application and real oracle and
+probe are still not covered; supplying Node and nbb is an explicit diagnostic
+choice, not an operational requirement.
