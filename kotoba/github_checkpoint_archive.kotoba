@@ -50,15 +50,18 @@
 ;; quiescent and the private task directory exclusively owned throughout.
 (defn- ga-copy [store :string out :string cid :string] :bool
   (if (not (cp-block? store cid)) false
-    (let [path (str out "/" cid) data (cp-load store cid) status (cp-fs "D" path "")]
-      (cond (= status "1") (cp-block? out cid)
-            (= status "0") (and (cp-write path data) (cp-block? out cid))
-            :else false))))
+    (let [path (str out "/" cid) data (cp-capture-read (str store "/" cid)) status (cp-fs "D" path "")]
+      (and (cp-reloaded-block-valid? store cid data)
+           (cond (= status "1") (cp-block? out cid)
+                 (= status "0") (and (cp-write path data) (cp-block? out cid))
+                 :else false)))))
 
 (defn- ga-copy-closure [store :string out :string cid :string b :vector-i64] :bool
-  (let [p (cp-payload b) bundle (cp-str b p "bundle") index (cp-load store bundle)
-        chunks (json-member index 0 "chunks") us (json-member b p "untracked")]
-    (and (ga-copy store out cid) (ga-copy store out bundle)
+  (let [p (cp-payload b) bundle (cp-str b p "bundle")
+        index (if (cp-raw? bundle) (cp-capture-read (str store "/" bundle)) (vector-alloc 0))
+        chunks (if (json-canonical? index) (json-member index 0 "chunks") -1) us (json-member b p "untracked")]
+    (and (cp-reloaded-block-valid? store cid b) (cp-reloaded-block-valid? store bundle index)
+         (cp-bundle-index? index) (ga-copy store out cid) (ga-copy store out bundle)
          (ga-copy store out (cp-str b p "policy")) (ga-copy store out (cp-str b p "environment"))
          (ga-copy store out (cp-str b p "summary"))
          (ga-copy store out (digest-cid (cp-str b p "profile") 85))
@@ -70,8 +73,9 @@
 (defn- ga-verified? [store :string cid :string author :string profile :string policy :string environment :string
                      epoch :i64 parent :string task :string] :bool
   (and (cp-block? store cid)
-       (let [b (cp-load store cid)]
-         (and (= (checkpoint-problem b author profile policy environment epoch parent task) "checkpoint/ok")
+       (let [b (cp-capture-read (str store "/" cid))]
+         (and (cp-reloaded-block-valid? store cid b)
+              (= (checkpoint-problem b author profile policy environment epoch parent task) "checkpoint/ok")
               (cp-closure? store b)))))
 
 ;; A fixed private repository, non-force ref and independent fetch are
@@ -89,7 +93,7 @@
         (not (= (cp-fs "H" work "700") "1")) "archive/work-permissions"
         :else
         (let [repo-dir (str work "/repo") blocks (str repo-dir "/blocks") readback (str work "/readback")
-              b (cp-load store cid) remote (str "https://github.com/" repo ".git")
+              b (cp-capture-read (str store "/" cid)) remote (str "https://github.com/" repo ".git")
               ref (str "refs/heads/itonami/archive/" cid)
               manifest (cp-bytes (str "{\"author\":\"" author "\",\"environment\":\"" environment
                 "\",\"epoch\":" epoch ",\"kind\":\"itonami.github-checkpoint-archive/1\",\"parent\":\"" parent
@@ -167,9 +171,11 @@
   (let [fetched (ga-restore-fetch work dest cid author profile policy environment epoch parent task repo gh)
         tree (cp-meta-field fetched 2) blocks (str work "/readback/blocks")]
     (if (not (and (cp-hex? tree 40) (= fetched (str "archive-restore/fetched " cid " " tree)))) fetched
-      (if (= (cp-materialize blocks (cp-load blocks cid) dest) "checkpoint/restored")
-        (str "archive-restore/restored " cid " " tree)
-        "archive-restore/materialize-unknown"))))
+      (let [b (cp-capture-read (str blocks "/" cid))]
+        (if (and (cp-reloaded-block-valid? blocks cid b)
+                 (= (cp-materialize blocks b dest) "checkpoint/restored"))
+          (str "archive-restore/restored " cid " " tree)
+          "archive-restore/materialize-unknown")))))
 
 (defn github-checkpoint-restore-main [] :i64
   (let [result (ga-restore (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
