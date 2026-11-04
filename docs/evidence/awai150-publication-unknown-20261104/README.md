@@ -185,3 +185,40 @@ Task-owned temporary directories were retained for inspection. This is not a
 qualified supervisor or a successful systemd integration; changing descriptor
 isolation or replacing this refusal requires native host and security-contract
 validation. No model, bot, network inference or state publication ran.
+
+## Source-derived runtime with real Xavier systemd
+
+GitHub Actions run [41833823850](https://github.com/kotoba-lang/amu/actions/runs/41833823850),
+PR head `a0dac512`, completed its ARM64 bootstrap job successfully. The receipt
+pins the changed `seed/77-aarch64-static-rt.kotoba` to SHA-256
+`595adeb9fbd706a48b7c1155394f86c49a8e844949e8edb291c0a8b3b1681862`;
+its F2 and F3 compiler images both hash to
+`46fce6f620a73d91c7ec482687856a3354646f416e05085a6fa61022d37a5e0b`.
+The checked-in root did not reproduce this image; this is not a root repin or
+public release. The F3 compiler produced the selected synthetic count fixture
+SHA-256 `e914d81eea125ac8a7ead24ccf8e4dc2625523d150c046f40374630615ed84b1`
+from source SHA-256 `0af96af961dd0987468e787a5c1ed6177cbc160c1561fdd2a1a2890f94d2d032`.
+The source used actual count reconciliation, busy marker, FS2 and `pr-unit-state`
+functions with historical assembled dependencies; it is not a source-locked
+whole-application build.
+
+On Xavier's Linux `5.10.120-tegra`, with process-spawn grant restricted to
+`/usr/bin/systemctl` and scoped FS2 test data, the actual generated runtime
+successfully handled a unique test-owned transient oneshot unit. When the unit
+was `exited`, the synthetic count reconciled (exit 0, busy absent, last present).
+With the same test unit observed running, reconciliation refused (test exit 0,
+busy present, last absent). A separate run with the unit absent also refused
+with busy retained. This is evidence that this generated runtime executed the
+systemctl path on this host, not authentication of a production server or
+model, process-tree termination, kernel memory limits, crash recovery or a
+qualified governor. No model or inference request ran.
+
+The first attempt to start the running unit waited for a oneshot and timed out;
+although the start response failed, the unit had started. It was stopped and
+independently checked. A rerun used `--no-block`; stopping its running unit left
+it in `failed`, so the task-owned unit was stopped/reset and an independent
+query confirmed `LoadState=not-found`, `ActiveState=inactive`. The separate
+absent-unit run confirmed the same final state. The compiler and fixture used
+3/4-second soft/hard CPU limits, an 8 GiB virtual address cap for sparse runtime
+mappings and 50 ms sampling with a 200 MiB RSS termination threshold (sampling
+is not a hard limit). Task-owned temporary diagnostic directories were retained.
