@@ -33,6 +33,7 @@
          (= (vector-count (flint-compact "flint" unfinished)) 0)
          (json-valid? compact) (= (pr-answer compact) "draft")
          (= (flint-response-problem "flint" compact) "flint/ok")
+         (= (vector-count (flint-compact "flint" compact)) 0)
          (= (cp-str compact 0 "model") "flint")
          (= (cp-str compact 0 "rawResponseDigest") (str "sha256:" (sha256-hex good)))
          (< (string-index-of (cp-text compact) "private") 0))))

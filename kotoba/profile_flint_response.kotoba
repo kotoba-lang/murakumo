@@ -27,9 +27,12 @@
 
 ;; Keep the completed visible answer and bind the compact record to the full
 ;; response; the digest does not replicate or attest that full response.
-;; A response too large for the existing checkpoint block is refused.
+;; A response too large for the existing checkpoint block is refused. Do not
+;; compact an existing compact record again: doing so would replace the
+;; original raw digest with a digest of the compact record itself.
 (defn flint-compact [expected :string raw :vector-i64] :vector-i64
-  (if (not (= (flint-response-problem expected raw) "flint/ok")) (vector-alloc 0)
+  (if (or (not (= (flint-response-problem expected raw) "flint/ok"))
+          (>= (json-member raw 0 "rawResponseDigest") 0)) (vector-alloc 0)
     (let [compact (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":"
                       (pr-json-quote (pr-answer raw)) ",\"role\":\"assistant\"}}],\"model\":" (pr-json-quote expected)
                       ",\"rawResponseDigest\":\"sha256:" (sha256-hex raw) "\"}"))]
