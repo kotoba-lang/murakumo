@@ -61,7 +61,7 @@ def main():
 (defn- pr-submit-kind [unit :string request :string response :string seconds :i64 runtime :vector-i64 count :bool] :bool
   (let [a (vector-assoc! runtime 0 (+ (vector-at runtime 0) 1))
         b (vector-assoc! runtime 1 seconds)] count))
-(defn- pr-count-wait [unit :string response :string] :i64 12)
+(defn- pr-count-wait [unit :string response :string started :i64 deadline :i64 seconds :i64] :i64 12)
 '''
     count_cases = '''
 (defn main [] :i64
@@ -82,6 +82,29 @@ def main():
  (let [runtime (vector-alloc 2)
        result (pr-count runtime "/test" 10 [1] 100000 110000 true)]
   (if (and (= result 12) (= (vector-at runtime 0) 0)) 0 1)))
+'''
+    wait_start = source.index('(defn- pr-count-wait ')
+    wait_end = source.index(';; Flint generation', wait_start)
+    count_wait = source[wait_start:wait_end]
+    wait_guard = '(< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1)'
+    if count_wait.count(wait_guard) != 1:
+        raise ValueError('count wait deadline guard anchor changed')
+    wait_stubs = r'''
+(defn- pr-wall-ms [] :i64 106500)
+(defn- pr-unit-code [unit :string] :i64
+ (let [created (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Ipoll-seen\u0000"))] 1))
+(defn- pr-read-bounded [path :string limit :i64] :vector-i64 [1])
+(defn- pr-count-value [b :vector-i64] :i64 12)
+(defn- pr-pause [] :bool false)
+'''
+    wait_cases = r'''
+(defn main [] :i64
+ (let [expired (pr-count-wait "u" "r" 100000 105000 10)
+       before (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Dpoll-seen\u0000"))
+       valid (pr-count-wait "u" "r" 100000 110000 10)
+       after (typed-cap-call 35 :string :string (str "\u0000FS2\u0000Dpoll-seen\u0000"))]
+   (if (and (= expired -1) (= before "\u0000FS2\u00000")
+            (= valid 12) (= after "\u0000FS2\u00001")) 0 1)))
 '''
     resident = (ROOT / 'kotoba/profile_resident.kotoba').read_text()
     resident_start = resident.index('(defn- rt-dispatch ')
@@ -166,6 +189,8 @@ def main():
                 ('reuse-bypass-mutant', window + count_stubs + count_source.replace('(not reuse-only)', 'true') + count_cases, 1),
                 ('count-reuse', window + reuse_stubs + count_source + reuse_cases, 0),
                 ('count-reuse-mutant', window + reuse_stubs + count_source.replace(reuse_decision, 'false') + reuse_cases, 1),
+                ('count-wait-deadline', window + wait_stubs + count_wait + wait_cases, 0),
+                ('count-wait-deadline-mutant', window + wait_stubs + count_wait.replace(wait_guard, 'false') + wait_cases, 1),
                 ('resident-refresh', window + resident_stubs + dispatch + resident_cases, 0),
                 ('resident-refresh-mutant', window + resident_stubs + dispatch.replace(refresh, 'again lease') + resident_cases, 1),
                 ('pre-refresh-deadline-mutant', window + resident_stubs + dispatch.replace(recheck_guard, 'false') + resident_cases, 1),
@@ -185,6 +210,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(image)], check=True, capture_output=True)
                 subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(image)], check=True, capture_output=True)
                 shutil.rmtree(root / 'step-time', ignore_errors=True)
+                shutil.rmtree(root / 'poll-seen', ignore_errors=True)
                 run([image], expected)
                 print(name, 'source-sha256', hashlib.sha256(text.encode()).hexdigest(), 'image-sha256', digest(image))
         finally:

@@ -89,3 +89,50 @@ and operator, with the mutant patches applied on top of those changes.
 The voters and count response were synthetic, generation was stubbed and no
 model or GitHub publication was run. This is not a real quorum, a qualified
 clock or governor, nor an atomic receiver-side fence.
+
+## Stop waiting for count after the shared deadline
+
+The count wait loop now checks the shared deadline and clock before each unit
+state query. An expired or unknown sample returns an unknown count and retains
+the busy marker; it does not claim the unit stopped. A query or sleep already
+underway is not forcibly interrupted by this check.
+
+On local Darwin ARM64, a signed selected-source native fixture tested an
+expired deadline without entering its instrumented unit query, plus an
+unexpired completed-count control. A separately built guard-bypass mutant
+failed that assertion. The other deadline, count and resident fixture cases
+passed, and an assembled historical-dependency source with the updated count
+functions passed the pinned Amu CLI `check`. The mock unit and clock in this
+local fixture are not the production provider or clock.
+
+On Xavier, the previous task-owned `sleep 4` systemd count scenario was rerun
+with the updated selected `pr-count` and `pr-count-wait` forms and actual
+systemd state queries and host clock. At expiration it returned
+`profile/context-budget-unknown-or-insufficient`, retained the busy marker,
+made no generation call or post-count lease round, and the unit's substate was
+still `start`. The operator waited for the unit to exit before the unchanged
+control, which reached the generation stub. With only the new wait guard
+bypassed, the timed case instead returned after the unit was `exited` and the
+later deadline check refused; this was the expected negative-control
+observation. Each timed case had four requests per mock voter; controls had
+six. All fixture assertions passed. The task-owned units were stopped and an
+independent final check observed `not-found` / `inactive`.
+
+Compiler sampled peak RSS was 61,340 KiB for the guarded run and 66,624 KiB
+for the mutant; the timed guests each sampled at 2,668 KiB. The original
+CPU/address-space limits and RSS sampling policy apply. The two remote
+synthetic artifact directories are `/tmp/awai-lease-loopback-9z_8gm8k` and
+`/tmp/awai-lease-loopback-7y6xik7d`. The guarded fixture, ELF and operator
+SHA-256 values were
+`6e947ed07735a9efe2ba7fad4f0ef150eedff474ff7d7b12ef815f0e7bded687`,
+`3f5d4325b4b9d838927a3ddd0f808ddb423276a307aeb92911dd141fc9015028`, and
+`5a56c80e12bf17437ef78a37242591b03ebfb1a182c7fc1d5645b5bf55968d27`;
+the corresponding mutant values were
+`787e2a5ed60d9d05bfcd5930406f071f9d0369cbbef620be7ea329e9a3f3fee9`,
+`3e9fab8392d158fcba563698cdd4a59e95a5862e956fc40701f80c1f4a35c4fb`, and
+`22876c413a7e79e87cf4abb79f28a5e15e54e8af810ce137e07f0329ae25309d`.
+The `count-wait` patches apply after the respective baseline `count-expired`
+patches; the mutant patches apply after the guarded `count-wait` patches.
+Voters and count response were synthetic, generation was stubbed, and no
+model or GitHub publication ran. Clock monotonicity, operation interruption,
+process containment, receiver fencing and governor qualification remain open.

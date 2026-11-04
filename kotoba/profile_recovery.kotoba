@@ -274,12 +274,15 @@
       (if (and (>= i 0) (json-int-ok? b i) (> (json-int b i) 0) (<= (json-int b i) 8192))
         (json-int b i) -1))))
 
-(defn- pr-count-wait [unit :string response :string] :i64
+(defn- pr-count-wait [unit :string response :string started :i64 deadline :i64 seconds :i64] :i64
   (loop [i 0]
-    (let [state (pr-unit-code unit)]
-      (cond (= state 1) (pr-count-value (pr-read-bounded response 1024))
-            (or (= state -1) (> i 900)) -1
-            :else (let [z (pr-pause)] (if z (recur (+ i 1)) -1))))))
+    ;; Expiry or an unknown clock is not proof that the unit stopped. The
+    ;; caller keeps the busy marker and requires host reconciliation.
+    (if (< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1) -1
+      (let [state (pr-unit-code unit)]
+        (cond (= state 1) (pr-count-value (pr-read-bounded response 1024))
+              (or (= state -1) (> i 900)) -1
+              :else (let [z (pr-pause)] (if z (recur (+ i 1)) -1)))))))
 
 ;; Flint generation must be bound to the same host-pinned process instance as
 ;; its count. Rotation creates a different request identity; a retained turn
@@ -335,7 +338,7 @@
                             (let [remaining (pr-window-seconds started deadline (pr-wall-ms) seconds)]
                               (and (> remaining 0) (pr-submit-kind unit request response remaining runtime true))))
                           :else false)]
-      (if submitted (pr-count-wait unit response) -1))))
+      (if submitted (pr-count-wait unit response started deadline seconds) -1))))
 
 (defn- pr-flint-output-budget [input :i64 requested :i64] :i64
   (let [available (- 8192 input 256)]
