@@ -635,3 +635,10 @@ refuse progress. These path-based checks require host-owned paths and do not
 protect against same-size replacement by a concurrent writer; an FS2 provider
 that does not implement the required metadata and range operations may refuse
 or trap.
+
+Resident configuration, restored state, signed head and candidate-head files
+are bounded to 16 KiB, saved lease files to 4 KiB, and environment, policy and
+private runtime files to 128 KiB. Empty or unavailable environment and policy
+reads cannot satisfy their CID pins. Existing installations using empty files
+or files beyond these caps must provision compatible inputs before enabling the
+updated resident. The same host isolation and FS2 provider requirements apply.

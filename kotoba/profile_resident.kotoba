@@ -52,7 +52,7 @@
 
 (defn- rt-current-lease [cfg :vector-i64 floor :i64] :vector-i64
   (let [path (cp-str cfg 0 "leaseFile") status (cp-fs "D" path "")
-        saved (if (= status "1") (cp-read path) (vector-alloc 0))]
+        saved (if (= status "1") (pr-read-bounded path 4096) (vector-alloc 0))]
     (if (not (or (= status "0") (and (= status "1") (json-valid? saved) (json-canonical? saved))))
       (vector-alloc 0)
       (let [e (if (>= (cp-num saved 0 "epoch") floor) (cp-num saved 0 "epoch") floor)
@@ -109,7 +109,7 @@
         head (vector-alloc 0)))))
 
 (defn- rt-read-head [cfg :vector-i64 path :string] :vector-i64
-  (if (cp-exists? path) (rt-open-head cfg (cp-read path)) (vector-alloc 0)))
+  (if (cp-exists? path) (rt-open-head cfg (pr-read-bounded path 16384)) (vector-alloc 0)))
 
 (defn- rt-replicate [cfg :vector-i64 root :string next-at :i64 request :string] :bool
   (let [store (cp-str cfg 0 "store") until (+ (rt-now) 172800000)
@@ -142,7 +142,7 @@
 (defn- rt-publish-candidate [cfg :vector-i64 root :string next-at :i64 request :string] :bool
   (let [path (cp-str cfg 0 "candidateHead")]
     (if (not (cp-exists? path)) false
-      (let [envelope (cp-read path) head (rt-open-head cfg envelope)]
+      (let [envelope (pr-read-bounded path 16384) head (rt-open-head cfg envelope)]
         (and (rt-admitted-head? cfg head) (= (cp-str head 0 "checkpoint") root)
              (= (cp-num head 0 "nextAt") next-at) (= (cp-str head 0 "request") request)
              (rt-save (cp-str cfg 0 "head") envelope))))))
@@ -189,8 +189,8 @@
                 (= (cp-str env 0 "mtpArtifactDigest") (cp-str cfg 0 "mtpArtifactDigest"))))))
 
 (defn- rt-runtime [cfg :vector-i64] :vector-i64
-  (cp-read (if (= (cp-str cfg 0 "archiveAck") "")
-             (cp-str cfg 0 "environmentFile") (cp-str cfg 0 "runtimeFile"))))
+  (pr-read-bounded (if (= (cp-str cfg 0 "archiveAck") "")
+                     (cp-str cfg 0 "environmentFile") (cp-str cfg 0 "runtimeFile")) 131072))
 
 ;; Flint residents require the archive gate. In the legacy no-archive mode,
 ;; environmentFile itself is the runtime; reject the Flint kind even when its
@@ -199,8 +199,10 @@
   (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-flint/1"))
 
 (defn- rt-pins-ok? [cfg :vector-i64] :bool
-  (let [env (cp-read (cp-str cfg 0 "environmentFile")) policy (cp-read (cp-str cfg 0 "policyFile"))]
-    (and (= (cp-cid env) (cp-str cfg 0 "environment")) (= (cp-cid policy) (cp-str cfg 0 "policy"))
+  (let [env (pr-read-bounded (cp-str cfg 0 "environmentFile") 131072)
+        policy (pr-read-bounded (cp-str cfg 0 "policyFile") 131072)]
+    (and (> (vector-count env) 0) (> (vector-count policy) 0)
+         (= (cp-cid env) (cp-str cfg 0 "environment")) (= (cp-cid policy) (cp-str cfg 0 "policy"))
          (if (= (cp-str cfg 0 "archiveAck") "")
            (not (rt-flint-archive-required? env))
            (and (cp-safe-absolute? (cp-str cfg 0 "runtimeFile"))
@@ -349,7 +351,7 @@
         dest (str (cp-str cfg 0 "runtimeRoot") "/checkouts/" (rt-now))
         restored (cp-materialize store checkpoint dest)]
     (if (not (= restored "checkpoint/restored")) restored
-      (let [next (cp-num (cp-read (str dest "/state.json")) 0 "next")
+      (let [next (cp-num (pr-read-bounded (str dest "/state.json") 16384) 0 "next")
             next-at (+ (rt-now) (cp-num cfg 0 "intervalMs"))
             status (rt-status cfg "inference")
             result (rt-dispatch cfg head lease dest next)
@@ -455,7 +457,7 @@
     (if ok 0 1)))
 
 (defn profile-resident-main [] :i64
-  (let [cfg (cp-read (cp-arg 1)) archive-field (json-member cfg 0 "archiveAck")
+  (let [cfg (pr-read-bounded (cp-arg 1) 16384) archive-field (json-member cfg 0 "archiveAck")
         ack (cp-str cfg 0 "archiveAck")]
     (if (or (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg (cp-arg 1)))
             (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
