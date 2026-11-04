@@ -282,10 +282,13 @@
     ;; caller keeps the busy marker and requires host reconciliation.
     (let [now (pr-wall-ms)]
       (if (< (pr-window-seconds last deadline now seconds) 1) -1
-        (let [state (pr-unit-code unit)]
-          (cond (= state 1) (pr-count-value (pr-read-bounded response 1024))
+        (let [state (pr-unit-code unit) after-query (pr-wall-ms)]
+          (cond (< (pr-window-seconds now deadline after-query seconds) 1) -1
+                (= state 1) (let [value (pr-count-value (pr-read-bounded response 1024))
+                                  after-read (pr-wall-ms)]
+                              (if (> (pr-window-seconds after-query deadline after-read seconds) 0) value -1))
                 (or (= state -1) (> i 900)) -1
-                :else (let [z (pr-pause)] (if z (recur (+ i 1) now) -1))))))))
+                :else (let [z (pr-pause)] (if z (recur (+ i 1) after-query) -1))))))))
 
 ;; Flint generation must be bound to the same host-pinned process instance as
 ;; its count. Rotation creates a different request identity; a retained turn
@@ -568,14 +571,16 @@
     ;; Preserve the request, dispatch marker and occupancy for reconciliation.
     (let [flint (pr-local-flint? runtime) now (if flint (pr-wall-ms) last)]
       (if (and flint (< (pr-window-seconds last deadline now seconds) 1)) false
-        (let [state (pr-unit-code unit)]
-          (cond (= state 1)
+        (let [state (pr-unit-code unit) after-query (if flint (pr-wall-ms) now)]
+          (cond (and flint (< (pr-window-seconds now deadline after-query seconds) 1)) false
+                (= state 1)
                 (and (cp-exists? response)
                      (let [b (pr-read-response response)]
                        (and (not (= (pr-answer b) ""))
-                            (pr-local-response? runtime b))))
+                            (pr-local-response? runtime b)
+                            (or (not flint) (> (pr-window-seconds after-query deadline (pr-wall-ms) seconds) 0)))))
                 (or (= state -1) (> i 900)) false
-                :else (let [z (pr-pause)] (if z (recur (+ i 1) now) false))))))))
+                :else (let [z (pr-pause)] (if z (recur (+ i 1) after-query) false))))))))
 
 (defn- pr-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64] :bool
   (and (json-canonical? runtime)
