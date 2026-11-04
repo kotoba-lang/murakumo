@@ -1,6 +1,7 @@
 # FIFO reservation history rename interruption
 
-A local Darwin ARM64 diagnostic compiled the current `resource_fifo.kotoba`
+A diagnostic on jacob.local (macOS 26.3.1 (a), build 25D771280a, ARM64)
+compiled the current `resource_fifo.kotoba`
 using compiler SHA-256
 `920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6`
 and the experimental FS2 packager SHA-256
