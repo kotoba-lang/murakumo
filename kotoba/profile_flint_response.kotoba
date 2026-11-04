@@ -1,0 +1,35 @@
+;; Candidate response contract for a future Flint-backed read-only profile.
+;; Compose after profile_recovery and its native dependencies. This module
+;; does not send requests, authenticate a server, authorize a workload, or
+;; select an inference rail. The host must independently pin and authenticate
+;; the endpoint and model artifact before any integration can use it.
+(ns murakumo.profile-flint-response
+  (:export [flint-response-problem flint-compact]))
+
+;; The server's model field is a consistency check, not proof of the loaded
+;; weights. Keep incomplete or ambiguous completions out of durable state.
+(defn flint-response-problem [expected :string raw :vector-i64] :string
+  (cond (= expected "") "flint/model-unpinned"
+        (or (= (vector-count raw) 0) (> (vector-count raw) 262144)) "flint/response-size"
+        (not (json-valid? raw)) "flint/response-invalid"
+        (not (= (cp-str raw 0 "model") expected)) "flint/model-mismatch"
+        :else
+          (let [choices (json-member raw 0 "choices")
+                first (if (>= choices 0) (json-element raw choices 0) -1)
+                second (if (>= choices 0) (json-element raw choices 1) -1)
+                message (if (>= first 0) (json-member raw first "message") -1)
+                tools (if (>= message 0) (json-member raw message "tool_calls") -1)]
+            (cond (or (< first 0) (>= second 0)) "flint/choices-refused"
+                  (>= tools 0) "flint/tool-calls-refused"
+                  (= (pr-answer raw) "") "flint/incomplete"
+                  :else "flint/ok"))))
+
+;; Keep the completed visible answer and bind the compact record to the full
+;; response; the digest does not replicate or attest that full response.
+;; A response too large for the existing checkpoint block is refused.
+(defn flint-compact [expected :string raw :vector-i64] :vector-i64
+  (if (not (= (flint-response-problem expected raw) "flint/ok")) (vector-alloc 0)
+    (let [compact (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":"
+                      (pr-json-quote (pr-answer raw)) "}}],\"model\":" (pr-json-quote expected)
+                      ",\"rawResponseDigest\":\"sha256:" (sha256-hex raw) "\"}"))]
+      (if (pr-replicable? compact) compact (vector-alloc 0)))))

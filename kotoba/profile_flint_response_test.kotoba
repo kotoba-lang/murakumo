@@ -1,0 +1,27 @@
+;; Candidate source tests; compose after profile_flint_response.
+(ns murakumo.profile-flint-response-test (:export [test-flint-response]))
+
+(defn test-flint-response [] :bool
+  (let [good (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"draft\",\"reasoning_content\":\"private\"}}],\"model\":\"flint\"}")
+        unfinished (cp-bytes "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"draft\"}}],\"model\":\"flint\"}")
+        no-answer (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"\",\"reasoning_content\":\"private\"}}],\"model\":\"flint\"}")
+        two (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"a\"}},{\"finish_reason\":\"stop\",\"message\":{\"content\":\"b\"}}],\"model\":\"flint\"}")
+        tool (cp-bytes "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"content\":\"draft\"}}],\"model\":\"flint\"}")
+        tool-hidden (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"draft\",\"tool_calls\":[]}}],\"model\":\"flint\"}")
+        compact (flint-compact "flint" good)]
+    (and (= (flint-response-problem "flint" good) "flint/ok")
+         (= (flint-response-problem "" good) "flint/model-unpinned")
+         (= (flint-response-problem "other" good) "flint/model-mismatch")
+         (= (flint-response-problem "flint" (vector-alloc 0)) "flint/response-size")
+         (= (flint-response-problem "flint" (vector-alloc 262145)) "flint/response-size")
+         (= (flint-response-problem "flint" (cp-bytes "{")) "flint/response-invalid")
+         (= (flint-response-problem "flint" unfinished) "flint/incomplete")
+         (= (flint-response-problem "flint" no-answer) "flint/incomplete")
+         (= (flint-response-problem "flint" two) "flint/choices-refused")
+         (= (flint-response-problem "flint" tool) "flint/incomplete")
+         (= (flint-response-problem "flint" tool-hidden) "flint/tool-calls-refused")
+         (= (vector-count (flint-compact "flint" unfinished)) 0)
+         (json-valid? compact) (= (pr-answer compact) "draft")
+         (= (cp-str compact 0 "model") "flint")
+         (= (cp-str compact 0 "rawResponseDigest") (str "sha256:" (sha256-hex good)))
+         (< (string-index-of (cp-text compact) "private") 0))))
