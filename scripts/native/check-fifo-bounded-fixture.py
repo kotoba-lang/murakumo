@@ -170,9 +170,10 @@ def main():
             lines = (queue / 'queue').read_text().splitlines()
             if lines[0] != 'RGQ1' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
                 raise ValueError('concurrent state mismatch')
-            killed_phases = []
+            killed_phases = []; variants = {}
             for phase in anchors:
                 variant = build(phase)
+                variants[phase] = variant
                 phase_root = root / ('kill-' + phase); phase_root.mkdir(mode=0o700)
                 (phase_root / 'queue.lock').write_text(''); (phase_root / 'queue').write_text(old)
                 child = subprocess.Popen([str(variant), '/kill-' + phase, 'enqueue', first], cwd=root,
@@ -254,6 +255,16 @@ def main():
                 shutil.copyfile(fifo, artifact); artifact.chmod(0o700)
                 if sha(artifact.read_bytes()) != sha(fifo.read_bytes()):
                     raise ValueError('artifact copy mismatch')
+                pins = {}
+                for phase, variant in variants.items():
+                    target = a.artifact_dir / (phase + '.macho')
+                    shutil.copyfile(variant, target); target.chmod(0o700)
+                    pins[phase] = sha(target.read_bytes())
+                    if pins[phase] != sha(variant.read_bytes()): raise ValueError('variant copy mismatch')
+                manifest = {'fifoSha256': sha(fifo.read_bytes()), 'componentSha256': sha(raw_component),
+                            'instrumented': pins}
+                (a.artifact_dir / 'manifest.json').write_text(json.dumps(manifest, sort_keys=True) + '\n')
+                print('artifactManifestSha256', sha((a.artifact_dir / 'manifest.json').read_bytes()), flush=True)
             print(json.dumps({'componentSha256':sha(raw_component), 'casesSha256':sha(raw_cases),
                               'fixtureSha256':sha(unity.encode()), 'compilerSha256':a.compiler_sha256,
                               'packagerSha256':a.packager_sha256, 'fifoSha256':sha(fifo.read_bytes()),
