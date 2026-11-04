@@ -171,7 +171,10 @@
       (reset! grant 70)
       (let [d (accel/admit probe {"1" :resident} :resident 71 0)]
         (is (= :oracle-inconsistent (:reason d))) (is (= 0 (:granted d))))
-      (is (:admitted? (accel/admit probe {"1" :resident} :resident 70 0))))))
+      (is (:admitted? (accel/admit probe {"1" :resident} :resident 70 0)))
+      (reset! grant 69)
+      (let [d (accel/admit probe {"1" :resident} :resident 70 0)]
+        (is (= :oracle-inconsistent (:reason d))) (is (= 0 (:granted d)))))))
 
 ;; ── the probe half: measuring must be able to say it could not ─────────
 

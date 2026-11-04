@@ -245,3 +245,13 @@ The reproducible diagnostic is `scripts/native/check-accelerator-host-tests-cljs
 It uses local, unpinned Kotoba dependency sources and Node/nbb only for the
 check. It does not run the complete suite, corrected KIR, real probe or native
 governor.
+
+The consumer also refuses an oracle admission when the requested bytes exceed
+its own returned grant. Since the grant is independently bounded by remaining
+capacity, this also bounds admitted requests by remaining capacity. Selected
+ClojureScript tests covered a contradictory 70-byte admission / 69-byte grant,
+and removing the check caused the control to fail. The actual host test
+namespace reported five tests and 25 passing assertions with mocked oracles;
+the actual consumer with the pinned stale KIR continued to refuse. Consumer
+SHA-256 was `d503a7daf7b029818c5b456839230a518ca3cbade2331a03daead1a4e71aa265`.
+These are not a real probe, corrected KIR, complete host suite or governor.

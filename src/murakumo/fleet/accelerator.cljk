@@ -204,7 +204,7 @@
         candidate-grant (if eligible? (oi "granted-bytes" [k usable res opp]) nil)
         consistent? (and (integer? candidate-code) (<= 0 candidate-code 7)
                          (integer? candidate-grant) (<= 0 candidate-grant remaining)
-                         (or (not= candidate-code 0) (<= request-bytes remaining)))
+                         (or (not= candidate-code 0) (<= request-bytes candidate-grant)))
         code (cond (not (and oracle-current? observed?)) 7
                    (not measured?) 1
                    (not known-class?) 5

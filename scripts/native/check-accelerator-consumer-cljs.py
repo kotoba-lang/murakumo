@@ -77,7 +77,11 @@ def main():
     (let [d (admit busy registry :resident 71 0)]
       (assert (= :oracle-inconsistent (:reason d))) (assert (= 0 (:granted d))))
     (let [d (admit busy registry :resident 70 0)]
-      (assert (:admitted? d)) (assert (= 70 (:granted d)))))
+      (assert (:admitted? d)) (assert (= 70 (:granted d))))
+    (reset! oracle-grant 69)
+    ;; A granted maximum below the admitted request is contradictory.
+    (let [d (admit busy registry :resident 70 0)]
+      (assert (= :oracle-inconsistent (:reason d))) (assert (= 0 (:granted d)))))
   (reset! oracle-grant 100)
   (reset! oracle-usable 90)
   (assert (= 90 (usable-bytes good 100)))
@@ -152,7 +156,7 @@ def main():
         ('(= aperture (+ vram-total gtt-total))', 'true'),
         ('(and (integer? usable) (= usable expected))', 'true'),
         ('(<= 0 candidate-grant remaining)', '(>= candidate-grant 0)'),
-        ('(or (not= candidate-code 0) (<= request-bytes remaining))', 'true'),
+        ('(<= request-bytes candidate-grant)', 'true'),
     ]:
         if program.count(guard) != 1:
             raise ValueError('oracle capacity mutation anchor changed')
