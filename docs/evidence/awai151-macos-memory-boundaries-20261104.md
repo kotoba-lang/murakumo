@@ -157,6 +157,29 @@ also blocks the current multi-process Amu CLI, so it cannot be applied to all
 builds unchanged. The diagnostic script was temporary; its SHA-256 was
 `9a257afdf6d802f92be3416cdaccf91f216266cde3e70bb7508d4b74a144f993`.
 
+### Launch-path replacement by a peer
+
+On all three hosts, the outside parent of the preceding test restored the
+unlinked hard link before resuming the sandboxed target. The target then
+successfully exec'd the restored path in both the limited and unlimited cases.
+The limit after the second exec was not read in this experiment. An otherwise
+identical test made the temporary directory root-owned, mode 0711, with its
+nested directories root-owned and not writable by UID 501. An unsandboxed
+UID 501 peer could not restore the link (`EACCES`); the target's path exec
+returned `ENOENT`, and the small memory controls repeated their prior outcomes.
+
+This protection assumes the peer cannot gain root. On these test hosts the
+same UID 501 peer could run `sudo -n /bin/ln`, restore the link under the
+root-owned directory, and enable the target's path exec in both cases. This
+was a task-owned temporary link only; no sudo configuration or persistent host
+settings were changed. Root directory ownership therefore does not isolate an
+untrusted peer that has equivalent sudo access. The probe does not establish
+the behavior of a separate least-privilege account, or exclude other path and
+IPC attacks. The temporary scripts' SHA-256 values, in test order, were
+`5e7c8e7dc374dd13e2020172f22456a80d6f14376858a64eec5ca2ed6d533044`,
+`ed184ddf7a3ea3fdea3aaaf1d32ea66868e59f89e4ffa1341cc34702bce48d62`, and
+`0b425ec7a0949083b8fdce9daa901740d5ba423392dc264d92dd6f6759f347da`.
+
 A production design still needs a native Kotoba/Amu host boundary, a trustworthy
 way to control all descendants and later execs, aggregate CPU/memory/GPU and
 other resource accounting, admission and reservation, FIFO and lock lifetime,
