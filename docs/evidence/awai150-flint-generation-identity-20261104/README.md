@@ -27,3 +27,24 @@ the signed positive fixture SHA-256 was
 The diagnostic used the pinned old compiler and packager, not a qualified
 source-lock build; no server, actual restart, unit reuse, filesystem recovery,
 GitHub state or resource governor was exercised.
+
+## Marker and FS2 diagnostic
+
+A second local Mac native fixture combined the current `pr-generation-id`,
+`pr-flint-turn-id`, `pr-flint-turn-reserve`, bounded reread and checkpoint
+file helpers with the staged diagnostic FS2 provider. In a fresh private FD3
+scope, separate invocations created a marker and accepted an identical request;
+a different synthetic server instance was refused and left the original
+marker unchanged. Replacing the marker with malformed bytes also caused
+refusal without rewriting it. A negative-control fixture with the instance
+fixed inside the generation identity accepted the changed-instance request.
+The fixture source SHA-256 was
+`8aaa2db59f2e47b0fa28455378826067532e2893d9b11f54af8c955f3b5a2caa`
+and signed positive image SHA-256 was
+`331bc4a3d0a876281d1bf0bd114a3ef458f953eeb69ed2893b8e7ef7d12453ce`.
+
+The test used real local FS2 operations, synthetic runtime descriptions and
+an exclusively owned directory. It did not start or restart a server, test
+concurrent writers or power loss, verify a production provider, perform a
+GitHub transaction, or qualify process identity, resource governance or
+selfhost. A surviving marker remains an operator reconciliation obligation.
