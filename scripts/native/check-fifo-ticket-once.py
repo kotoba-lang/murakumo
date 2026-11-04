@@ -68,13 +68,15 @@ def main():
                     '        sent (typed-cap-call 37 :string :string s)] true))\n')
     pause_hooks = {
         'after-write': '(rq-write? pending (str "RGU1\\n" ticket "\\n"))',
+        'after-publish': '(= (rq-fs "T" pending path) "1")',
+        'after-file-sync': '(= (rq-fs "M" path "") "1")',
         'after-dir-sync': '(= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"',
     }
     pause_sources = {}
     for name, anchor in pause_hooks.items():
         if source.count(anchor) != 1:
             raise ValueError('pause anchor changed: ' + name)
-        replacement = ('(and ' + anchor + ' (rq-claim-test-pause))' if name == 'after-write'
+        replacement = ('(and ' + anchor + ' (rq-claim-test-pause))' if name != 'after-dir-sync'
                        else '(= (rq-fs "M" root "") "1") (rq-claim-test-pause)) "fifo/ticket-claimed"')
         pause_sources[name] = source.replace('(defn- rq-claim-ticket ', pause_helper + '(defn- rq-claim-ticket ', 1).replace(anchor, replacement, 1)
     with tempfile.TemporaryDirectory(prefix='awai151-ticket-once-', dir='/private/tmp') as directory:
@@ -213,6 +215,30 @@ def main():
                 if result != expected or (case / 'queue').read_text() != expected_queue:
                     raise ValueError(('post-kill retry', phase, result))
                 print('PASS claim owner killed at', phase, '; retry', result, flush=True)
+            race = root / 'same-ticket-race'; race.mkdir()
+            (race / 'queue.lock').write_text(''); (race / 'queue').write_text('RGQ5\n')
+            children = []
+            try:
+                for _ in range(8):
+                    children.append(subprocess.Popen([str(image), '/same-ticket-race', 'enqueue', c], cwd=root,
+                                                     pass_fds=(3,), env={'PATH': '/nonexistent'}, preexec_fn=limit,
+                                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE))
+                outcomes = []
+                for child in children:
+                    stdout, stderr = child.communicate(timeout=10)
+                    if stderr:
+                        raise RuntimeError(('same-ticket race stderr', stderr))
+                    outcomes.append((child.returncode, stdout.decode().strip()))
+                allowed = {(0, 'fifo/enqueued'), (1, 'fifo/busy'), (1, 'fifo/already-queued')}
+                if any(result not in allowed for result in outcomes) or outcomes.count((0, 'fifo/enqueued')) != 1:
+                    raise ValueError(('same-ticket race outcomes', outcomes))
+                if (race / 'queue').read_text() != 'RGQ5\n' + c + '\n' or (race / ('queue.used.' + c)).read_text() != 'RGU1\n' + c + '\n':
+                    raise ValueError('same-ticket race state')
+                print('PASS same-ticket race', outcomes, flush=True)
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill(); child.wait(timeout=3)
             op(bypass_image, 'enqueue', 'fifo/enqueued', a)
             print('PASS lookup and no-replace bypass admitted a reused ticket')
             (q / 'queue').write_text('RGQ4\n')

@@ -147,6 +147,20 @@ each host reported the same source/image hashes and temporary-directory
 removal. These simulate provider responses inside the source; they do not
 exercise a real unsupported or malicious production provider.
 
+The observer was subsequently extended to stop an owned process immediately
+after T publication and after marker fsync, as well as the existing before-
+publication and after-directory-sync pauses. On the same three Macs and
+locally, a retry after either new pause returned `fifo/ticket-used`; a retry
+before publication enqueued successfully. Each host also ran one sample of
+eight processes enqueueing the same ticket: one succeeded, seven observed
+`fifo/already-queued`, and the resulting queue and claim contained one ticket.
+The observer SHA-256 was
+`913a9cc8cfc214f6f0b5284ab3e5d53685c7ca94b9bf6955a67c56b13525cb3e`.
+The source and signed FIFO hashes were unchanged from the no-replace revision;
+each host reported its temporary directory removed. These are process-kill
+and single concurrency samples, not power-loss durability, fairness or
+production-provider qualification.
+
 ## Preserve the barrier when a claim is lost
 
 The current candidate also validates the exact claim before release, dequeue,
