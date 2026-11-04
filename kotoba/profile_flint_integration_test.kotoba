@@ -7,12 +7,23 @@
         bad-budget (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":8192,\"model\":\"flint\",\"socket\":\"/private/socket\"}")
         done (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"done\",\"role\":\"assistant\"}}],\"model\":\"flint\"}")
         incomplete (cp-bytes "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\",\"role\":\"assistant\"}}],\"model\":\"flint\"}")
-        compact (pr-local-compact runtime done)]
+        multiline (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"line1\\nline2\\tend\",\"role\":\"assistant\"}}],\"model\":\"flint\"}")
+        compact (pr-local-compact runtime done)
+        compact-multiline (pr-local-compact runtime multiline)
+        compact-text (cp-text compact)
+        extra (cp-bytes (str (string-substring compact-text 0 (- (string-length compact-text) 1)) ",\"reasoning_content\":\"private\"}"))
+        malformed (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"done\",\"role\":\"assistant\"}}],\"model\":\"flint\",\"rawResponseDigest\":\"sha256:broken\"}")]
     (and (pr-local-flint? runtime) (pr-local? runtime) (not (pr-local-mtp? runtime))
          (not (pr-local-flint? bad-context)) (not (pr-local-flint? bad-budget))
          (= (pr-token-budget runtime true) 6144)
          (pr-local-response? runtime done) (not (pr-local-response? runtime incomplete))
          (> (vector-count compact) 0) (pr-local-response? runtime compact)
+         (pr-local-prior-response? runtime compact)
+         (json-canonical? compact-multiline) (pr-local-prior-response? runtime compact-multiline)
+         (= (pr-answer compact-multiline) "line1\nline2\tend")
+         (not (pr-local-prior-response? runtime done))
+         (not (pr-local-prior-response? runtime extra))
+         (not (pr-local-prior-response? runtime malformed))
          (= (vector-count (pr-local-compact runtime compact)) 0))))
 
 ;; The fixture uses deliberately public test values, never a credential.

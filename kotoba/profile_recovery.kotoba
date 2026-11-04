@@ -177,11 +177,33 @@
 ;; A response too large for the existing checkpoint block is refused. Do not
 ;; compact an existing compact record again: doing so would replace the
 ;; original raw digest with a digest of the compact record itself.
+(defn- flint-json-quote [s :string] :string
+  (let [b (cp-bytes s) out (vector-alloc (+ 2 (* 6 (vector-count b)))) z (vector-assoc! out 0 34)
+        end (loop [i 0 p 1]
+          (if (= i (vector-count b)) p
+            (let [c (vector-at b i)]
+              (cond (or (= c 34) (= c 92))
+                    (let [x (vector-assoc! out p 92) y (vector-assoc! out (+ p 1) c)] (recur (+ i 1) (+ p 2)))
+                    (or (= c 8) (= c 9) (= c 10) (= c 12) (= c 13))
+                    (let [code (cond (= c 8) 98 (= c 9) 116 (= c 10) 110 (= c 12) 102 :else 114)
+                          x (vector-assoc! out p 92) y (vector-assoc! out (+ p 1) code)]
+                      (recur (+ i 1) (+ p 2)))
+                    (< c 32)
+                    (let [a (vector-assoc! out p 92) c0 (vector-assoc! out (+ p 1) 117)
+                          d (vector-assoc! out (+ p 2) 48) e (vector-assoc! out (+ p 3) 48)
+                          f (vector-assoc! out (+ p 4) (string-code-point-at "0123456789abcdef" (quot c 16)))
+                          g (vector-assoc! out (+ p 5) (string-code-point-at "0123456789abcdef" (rem c 16)))]
+                      (recur (+ i 1) (+ p 6)))
+                    :else (let [x (vector-assoc! out p c)] (recur (+ i 1) (+ p 1)))))))
+        y (vector-assoc! out end 34)]
+    (cp-text (loop [i 0 v (vector-alloc (+ end 1))]
+      (if (> i end) v (recur (+ i 1) (vector-assoc! v i (vector-at out i))))))))
+
 (defn flint-compact [expected :string raw :vector-i64] :vector-i64
   (if (or (not (= (flint-response-problem expected raw) "flint/ok"))
           (>= (json-member raw 0 "rawResponseDigest") 0)) (vector-alloc 0)
     (let [compact (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":"
-                      (pr-json-quote (pr-answer raw)) ",\"role\":\"assistant\"}}],\"model\":" (pr-json-quote expected)
+                      (flint-json-quote (pr-answer raw)) ",\"role\":\"assistant\"}}],\"model\":" (flint-json-quote expected)
                       ",\"rawResponseDigest\":\"sha256:" (sha256-hex raw) "\"}"))]
       (if (pr-replicable? compact) compact (vector-alloc 0)))))
 
@@ -190,6 +212,24 @@
   (cond (pr-local-flint? runtime) (= (flint-response-problem (cp-str runtime 0 "model") b) "flint/ok")
         (pr-local-mtp? runtime) (pr-mtp-response? runtime b)
         :else true))
+
+;; A prior Flint output is the public compact projection, not an arbitrary
+;; raw server reply. A digest-shaped field binds the recorded source identity;
+;; it does not prove the raw bytes are present or independently attested.
+(defn- pr-local-prior-response? [runtime :vector-i64 b :vector-i64] :bool
+  (if (not (pr-local-flint? runtime)) (pr-local-response? runtime b)
+    (if (not (and (pr-replicable? b) (json-valid? b) (json-canonical? b)
+                  (= (json-kind b 0) 1) (= (json-count b 0) 3)
+                  (pr-local-response? runtime b))) false
+      (let [choices (json-member b 0 "choices") first (if (>= choices 0) (json-element b choices 0) -1)
+            message (if (>= first 0) (json-member b first "message") -1)
+            digest (cp-str b 0 "rawResponseDigest")]
+        (and (>= choices 0) (= (json-kind b choices) 2) (= (json-count b choices) 1)
+             (>= first 0) (= (json-kind b first) 1) (= (json-count b first) 2)
+             (>= message 0) (= (json-kind b message) 1) (= (json-count b message) 2)
+             (= (string-length digest) 71) (= (string-substring digest 0 7) "sha256:")
+             (cp-hex? (string-substring digest 7 71) 64))))))
+
 (defn- pr-local-compact [runtime :vector-i64 b :vector-i64] :vector-i64
   (cond (pr-local-flint? runtime) (flint-compact (cp-str runtime 0 "model") b)
         (pr-local-mtp? runtime) (pr-mtp-compact runtime b)
@@ -316,7 +356,7 @@
                 prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
                 linked (if (= next 1) (= previous "none")
                          (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))
-                              (pr-local-response? runtime prior)))]
+                              (pr-local-prior-response? runtime prior)))]
             (if (not linked) "profile/previous-output-mismatch"
               (let [instruction (if growth
                        (str "Read-only AWAI growth steward task " task ", step " next ".\n"
