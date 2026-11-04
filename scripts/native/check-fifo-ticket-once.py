@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import select
 import shutil
 import subprocess
 import tempfile
@@ -55,6 +56,20 @@ def main():
     if source.count(reserve_guard) != 1:
         raise ValueError('reserve marker guard mutation anchor changed')
     reserve_bypass = source.replace(reserve_guard, 'false "fifo/ticket-unknown"')
+    pause_helper = ('(defn- rq-claim-test-pause [] :bool\n'
+                    '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
+                    '        sent (typed-cap-call 37 :string :string s)] true))\n')
+    pause_hooks = {
+        'after-write': '(rq-write? path (str "RGU1\\n" ticket "\\n"))',
+        'after-dir-sync': '(= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"',
+    }
+    pause_sources = {}
+    for name, anchor in pause_hooks.items():
+        if source.count(anchor) != 1:
+            raise ValueError('pause anchor changed: ' + name)
+        replacement = ('(and ' + anchor + ' (rq-claim-test-pause))' if name == 'after-write'
+                       else '(= (rq-fs "M" root "") "1") (rq-claim-test-pause)) "fifo/ticket-claimed"')
+        pause_sources[name] = source.replace('(defn- rq-claim-ticket ', pause_helper + '(defn- rq-claim-ticket ', 1).replace(anchor, replacement, 1)
     with tempfile.TemporaryDirectory(prefix='awai151-ticket-once-', dir='/private/tmp') as directory:
         root = Path(directory)
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
@@ -84,6 +99,7 @@ def main():
         try:
             image, failed_claim = build('fifo', source), build('claim-fault', fault)
             bypass_image, reserve_mutant = build('claim-bypass', bypass), build('reserve-marker-bypass', reserve_bypass)
+            pause_images = {name: build(name, text) for name, text in pause_sources.items()}
             q = root / 'q'; q.mkdir(); (q / 'queue.lock').write_text(''); (q / 'queue').write_text('RGQ5\n')
             def op(img, action, expected, ticket=None, code=0):
                 command = [img, '/q', action] + ([ticket] if ticket else [])
@@ -116,6 +132,31 @@ def main():
             op(failed_claim, 'enqueue', 'fifo/ticket-unknown', c, 1)
             op(image, 'enqueue', 'fifo/ticket-used', c, 1)
             op(image, 'front', 'fifo/empty')
+            for phase, paused_image in pause_images.items():
+                case = root / phase; case.mkdir()
+                (case / 'queue.lock').write_text(''); (case / 'queue').write_text('RGQ5\n')
+                child = subprocess.Popen([str(paused_image), '/' + phase, 'enqueue', c], cwd=root,
+                                         pass_fds=(3,), env={'PATH': '/nonexistent'}, preexec_fn=limit,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    if not select.select([child.stdout], [], [], 8)[0] or os.read(child.stdout.fileno(), 1) != b'\0':
+                        raise RuntimeError('claim pause not reached: ' + phase)
+                    marker = case / ('queue.used.' + c)
+                    if marker.read_text() != 'RGU1\n' + c + '\n' or (case / 'queue').read_text() != 'RGQ5\n':
+                        raise ValueError('unexpected pre-kill claim state: ' + phase)
+                    if child.poll() is not None:
+                        raise RuntimeError('claim process exited before kill: ' + phase)
+                    child.kill()
+                    if child.wait(timeout=3) != -9:
+                        raise RuntimeError('claim process was not killed: ' + phase)
+                finally:
+                    if child.poll() is None:
+                        child.kill(); child.wait(timeout=3)
+                    child.stdout.close(); child.stderr.close()
+                result = run([image, '/' + phase, 'enqueue', c], 1).decode().strip()
+                if result != 'fifo/ticket-used' or (case / 'queue').read_text() != 'RGQ5\n':
+                    raise ValueError(('post-kill retry', phase, result))
+                print('PASS claim owner killed at', phase, '; retry refused', flush=True)
             op(bypass_image, 'enqueue', 'fifo/enqueued', a)
             print('PASS used-marker guard bypass admitted a reused ticket')
             (q / 'queue').write_text('RGQ4\n')

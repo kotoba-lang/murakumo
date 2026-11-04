@@ -78,3 +78,26 @@ This guard detects an absent or corrupt marker for the ticket being reserved;
 it cannot detect historical markers silently removed after their ticket left
 the queue, restore rollback, unauthenticated release, power loss or a malicious
 writer. The host must still preserve the complete marker namespace.
+
+## Claim interruption on three Mac minis
+
+The source-bound observer was extended with two instrumented claim variants.
+Each pauses its own child after writing the marker or after syncing the marker
+and directory, before enqueue publishes the ticket. The observer confirmed the
+marker was visible and the queue empty, killed and reaped that child, then
+verified the unmodified image refused a retry of the same ticket. These are
+process-kill observations; visibility before sync does not establish durable
+storage after power loss.
+
+The observer passed locally and on naphtali, benjamin and judah using strict
+Tailscale SSH host keys. All three reported Darwin ARM64 macOS 26.7.2 build
+25G332. The transport checked hashes of the compiler, packager, previous FIFO,
+source and observer and each host reported its task directory removed. Each
+host built the same signed candidate image with SHA-256
+`d2aaa21b5a6d130dae28e34413b9759f9070fe2cf588a4be694950f19d21ac15`.
+Observer SHA-256 was
+`ee07b1d0b69b7dfc5371725ca2d3f6ef3988c2216b05e0469a55d70d91bcdf0f`.
+Processes had three-second CPU limits, without an independently enforced
+whole-host memory cap. No model or persistent service was started. This does
+not test machine crash, power loss, storage rollback, descendant termination,
+production provider, authenticated release or a qualified governor.
