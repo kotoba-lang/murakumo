@@ -1,9 +1,9 @@
 # RGQ5 permanent ticket claims: native diagnostic
 
 The candidate uses a new `RGQ5` queue format and a durable `queue.used.<ticket>`
-marker written and synced before enqueue can publish a ticket. A marker is
-never removed by the FIFO. A failed or ambiguous claim burns that ticket;
-retries need a new ticket. A marker already present refuses reuse even after
+marker published and synced before enqueue can publish a ticket. A marker is
+never removed by the FIFO. A caller must reconcile an ambiguous claim before
+retry. A marker already present refuses reuse even after
 later reservations. The FIFO remains a host-owned primitive: it does not
 authenticate a caller or establish that a workload or its descendants ended.
 
@@ -101,6 +101,41 @@ Processes had three-second CPU limits, without an independently enforced
 whole-host memory cap. No model or persistent service was started. This does
 not test machine crash, power loss, storage rollback, descendant termination,
 production provider, authenticated release or a qualified governor.
+
+## No-replace claim publication
+
+The initial implementation checked existence, then wrote the claim directly.
+A provider returning `0` for a read-permission error could misclassify an
+existing write-only marker as missing and allow that direct write to overwrite
+it. The revised candidate writes and syncs `queue.claim.<ticket>`, publishes it
+as `queue.used.<ticket>` with FS2 T (no-replace rename), then syncs the marker
+and directory before enqueue proceeds. A T error or ambiguous outcome is
+unknown; a qualified provider must implement true no-replace with no fallback.
+
+In the local native diagnostic, a source-injected false missing response and
+an actual write-only existing marker both produced `fifo/ticket-unknown`
+without changing the marker. A mutant bypassing the lookup and replacing T
+with replacing rename L admitted reuse. After an owned child was killed before
+the staging file was published, a test retry succeeded; after directory sync,
+retry was refused as used. The caller must not infer which outcome occurred
+from a lost response. The bounded FIFO and ticket diagnostics passed with the
+same compiler and packager pins and three-second per-process CPU limit; there
+was no hard memory cap. This does not prove power-loss durability, recovery
+from rollback, production provider behavior or authenticated release.
+
+The no-replace revision source SHA-256 is
+`dfacce206668b331ebf233b9f20b926c9d9e6d7ea2276aa1681ee75710428ac4`;
+its signed diagnostic image SHA-256 is
+`d9314a5e9c6f1dce76adf0da2d5a63efbf0741e0e856bcda916f776b20eabbf1`.
+The same source-bound diagnostic then passed on naphtali, benjamin and judah
+(Darwin ARM64 macOS 26.7.2 build 25G332) using the pinned test compiler,
+packager and old FIFO. Each built the image above, observed the false-missing
+and write-only-marker refusals, and reported its temporary directory removed.
+Observer SHA-256 was
+`0271969f692f71b99acca78f3c850657f93ced96e96beb61a8d7d0a687e29db7`.
+These are diagnostic provider observations, not qualification of the target
+production provider. FS2 T support and refusal when unavailable require an
+independent production-host test.
 
 ## Preserve the barrier when a claim is lost
 

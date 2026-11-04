@@ -11,7 +11,8 @@
 ;; Begin RGQ5 only with a fresh empty host-owned queue and a permanently
 ;; separate ticket namespace; never migrate active RGQ4 tickets or outstanding
 ;; release commands into it. Retain every queue.used.* marker across restarts,
-;; backups and recovery. An unknown marker write burns the ticket. Markers do
+;; backups and recovery. A caller must reconcile an unknown claim before retry.
+;; Markers do
 ;; not authenticate callers or stop a trusted caller releasing a live workload.
 (ns murakumo.resource-fifo (:export [resource-fifo-main]))
 
@@ -96,15 +97,18 @@
            (let [c (string-code-point-at s i)]
              (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
                (recur (+ i 1)) false))))))
-;; Called under queue.lock before enqueue. A marker is permanent even when the
-;; later queue update fails or aborts; retry must use a fresh ticket. The host
-;; must exclude all other writers and preserve the entire marker namespace.
+;; Called under queue.lock before enqueue. Publish a synced staging file using
+;; FS2 T's no-replace rename: even a false "missing" lookup must never allow
+;; an existing claim to be overwritten. T errors or ambiguous outcomes refuse.
+;; The host must exclude all other writers and preserve the marker namespace.
 ;; Successful file and directory sync must precede publication of the ticket.
 (defn- rq-claim-ticket [root :string ticket :string] :string
-  (let [path (str root "/queue.used." ticket) status (rq-fs "D" path "")]
+  (let [path (str root "/queue.used." ticket) pending (str root "/queue.claim." ticket)
+        status (rq-fs "D" path "")]
     (cond (= status "1") "fifo/ticket-used"
           (not (= status "0")) "fifo/ticket-unknown"
-          (and (rq-write? path (str "RGU1\n" ticket "\n"))
+          (and (rq-write? pending (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "M" pending "") "1") (= (rq-fs "T" pending path) "1")
                (= (rq-fs "M" path "") "1") (= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"
           :else "fifo/ticket-unknown")))
 (defn- rq-claimed? [root :string ticket :string] :bool

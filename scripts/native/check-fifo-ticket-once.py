@@ -50,7 +50,12 @@ def main():
     guard = '(cond (= status "1") "fifo/ticket-used"\n          (not (= status "0")) "fifo/ticket-unknown"'
     if source.count(guard) != 1:
         raise ValueError('claim guard mutation anchor changed')
-    bypass = source.replace(guard, '(cond false "fifo/ticket-used"\n          false "fifo/ticket-unknown"')
+    rename_guard = '(rq-fs "T" pending path)'
+    missing_guard = 'status (rq-fs "D" path "")'
+    if source.count(rename_guard) != 1 or source.count(missing_guard) != 1:
+        raise ValueError('no-replace or lookup mutation anchor changed')
+    bypass = source.replace(guard, '(cond false "fifo/ticket-used"\n          false "fifo/ticket-unknown"').replace(rename_guard, '(rq-fs "L" pending path)')
+    false_missing = source.replace(missing_guard, 'status "0"')
     reserve_guard = ('(not (= (string-substring state 5 69) ticket)) "fifo/not-front"\n'
                      '                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"')
     if source.count(reserve_guard) != 1:
@@ -60,7 +65,7 @@ def main():
                     '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
                     '        sent (typed-cap-call 37 :string :string s)] true))\n')
     pause_hooks = {
-        'after-write': '(rq-write? path (str "RGU1\\n" ticket "\\n"))',
+        'after-write': '(rq-write? pending (str "RGU1\\n" ticket "\\n"))',
         'after-dir-sync': '(= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"',
     }
     pause_sources = {}
@@ -99,6 +104,7 @@ def main():
         try:
             image, failed_claim = build('fifo', source), build('claim-fault', fault)
             bypass_image, reserve_mutant = build('claim-bypass', bypass), build('reserve-marker-bypass', reserve_bypass)
+            false_missing_image = build('false-missing', false_missing)
             pause_images = {name: build(name, text) for name, text in pause_sources.items()}
             q = root / 'q'; q.mkdir(); (q / 'queue.lock').write_text(''); (q / 'queue').write_text('RGQ5\n')
             def op(img, action, expected, ticket=None, code=0):
@@ -154,6 +160,22 @@ def main():
             op(failed_claim, 'enqueue', 'fifo/ticket-unknown', c, 1)
             op(image, 'enqueue', 'fifo/ticket-used', c, 1)
             op(image, 'front', 'fifo/empty')
+            original_marker = (q / ('queue.used.' + a)).read_bytes()
+            op(false_missing_image, 'enqueue', 'fifo/ticket-unknown', a, 1)
+            if (q / ('queue.used.' + a)).read_bytes() != original_marker:
+                raise ValueError('no-replace claim overwrote existing marker')
+            print('PASS false missing lookup cannot replace existing marker')
+            marker = q / ('queue.used.' + a)
+            marker.chmod(0o200)
+            try:
+                result = run([image, '/q', 'enqueue', a], 1).decode().strip()
+                if result not in ('fifo/ticket-used', 'fifo/ticket-unknown'):
+                    raise ValueError(('unreadable marker result', result))
+            finally:
+                marker.chmod(0o600)
+            if marker.read_bytes() != original_marker:
+                raise ValueError('unreadable marker overwritten')
+            print('PASS write-only existing marker not overwritten:', result)
             for phase, paused_image in pause_images.items():
                 case = root / phase; case.mkdir()
                 (case / 'queue.lock').write_text(''); (case / 'queue').write_text('RGQ5\n')
@@ -163,7 +185,7 @@ def main():
                 try:
                     if not select.select([child.stdout], [], [], 8)[0] or os.read(child.stdout.fileno(), 1) != b'\0':
                         raise RuntimeError('claim pause not reached: ' + phase)
-                    marker = case / ('queue.used.' + c)
+                    marker = case / (('queue.claim.' if phase == 'after-write' else 'queue.used.') + c)
                     if marker.read_text() != 'RGU1\n' + c + '\n' or (case / 'queue').read_text() != 'RGQ5\n':
                         raise ValueError('unexpected pre-kill claim state: ' + phase)
                     if child.poll() is not None:
@@ -175,12 +197,14 @@ def main():
                     if child.poll() is None:
                         child.kill(); child.wait(timeout=3)
                     child.stdout.close(); child.stderr.close()
-                result = run([image, '/' + phase, 'enqueue', c], 1).decode().strip()
-                if result != 'fifo/ticket-used' or (case / 'queue').read_text() != 'RGQ5\n':
+                result = run([image, '/' + phase, 'enqueue', c], 0 if phase == 'after-write' else 1).decode().strip()
+                expected = 'fifo/enqueued' if phase == 'after-write' else 'fifo/ticket-used'
+                expected_queue = 'RGQ5\n' + (c + '\n' if phase == 'after-write' else '')
+                if result != expected or (case / 'queue').read_text() != expected_queue:
                     raise ValueError(('post-kill retry', phase, result))
-                print('PASS claim owner killed at', phase, '; retry refused', flush=True)
+                print('PASS claim owner killed at', phase, '; retry', result, flush=True)
             op(bypass_image, 'enqueue', 'fifo/enqueued', a)
-            print('PASS used-marker guard bypass admitted a reused ticket')
+            print('PASS lookup and no-replace bypass admitted a reused ticket')
             (q / 'queue').write_text('RGQ4\n')
             op(image, 'front', 'fifo/state-invalid', code=1)
             print('PASS prior and older tickets refused; failed claim remains burned; old/new formats refuse')
