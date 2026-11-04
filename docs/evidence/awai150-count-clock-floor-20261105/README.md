@@ -33,6 +33,16 @@ Darwin compiler, but was not run as a full resident. Other dependencies in
 these fixtures are historical or stubbed; the scripts use local absolute paths
 and a historical temporary fixture. They are not deployment commands.
 
+The count submission now checks its pre-submit sample against the last known
+floor, saves the sample before submission, and starts count polling from the
+later of that floor and the original start. `submission.py` executes the
+actual `pr-count` with stubbed I/O: the normal sample submits, while a
+rollback above the original start does not submit and leaves the floor intact.
+A mutant that compares against the original start fails. The generated source
+SHA-256 was `e091c8b912cf4696550bd3a02794edbc243288334f33b891afc5fb4c30719066`.
+The post-query diagnostic additionally checks a rollback between submission
+and polling and rejects a mutant that ignores the shared floor.
+
 This does not qualify the actual clock provider or monotonicity, protect
 against clock changes between observations, retain the floor across crashes,
 bound an in-flight query, fence the remote receiver, verify a real lease or

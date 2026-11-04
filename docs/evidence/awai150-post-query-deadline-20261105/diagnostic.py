@@ -23,11 +23,11 @@ pre=r'''(ns post-query-fixture (:export [main]))
 (defn- pr-flint-busy-release [c :string i :string t :string n :string] :bool (mark "released"))
 '''
 main=r'''(defn main [] :i64
- (let [mode (typed-cap-call 38 :string :string "0") slow (= mode "slow") reading (= mode "slow-read") back (= mode "back") backread (= mode "back-read")
+ (let [mode (typed-cap-call 38 :string :string "0") slow (= mode "slow") reading (= mode "slow-read") back (= mode "back") backread (= mode "back-read") floor (= mode "floor")
        unit (cond slow "slow" back "back" :else "fast") path (cond reading "slow-read" backread "back-read" :else "ok")
-       clock [0] count (pr-count-wait unit path 100000 110000 10 clock)
-       expected (if (or slow reading back backread) -1 20)]
-  (if (and (= count expected) (= (vector-at clock 0) (if (= count 20) 100000 0))) 0 1)))'''
+       clock [(if floor 101000 0)] count (pr-count-wait unit path 100000 110000 10 clock)
+       expected (if (or slow reading back backread floor) -1 20)]
+  (if (and (= count expected) (= (vector-at clock 0) (if floor 101000 (if (= count 20) 100000 0)))) 0 1)))'''
 main2=r'''(defn main [] :i64
  (let [mode (typed-cap-call 38 :string :string "0") slow (= mode "slow") reading (= mode "slow-read") back (= mode "back") backread (= mode "back-read") nonflint (= mode "nonflint")
        unit (cond (or slow nonflint) "slow" back "back" :else "fast") path (cond reading "slow-read" backread "back-read" :else "ok")
@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix='awai-flint-query-deadline-',dir='/priva
   run([pack,name+'-unsigned.macho',name+'.raw','fs2-cli-stdio-general',m[1].decode()]);p=root/(name+'.macho');shutil.copyfile(root/(name+'-unsigned.macho'),p);p.chmod(0o700);subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(p)],check=True,capture_output=True);return p
  for name,entry in [('count',main),('generation',main2)]:
   img=build(name,base+entry)
-  for mode in (('fast','slow','slow-read','back','back-read','nonflint') if name=='generation' else ('fast','slow','slow-read','back','back-read')):
+  for mode in (('fast','slow','slow-read','back','back-read','nonflint') if name=='generation' else ('fast','slow','slow-read','back','back-read','floor')):
    (root/'mark').unlink(missing_ok=True);(root/'back').unlink(missing_ok=True);run([img,mode]);print('PASS',name,mode,flush=True)
   q='(< (pr-window-seconds now deadline after-query seconds) 1)'; assert base.count(q)==2
   muttext=(base+entry).replace(q,'false').replace('(> (pr-window-seconds after-query deadline after-read seconds) 0)','true').replace('(> (pr-window-seconds after-query deadline (pr-wall-ms) seconds) 0)','true')
@@ -67,6 +67,12 @@ with tempfile.TemporaryDirectory(prefix='awai-flint-query-deadline-',dir='/priva
   for mode in ('slow','slow-read','back','back-read'):
    (root/'mark').unlink(missing_ok=True);(root/'back').unlink(missing_ok=True);run([mutant,mode],1);print('PASS',name,mode,'deadline guard mutant refused',flush=True)
   print('SOURCE_SHA',name,hashlib.sha256((base+entry).encode()).hexdigest(),flush=True)
+  if name=='count':
+   target='(loop [i 0 last (if (> (vector-at clock 0) started) (vector-at clock 0) started)]'
+   assert (base+entry).count(target)==1
+   mutant=build('count-floor-mutant',(base+entry).replace(target,'(loop [i 0 last started]'))
+   (root/'mark').unlink(missing_ok=True);(root/'back').unlink(missing_ok=True);run([mutant,'floor'],1)
+   print('PASS count floor rollback mutant refused',flush=True)
  img=build('occupancy',base+main3)
  for mode in ('negative-count','positive-count','negative-generation','positive-generation'):
   (root/'released').unlink(missing_ok=True);run([img,mode]);print('PASS occupancy',mode,flush=True)

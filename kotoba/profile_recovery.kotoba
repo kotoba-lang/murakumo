@@ -277,7 +277,7 @@
         (json-int b i) -1))))
 
 (defn- pr-count-wait [unit :string response :string started :i64 deadline :i64 seconds :i64 clock :vector-i64] :i64
-  (loop [i 0 last started]
+  (loop [i 0 last (if (> (vector-at clock 0) started) (vector-at clock 0) started)]
     ;; Expiry or an unknown clock is not proof that the unit stopped. The
     ;; caller keeps the busy marker and requires host reconciliation.
     (let [now (pr-wall-ms)]
@@ -342,8 +342,12 @@
           decision (if known (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
           submitted (cond (= decision "profile/reuse-unit") true
                           (= decision "profile/new-unit") (and (not reuse-only) (pr-prepare-submit request marker body)
-                            (let [remaining (pr-window-seconds started deadline (pr-wall-ms) seconds)]
-                              (and (> remaining 0) (pr-submit-kind unit request response remaining runtime true))))
+                            (let [now (pr-wall-ms)
+                                  floor (if (> (vector-at clock 0) started) (vector-at clock 0) started)
+                                  remaining (pr-window-seconds floor deadline now seconds)]
+                              (if (> remaining 0)
+                                (let [saved (vector-assoc! clock 0 now)]
+                                  (pr-submit-kind unit request response remaining runtime true)) false)))
                           :else false)]
       (if submitted (pr-count-wait unit response started deadline seconds clock) -1))))
 
