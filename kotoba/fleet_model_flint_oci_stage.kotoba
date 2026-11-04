@@ -97,6 +97,27 @@
         b (if (mp-mode? path "384" "0") (ma-read path 16384) (ol-failed))]
     (fk-manifest-valid? b base-size experts-size sizes)))
 
+;; Restrict shard references to the two files in this pinned Flint profile.
+;; This is not safetensors header/tensor validation or a loader grant.
+(defn- fk-index-valid? [b :vector-i64] :bool
+  (if (or (not (ol-read-ok? b)) (= (vector-count b) 0) (> (vector-count b) 1048576)
+          (not (json-valid? b))) false
+    (let [root (ol-root b) mapping (if (= (json-kind b root) 1) (json-member b root "weight_map") -1)]
+      (if (or (< mapping 0) (not (= (json-kind b mapping) 1))) false
+        (loop [i (jr-skip b (+ mapping 1)) seen 0]
+          (if (not (= (jr-at b i) 34)) false
+            (let [end (jr-skip-string b i) colon (jr-skip b end) value (jr-skip b (+ colon 1))
+                  shard (if (= (json-kind b value) 3) (json-string b value) "")
+                  kind (cond (= shard "model.safetensors") 1 (= shard "experts.safetensors") 2 :else 0)
+                  next (jr-skip b (jr-skip-value b value)) sep (jr-at b next)
+                  updated (bit-or seen kind)]
+              (if (or (= kind 0) (<= end (+ i 2))) false
+                (cond (= sep 125) (= updated 3)
+                      (= sep 44) (recur (jr-skip b (+ next 1)) updated)
+                      :else false)))))))))
+(defn- fk-stage-index? [stage :string] :bool
+  (fk-index-valid? (ma-read (str stage "/model.safetensors.index.json") 1048576)))
+
 ;; Stage only, never publish or approve loading. Independent directory
 ;; inventory, complete Kapitsa semantics, publication and recovery are absent.
 (defn model-flint-oci-stage-main [] :i64
@@ -112,7 +133,7 @@
                    (if (not (= staged "flint-assets/staged")) "flint-artifact/staging-unknown"
                      (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
                               (tw-copy (ol-blob-path layout experts) (str stage "/experts.safetensors") experts experts-size)
-                              (fk-stage-manifest? stage base-size experts-size)
+                              (fk-stage-manifest? stage base-size experts-size) (fk-stage-index? stage)
                               (= (ta-fs "M" stage "") "1"))
                        "flint-artifact/staged-file-list-verified" "flint-artifact/staging-unknown"))))
         x (md-out result)]

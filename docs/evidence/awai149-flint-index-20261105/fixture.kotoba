@@ -1,0 +1,1910 @@
+(ns oci-size-full-check (:export [main]))
+(defn u32 [x :i64] :i64 (if (neg? x) (+ x 4294967296) x))
+
+;; ---------------------------------------------------------------------------
+;; Words
+
+(defn- s2-m32 [x :i64] :i64 (bit-and x 4294967295))
+
+(defn- s2-rotr [x :i64 n :i64] :i64
+  (s2-m32 (bit-or (u64-shift-right x n) (i64-shift-left x (- 32 n)))))
+
+(defn- s2-k [] :vector-i64
+  [1116352408 1899447441 3049323471 3921009573 961987163 1508970993 2453635748 2870763221
+   3624381080 310598401 607225278 1426881987 1925078388 2162078206 2614888103 3248222580
+   3835390401 4022224774 264347078 604807628 770255983 1249150122 1555081692 1996064986
+   2554220882 2821834349 2952996808 3210313671 3336571891 3584528711 113926993 338241895
+   666307205 773529912 1294757372 1396182291 1695183700 1986661051 2177026350 2456956037
+   2730485921 2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344
+   430227734 506948616 659060556 883997877 958139571 1322822218 1537002063 1747873779
+   1955562222 2024104815 2227730452 2361852424 2428436474 2756734187 3204031479 3329325298])
+
+;; FIPS 180-4 5.3.3 (SHA-256) and 5.3.2 (SHA-224)
+(defn- s2-iv [words :i64] :vector-i64
+  (if (= words 7)
+    [3238371032 914150663 812702999 4144912697 4290775857 1750603025 1694076839 3204075428]
+    [1779033703 3144134277 1013904242 2773480762 1359893119 2600822924 528734635 1541459225]))
+
+;; ---------------------------------------------------------------------------
+;; Padding, read in place (5.1.1): the message, 128, zeros, then the length in
+;; bits as a 64-bit big-endian integer; total is a multiple of 64.
+
+(defn- s2-total [n :i64] :i64 (* (quot (+ n 72) 64) 64))
+
+(defn- s2-byte [data :vector-i64 i :i64 total :i64] :i64
+  (let [n (vector-count data)]
+    (cond (< i n) (vector-at data i)
+          (= i n) 128
+          (< i (- total 8)) 0
+          :else (bit-and (u64-shift-right (* n 8) (* (- (- total 1) i) 8)) 255))))
+
+;; ---------------------------------------------------------------------------
+;; One block. The work vector holds the hash state at 0..7, the working
+;; variables at 8..15 and the schedule at 16..79.
+
+(defn- s2-work [state :vector-i64] :vector-i64
+  (loop [i 0 out (vector-alloc 80)]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (vector-at state i))))))
+
+(defn- s2-load [w :vector-i64 data :vector-i64 start :i64 total :i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 16) out
+      (let [p (+ start (* i 4))
+            x (bit-or (bit-or (i64-shift-left (s2-byte data p total) 24)
+                              (i64-shift-left (s2-byte data (+ p 1) total) 16))
+                      (bit-or (i64-shift-left (s2-byte data (+ p 2) total) 8)
+                              (s2-byte data (+ p 3) total)))]
+        (recur (+ i 1) (vector-assoc! out (+ 16 i) x))))))
+
+(defn- s2-expand [w :vector-i64] :vector-i64
+  (loop [t 16 out w]
+    (if (= t 64) out
+      (let [w15 (vector-at out (+ 16 (- t 15)))
+            w2 (vector-at out (+ 16 (- t 2)))
+            s0 (bit-xor (bit-xor (s2-rotr w15 7) (s2-rotr w15 18)) (u64-shift-right w15 3))
+            s1 (bit-xor (bit-xor (s2-rotr w2 17) (s2-rotr w2 19)) (u64-shift-right w2 10))
+            x (s2-m32 (+ (+ (vector-at out (+ 16 (- t 16))) s0) (+ (vector-at out (+ 16 (- t 7))) s1)))]
+        (recur (+ t 1) (vector-assoc! out (+ 16 t) x))))))
+
+(defn- s2-begin [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out (+ 8 i) (vector-at out i))))))
+
+(defn- s2-rounds [w :vector-i64 k :vector-i64] :vector-i64
+  (loop [t 0 out w]
+    (if (= t 64) out
+      (let [a (vector-at out 8) b (vector-at out 9) c (vector-at out 10) d (vector-at out 11)
+            e (vector-at out 12) f (vector-at out 13) g (vector-at out 14) h (vector-at out 15)
+            big1 (bit-xor (bit-xor (s2-rotr e 6) (s2-rotr e 11)) (s2-rotr e 25))
+            ch (bit-xor (bit-and e f) (bit-and (s2-m32 (bit-not e)) g))
+            t1 (s2-m32 (+ (+ h big1) (+ ch (+ (vector-at k t) (vector-at out (+ 16 t))))))
+            big0 (bit-xor (bit-xor (s2-rotr a 2) (s2-rotr a 13)) (s2-rotr a 22))
+            maj (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c))
+            t2 (s2-m32 (+ big0 maj))
+            next (-> out (vector-assoc! 15 g) (vector-assoc! 14 f) (vector-assoc! 13 e)
+                         (vector-assoc! 12 (s2-m32 (+ d t1))) (vector-assoc! 11 c) (vector-assoc! 10 b)
+                         (vector-assoc! 9 a) (vector-assoc! 8 (s2-m32 (+ t1 t2))))]
+        (recur (+ t 1) next)))))
+
+(defn- s2-add [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (s2-m32 (+ (vector-at out i) (vector-at out (+ 8 i)))))))))
+
+(defn- s2-out [w :vector-i64 words :i64] :vector-i64
+  (loop [i 0 out (vector-alloc (* words 4))]
+    (if (= i (* words 4)) out
+      (recur (+ i 1) (vector-assoc! out i (bit-and (u64-shift-right (vector-at w (quot i 4)) (* (- 3 (rem i 4)) 8)) 255))))))
+
+(defn- s2-digest [words :i64 data :vector-i64] :vector-i64
+  (let [total (s2-total (vector-count data)) k (s2-k)]
+    (loop [start 0 w (s2-work (s2-iv words))]
+      (if (>= start total) (s2-out w words)
+        (recur (+ start 64) (s2-add (s2-rounds (s2-begin (s2-expand (s2-load w data start total))) k)))))))
+
+(defn sha256 [data :vector-i64] :vector-i64 (s2-digest 8 data))
+
+(defn sha224 [data :vector-i64] :vector-i64 (s2-digest 7 data))
+
+;; ---------------------------------------------------------------------------
+;; Hex
+
+(defn- s2-nibble [v :i64] :string
+  (case v 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7"
+          8 "8" 9 "9" 10 "a" 11 "b" 12 "c" 13 "d" 14 "e" "f"))
+
+(defn hex [bytes :vector-i64] :string
+  (loop [i 0 out ""]
+    (if (= i (vector-count bytes)) out
+      (let [b (vector-at bytes i)]
+        (recur (+ i 1) (string-concat out (string-concat (s2-nibble (quot b 16)) (s2-nibble (rem b 16)))))))))
+
+(defn sha256-hex [data :vector-i64] :string (hex (sha256 data)))
+
+(defn sha224-hex [data :vector-i64] :string (hex (sha224 data)))
+
+;; ---------------------------------------------------------------------------
+;; HMAC (FIPS 198-1): K0 is the key hashed when longer than the block, then
+;; zero-padded to 64 bytes; H((K0 ^ opad) || H((K0 ^ ipad) || message)).
+
+(defn- s2-pad-xor [key :vector-i64 x :i64 extra :i64] :vector-i64
+  (loop [i 0 out (vector-alloc (+ 64 extra))]
+    (if (= i 64) out
+      (recur (+ i 1) (vector-assoc! out i (bit-xor (if (< i (vector-count key)) (vector-at key i) 0) x))))))
+
+(defn- s2-after [head :vector-i64 tail :vector-i64] :vector-i64
+  (loop [i 0 out head]
+    (if (= i (vector-count tail)) out (recur (+ i 1) (vector-assoc! out (+ 64 i) (vector-at tail i))))))
+
+(defn hmac-sha256 [key :vector-i64 message :vector-i64] :vector-i64
+  (let [k0 (if (> (vector-count key) 64) (sha256 key) key)
+        inner (sha256 (s2-after (s2-pad-xor k0 54 (vector-count message)) message))]
+    (sha256 (s2-after (s2-pad-xor k0 92 32) inner))))
+
+(defn hmac-sha256-hex [key :vector-i64 message :vector-i64] :string (hex (hmac-sha256 key message)))
+
+(defn- jr-at [b :vector-i64 i :i64] :i64 (if (and (>= i 0) (< i (vector-count b))) (vector-at b i) -1))
+(defn- jr-ws? [c :i64] :bool (or (= c 32) (= c 9) (= c 10) (= c 13)))
+(defn- jr-skip [b :vector-i64 i :i64] :i64 (loop [j i] (if (jr-ws? (jr-at b j)) (recur (+ j 1)) j)))
+(defn- jr-digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+(defn- jr-cont? [c :i64] :bool (and (>= c 128) (<= c 191)))
+(defn- jr-digits [b :vector-i64 j :i64] :i64 (loop [k j] (if (jr-digit? (jr-at b k)) (recur (+ k 1)) k)))
+(defn- jr-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- jr-hex [c :i64] :i64
+  (cond (jr-digit? c) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        (and (>= c 65) (<= c 70)) (- c 55)
+        :else -1))
+
+(defn- jr-hex4 [b :vector-i64 k :i64] :i64
+  (let [a (jr-hex (jr-at b k)) c (jr-hex (jr-at b (+ k 1))) d (jr-hex (jr-at b (+ k 2))) e (jr-hex (jr-at b (+ k 3)))]
+    (if (or (< a 0) (< c 0) (< d 0) (< e 0)) -1 (+ (* a 4096) (+ (* c 256) (+ (* d 16) e))))))
+
+;; the width of the UTF-8 sequence at j (lead byte 0x80 or above), or -1
+(defn- jr-utf8 [b :vector-i64 j :i64] :i64
+  (let [c (jr-at b j) c1 (jr-at b (+ j 1)) c2 (jr-at b (+ j 2)) c3 (jr-at b (+ j 3))]
+    (cond (and (>= c 194) (<= c 223)) (if (jr-cont? c1) 2 -1)
+          (= c 224) (if (and (>= c1 160) (<= c1 191) (jr-cont? c2)) 3 -1)
+          (or (and (>= c 225) (<= c 236)) (= c 238) (= c 239)) (if (and (jr-cont? c1) (jr-cont? c2)) 3 -1)
+          (= c 237) (if (and (>= c1 128) (<= c1 159) (jr-cont? c2)) 3 -1)
+          (= c 240) (if (and (>= c1 144) (<= c1 191) (jr-cont? c2) (jr-cont? c3)) 4 -1)
+          (and (>= c 241) (<= c 243)) (if (and (jr-cont? c1) (jr-cont? c2) (jr-cont? c3)) 4 -1)
+          (= c 244) (if (and (>= c1 128) (<= c1 143) (jr-cont? c2) (jr-cont? c3)) 4 -1)
+          :else -1)))
+
+;; ---------------------------------------------------------------------------
+;; Tokens
+
+;; the escape at j (b[j] is the backslash): the index after it, or -1
+(defn- jr-escape [b :vector-i64 j :i64] :i64
+  (let [c (jr-at b (+ j 1))]
+    (cond (or (= c 34) (= c 92) (= c 47) (= c 98) (= c 102) (= c 110) (= c 114) (= c 116)) (+ j 2)
+          (= c 117)
+          (let [u (jr-hex4 b (+ j 2))]
+            (cond (< u 0) -1
+                  (and (>= u 55296) (<= u 56319))
+                  (if (and (= (jr-at b (+ j 6)) 92) (= (jr-at b (+ j 7)) 117))
+                    (let [v (jr-hex4 b (+ j 8))] (if (and (>= v 56320) (<= v 57343)) (+ j 12) -1))
+                    -1)
+                  (and (>= u 56320) (<= u 57343)) -1
+                  :else (+ j 6)))
+          :else -1)))
+
+;; the string at i (b[i] is the quote): the index after its closing quote,
+;; -3 when it is malformed, -6 when keys? and it holds an escape
+(defn- jr-str [b :vector-i64 i :i64 keys? :bool] :i64
+  (loop [j (+ i 1)]
+    (let [c (jr-at b j)]
+      (cond (< c 0) -3
+            (= c 34) (+ j 1)
+            (< c 32) -3
+            (= c 92) (if keys? -6 (let [e (jr-escape b j)] (if (< e 0) -3 (recur e))))
+            (< c 128) (recur (+ j 1))
+            :else (let [w (jr-utf8 b j)] (if (< w 0) -3 (recur (+ j w))))))))
+
+(defn- jr-number [b :vector-i64 i :i64] :i64
+  (let [j0 (if (= (jr-at b i) 45) (+ i 1) i)
+        c (jr-at b j0)
+        j1 (cond (= c 48) (+ j0 1) (and (>= c 49) (<= c 57)) (jr-digits b (+ j0 1)) :else -1)]
+    (if (< j1 0) -4
+      (let [j2 (if (= (jr-at b j1) 46) (if (jr-digit? (jr-at b (+ j1 1))) (jr-digits b (+ j1 2)) -1) j1)]
+        (if (< j2 0) -4
+          (let [e (jr-at b j2)]
+            (if (or (= e 101) (= e 69))
+              (let [k (if (or (= (jr-at b (+ j2 1)) 43) (= (jr-at b (+ j2 1)) 45)) (+ j2 2) (+ j2 1))]
+                (if (jr-digit? (jr-at b k)) (jr-digits b (+ k 1)) -4))
+              j2)))))))
+
+(defn- jr-lit [b :vector-i64 i :i64 lit :string] :i64
+  (let [l (jr-bytes lit)]
+    (loop [k 0] (if (= k (vector-count l)) (+ i k) (if (= (jr-at b (+ i k)) (vector-at l k)) (recur (+ k 1)) -1)))))
+
+;; the scalar or string token at i: its end, or a negative reason
+(defn- jr-scalar [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (cond (= c 34) (jr-str b i false)
+          (or (= c 45) (jr-digit? c)) (jr-number b i)
+          (= c 116) (jr-lit b i "true")
+          (= c 102) (jr-lit b i "false")
+          (= c 110) (jr-lit b i "null")
+          :else -1)))
+
+;; ---------------------------------------------------------------------------
+;; Skipping over text already validated
+
+(defn- jr-skip-string [b :vector-i64 i :i64] :i64
+  (loop [j (+ i 1)] (let [c (vector-at b j)] (cond (= c 34) (+ j 1) (= c 92) (recur (+ j 2)) :else (recur (+ j 1))))))
+
+(defn- jr-skip-value [b :vector-i64 i :i64] :i64
+  (let [c (vector-at b i)]
+    (cond (= c 34) (jr-skip-string b i)
+          (or (= c 123) (= c 91))
+          (loop [j (+ i 1) d 1]
+            (let [x (vector-at b j)]
+              (cond (= x 34) (recur (jr-skip-string b j) d)
+                    (or (= x 123) (= x 91)) (recur (+ j 1) (+ d 1))
+                    (or (= x 125) (= x 93)) (if (= d 1) (+ j 1) (recur (+ j 1) (- d 1)))
+                    :else (recur (+ j 1) d))))
+          :else (loop [j i] (let [x (jr-at b j)] (if (or (< x 0) (= x 44) (= x 125) (= x 93) (jr-ws? x)) j (recur (+ j 1))))))))
+
+;; do the bytes between the quotes of the strings at [a, ae) and [c, ce) agree?
+(defn- jr-span=? [b :vector-i64 a :i64 ae :i64 c :i64 ce :i64] :bool
+  (if (not (= (- ae a) (- ce c))) false
+    (loop [k 0] (if (= k (- ae a)) true (if (= (vector-at b (+ a k)) (vector-at b (+ c k))) (recur (+ k 1)) false)))))
+
+;; does the object at obj already have, before ks, a key equal to [ks, ke)?
+(defn- jr-dup? [b :vector-i64 obj :i64 ks :i64 ke :i64] :bool
+  (loop [j (jr-skip b (+ obj 1))]
+    (if (>= j ks) false
+      (let [e (jr-skip-string b j)]
+        (if (jr-span=? b j e ks ke) true
+          (let [v (jr-skip b (+ (jr-skip b e) 1)) n (jr-skip b (jr-skip-value b v))]
+            (recur (jr-skip b (+ n 1)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Validation: one loop, an explicit stack of container kinds (1 object,
+;; 2 array) and object starts. Modes: 0 a value, 1 after a value, 2 a key,
+;; 3 a key or }, 4 a value or ].
+
+(defn json-end [b :vector-i64 start :i64] :i64
+  (let [kinds (vector-alloc 65) objs (vector-alloc 65)]
+    (loop [i start sp 0 mode 0]
+      (cond
+        (= mode 0)
+        (let [c (jr-at b i)]
+          (cond (or (= c 123) (= c 91))
+                (if (>= sp 64) -2
+                  (let [z (vector-assoc! kinds sp (if (= c 123) 1 2)) y (vector-assoc! objs sp i)]
+                    (recur (jr-skip b (+ i 1)) (+ sp 1) (if (= c 123) 3 4))))
+                :else (let [e (jr-scalar b i)] (if (< e 0) e (recur e sp 1)))))
+        (= mode 1)
+        (if (= sp 0) i
+          (let [j (jr-skip b i) c (jr-at b j) k (vector-at kinds (- sp 1))]
+            (cond (= c 44) (recur (jr-skip b (+ j 1)) sp (if (= k 1) 2 0))
+                  (and (= c 125) (= k 1)) (recur (+ j 1) (- sp 1) 1)
+                  (and (= c 93) (= k 2)) (recur (+ j 1) (- sp 1) 1)
+                  :else -1)))
+        (or (= mode 2) (= mode 3))
+        (let [c (jr-at b i)]
+          (cond (and (= mode 3) (= c 125)) (recur (+ i 1) (- sp 1) 1)
+                (= c 34)
+                (let [e (jr-str b i true)]
+                  (cond (< e 0) e
+                        (jr-dup? b (vector-at objs (- sp 1)) i e) -5
+                        :else (let [j (jr-skip b e)] (if (= (jr-at b j) 58) (recur (jr-skip b (+ j 1)) sp 0) -1))))
+                :else -1))
+        :else (if (= (jr-at b i) 93) (recur (+ i 1) (- sp 1) 1) (recur i sp 0))))))
+
+(defn json-valid? [b :vector-i64] :bool
+  (let [s (jr-skip b 0) e (json-end b s)]
+    (and (>= e 0) (= (jr-skip b e) (vector-count b)))))
+
+;; ---------------------------------------------------------------------------
+;; Navigation (over a document json-valid? accepted)
+
+(defn json-kind [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (cond (= c 123) 1 (= c 91) 2 (= c 34) 3 (or (= c 45) (jr-digit? c)) 4
+          (= c 116) 5 (= c 102) 6 (= c 110) 7 :else 0)))
+
+(defn json-member [b :vector-i64 obj :i64 key :string] :i64
+  (if (not (= (jr-at b obj) 123)) -1
+    (let [k (jr-bytes key)]
+      (loop [j (jr-skip b (+ obj 1))]
+        (if (not (= (jr-at b j) 34)) -1
+          (let [e (jr-skip-string b j)
+                v (jr-skip b (+ (jr-skip b e) 1))
+                same (and (= (- (- e j) 2) (vector-count k))
+                          (loop [m 0] (if (= m (vector-count k)) true (if (= (vector-at b (+ (+ j 1) m)) (vector-at k m)) (recur (+ m 1)) false))))]
+            (if same v
+              (let [n (jr-skip b (jr-skip-value b v))]
+                (if (= (jr-at b n) 44) (recur (jr-skip b (+ n 1))) -1)))))))))
+
+(defn json-element [b :vector-i64 arr :i64 n :i64] :i64
+  (if (or (not (= (jr-at b arr) 91)) (< n 0)) -1
+    (loop [j (jr-skip b (+ arr 1)) k 0]
+      (if (= (jr-at b j) 93) -1
+        (if (= k n) j
+          (let [m (jr-skip b (jr-skip-value b j))]
+            (if (= (jr-at b m) 44) (recur (jr-skip b (+ m 1)) (+ k 1)) -1)))))))
+
+(defn json-count [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (if (not (or (= c 123) (= c 91))) 0
+      (let [j0 (jr-skip b (+ i 1))]
+        (if (or (= (jr-at b j0) 125) (= (jr-at b j0) 93)) 0
+          (loop [j j0 n 1]
+            (let [v (if (= c 123) (jr-skip b (+ (jr-skip b (jr-skip-string b j)) 1)) j)
+                  m (jr-skip b (jr-skip-value b v))]
+              (if (= (jr-at b m) 44) (recur (jr-skip b (+ m 1)) (+ n 1)) n))))))))
+
+;; ---------------------------------------------------------------------------
+;; Decoding
+
+(defn- jr-unescape [d :i64] :i64
+  (cond (= d 98) 8 (= d 102) 12 (= d 110) 10 (= d 114) 13 (= d 116) 9 :else d))
+
+(defn- jr-put-utf8 [out :vector-i64 n :i64 cp :i64] :i64
+  (cond (< cp 128) (let [z (vector-assoc! out n cp)] (+ n 1))
+        (< cp 2048) (let [z (vector-assoc! out n (+ 192 (quot cp 64))) y (vector-assoc! out (+ n 1) (+ 128 (rem cp 64)))] (+ n 2))
+        (< cp 65536) (let [z (vector-assoc! out n (+ 224 (quot cp 4096))) y (vector-assoc! out (+ n 1) (+ 128 (rem (quot cp 64) 64)))
+                           x (vector-assoc! out (+ n 2) (+ 128 (rem cp 64)))] (+ n 3))
+        :else (let [z (vector-assoc! out n (+ 240 (quot cp 262144))) y (vector-assoc! out (+ n 1) (+ 128 (rem (quot cp 4096) 64)))
+                    x (vector-assoc! out (+ n 2) (+ 128 (rem (quot cp 64) 64))) w (vector-assoc! out (+ n 3) (+ 128 (rem cp 64)))] (+ n 4))))
+
+(defn json-string-bytes [b :vector-i64 i :i64] :vector-i64
+  (let [e (jr-skip-string b i) out (vector-alloc (- e i))
+        n (loop [j (+ i 1) n 0]
+            (if (>= j (- e 1)) n
+              (let [c (vector-at b j)]
+                (if (= c 92)
+                  (let [d (vector-at b (+ j 1))]
+                    (if (= d 117)
+                      (let [u (jr-hex4 b (+ j 2))
+                            pair (and (>= u 55296) (<= u 56319))
+                            cp (if pair (+ 65536 (+ (* (- u 55296) 1024) (- (jr-hex4 b (+ j 8)) 56320))) u)]
+                        (recur (+ j (if pair 12 6)) (jr-put-utf8 out n cp)))
+                      (let [z (vector-assoc! out n (jr-unescape d))] (recur (+ j 2) (+ n 1)))))
+                  (let [z (vector-assoc! out n c)] (recur (+ j 1) (+ n 1)))))))]
+    (loop [k 0 r (vector-alloc n)] (if (= k n) r (recur (+ k 1) (vector-assoc! r k (vector-at out k)))))))
+
+(defn json-string [b :vector-i64 i :i64] :string (string-from-utf8 (bytes-from-vector-i64 (json-string-bytes b i))))
+
+(defn json-int-ok? [b :vector-i64 i :i64] :bool
+  (let [j0 (if (= (jr-at b i) 45) (+ i 1) i) e (jr-digits b j0) x (jr-at b e)]
+    (and (jr-digit? (jr-at b j0)) (not (= x 46)) (not (= x 101)) (not (= x 69)) (<= (- e j0) 16)
+         (<= (loop [k j0 v 0] (if (= k e) v (recur (+ k 1) (+ (* v 10) (- (vector-at b k) 48))))) 9007199254740991))))
+
+(defn json-int [b :vector-i64 i :i64] :i64
+  (let [neg (= (jr-at b i) 45) j0 (if neg (+ i 1) i) e (jr-digits b j0)
+        v (loop [k j0 v 0] (if (= k e) v (recur (+ k 1) (+ (* v 10) (- (vector-at b k) 48)))))]
+    (if neg (- 0 v) v)))
+
+;; ---------------------------------------------------------------------------
+;; Canonical form
+
+;; the escapes JSON.stringify writes: \" \\ \b \f \n \r \t, and \u00xx in
+;; lowercase for the other control bytes; nothing else
+(defn- jr-canon-string? [b :vector-i64 i :i64 e :i64] :bool
+  (loop [j (+ i 1)]
+    (if (>= j (- e 1)) true
+      (if (= (vector-at b j) 92)
+        (let [d (vector-at b (+ j 1))]
+          (cond (or (= d 34) (= d 92) (= d 98) (= d 102) (= d 110) (= d 114) (= d 116)) (recur (+ j 2))
+                (= d 117)
+                (let [u (jr-hex4 b (+ j 2))
+                      lower (loop [k 2] (if (= k 6) true (let [h (vector-at b (+ j k))] (if (and (>= h 65) (<= h 70)) false (recur (+ k 1))))))]
+                  (if (and lower (< u 32) (not (= u 8)) (not (= u 9)) (not (= u 10)) (not (= u 12)) (not (= u 13)))
+                    (recur (+ j 6)) false))
+                :else false))
+        (recur (+ j 1))))))
+
+;; a key for the canonical form: ASCII, not all digits
+(defn- jr-canon-key? [b :vector-i64 i :i64 e :i64] :bool
+  (loop [j (+ i 1) digits true]
+    (if (>= j (- e 1)) (not digits)
+      (let [c (vector-at b j)] (if (>= c 128) false (recur (+ j 1) (and digits (jr-digit? c))))))))
+
+;; is the key [c, ce) after the key [a, ae), byte by byte?
+(defn- jr-after? [b :vector-i64 a :i64 ae :i64 c :i64 ce :i64] :bool
+  (loop [k 1]
+    (let [x (if (< (+ a k) (- ae 1)) (vector-at b (+ a k)) -1) y (if (< (+ c k) (- ce 1)) (vector-at b (+ c k)) -1)]
+      (cond (and (< x 0) (< y 0)) false
+            (= x y) (recur (+ k 1))
+            :else (> y x)))))
+
+(defn- jr-canon-number? [b :vector-i64 i :i64 e :i64] :bool
+  (and (json-int-ok? b i) (= (jr-digits b (if (= (vector-at b i) 45) (+ i 1) i)) e)
+       (not (and (= (vector-at b i) 45) (= (vector-at b (+ i 1)) 48)))))
+
+;; one pass over a valid document. The stack holds, per open container, its
+;; kind, whether the next string is a key, and the previous key's span.
+(defn json-canonical? [b :vector-i64] :bool
+  (let [kinds (vector-alloc 65) want (vector-alloc 65) pa (vector-alloc 65) pe (vector-alloc 65)]
+    (loop [j 0 sp 0]
+      (if (= j (vector-count b)) true
+        (let [c (vector-at b j)]
+          (cond (jr-ws? c) false
+                (or (= c 123) (= c 91))
+                (let [z (vector-assoc! kinds sp (if (= c 123) 1 2)) y (vector-assoc! want sp (if (= c 123) 1 0)) x (vector-assoc! pa sp -1)]
+                  (recur (+ j 1) (+ sp 1)))
+                (or (= c 125) (= c 93)) (recur (+ j 1) (- sp 1))
+                (= c 44) (let [z (if (and (> sp 0) (= (vector-at kinds (- sp 1)) 1)) (vector-assoc! want (- sp 1) 1) want)] (recur (+ j 1) sp))
+                (= c 58) (recur (+ j 1) sp)
+                (= c 34)
+                (let [e (jr-skip-string b j)]
+                  (if (not (jr-canon-string? b j e)) false
+                    (if (and (> sp 0) (= (vector-at want (- sp 1)) 1))
+                      (let [d (- sp 1)]
+                        (if (and (jr-canon-key? b j e) (or (< (vector-at pa d) 0) (jr-after? b (vector-at pa d) (vector-at pe d) j e)))
+                          (let [z (vector-assoc! pa d j) y (vector-assoc! pe d e) x (vector-assoc! want d 0)] (recur e sp))
+                          false))
+                      (recur e sp))))
+                (or (= c 45) (jr-digit? c))
+                (let [e (jr-number b j)] (if (jr-canon-number? b j e) (recur e sp) false))
+                :else (recur (jr-skip-value b j) sp)))))))
+
+;; ---------------------------------------------------------------------------
+;; Canonical bytes: the RFC 8785 form of a value in a valid document, the
+;; bytes murakumo signs, emitted from the parse (members sorted, whitespace
+;; dropped, strings re-escaped, integers re-printed). The same domain as
+;; json-canonical?: a fraction or exponent, an integer beyond +-(2^53-1),
+;; or a non-ASCII or all-digit key has no canonical form here, and the
+;; answer is then no bytes. Canonical output is never longer than its input.
+
+(defn- jr-put [out :vector-i64 n :i64 c :i64] :i64 (let [z (vector-assoc! out n c)] (+ n 1)))
+
+(defn- jr-put-text [out :vector-i64 n :i64 s :string] :i64
+  (let [t (jr-bytes s)] (loop [k 0 m n] (if (= k (vector-count t)) m (recur (+ k 1) (jr-put out m (vector-at t k)))))))
+
+(defn- jr-hexd [v :i64] :i64 (if (< v 10) (+ v 48) (+ v 87)))
+
+;; decoded bytes, escaped the way RFC 8785 and JSON.stringify write them
+(defn- jr-put-string [out :vector-i64 n :i64 s :vector-i64] :i64
+  (let [m0 (jr-put out n 34)
+        m1 (loop [k 0 m m0]
+             (if (= k (vector-count s)) m
+               (let [c (vector-at s k)]
+                 (recur (+ k 1)
+                        (cond (= c 34) (jr-put out (jr-put out m 92) 34)
+                              (= c 92) (jr-put out (jr-put out m 92) 92)
+                              (= c 8) (jr-put out (jr-put out m 92) 98)
+                              (= c 12) (jr-put out (jr-put out m 92) 102)
+                              (= c 10) (jr-put out (jr-put out m 92) 110)
+                              (= c 13) (jr-put out (jr-put out m 92) 114)
+                              (= c 9) (jr-put out (jr-put out m 92) 116)
+                              (< c 32) (jr-put out (jr-put out (jr-put out (jr-put out (jr-put out (jr-put out m 92) 117) 48) 48)
+                                                                (jr-hexd (quot c 16))) (jr-hexd (rem c 16)))
+                              :else (jr-put out m c))))))]
+    (jr-put out m1 34)))
+
+;; members of an object, key starts in ks and value starts in vs, sorted by key
+(defn- jr-sort-members [b :vector-i64 ks :vector-i64 vs :vector-i64 m :i64] :i64
+  (loop [x 0]
+    (if (>= x m) 0
+      (let [best (loop [y (+ x 1) bi x]
+                   (if (= y m) bi
+                     (let [ky (vector-at ks y) kb (vector-at ks bi)]
+                       (recur (+ y 1) (if (jr-after? b ky (jr-skip-string b ky) kb (jr-skip-string b kb)) y bi)))))
+            k1 (vector-at ks x) v1 (vector-at vs x) k2 (vector-at ks best) v2 (vector-at vs best)
+            a (vector-assoc! ks x k2) c (vector-assoc! vs x v2) d (vector-assoc! ks best k1) e (vector-assoc! vs best v1)]
+        (recur (+ x 1))))))
+
+(defn- jr-emit [b :vector-i64 i :i64 out :vector-i64 n :i64] :i64
+  (let [k (json-kind b i)]
+    (cond (< n 0) n
+          (= k 1)
+          (let [m (json-count b i) ks (vector-alloc m) vs (vector-alloc m)
+                f (loop [j (jr-skip b (+ i 1)) x 0]
+                    (if (= x m) 0
+                      (let [e (jr-skip-string b j) v (jr-skip b (+ (jr-skip b e) 1))
+                            z (vector-assoc! ks x j) y (vector-assoc! vs x v)
+                            nx (jr-skip b (jr-skip-value b v))]
+                        (recur (if (= (jr-at b nx) 44) (jr-skip b (+ nx 1)) nx) (+ x 1)))))
+                ok (loop [x 0] (if (= x m) true (if (jr-canon-key? b (vector-at ks x) (jr-skip-string b (vector-at ks x))) (recur (+ x 1)) false)))]
+            (if (not ok) -1
+              (let [s (jr-sort-members b ks vs m)
+                    m2 (loop [x 0 p (jr-put out n 123)]
+                         (if (or (= x m) (< p 0)) p
+                           (let [p1 (if (> x 0) (jr-put out p 44) p)
+                                 k0 (vector-at ks x) ke (jr-skip-string b k0)
+                                 p2 (loop [q k0 r p1] (if (= q ke) r (recur (+ q 1) (jr-put out r (vector-at b q)))))]
+                             (recur (+ x 1) (jr-emit b (vector-at vs x) out (jr-put out p2 58))))))]
+                (if (< m2 0) -1 (jr-put out m2 125)))))
+          (= k 2)
+          (let [m2 (loop [j (jr-skip b (+ i 1)) x 0 p (jr-put out n 91)]
+                     (if (or (= (jr-at b j) 93) (< p 0)) p
+                       (let [p1 (jr-emit b j out (if (> x 0) (jr-put out p 44) p))
+                             nx (jr-skip b (jr-skip-value b j))]
+                         (recur (if (= (jr-at b nx) 44) (jr-skip b (+ nx 1)) nx) (+ x 1) p1))))]
+            (if (< m2 0) -1 (jr-put out m2 93)))
+          (= k 3) (jr-put-string out n (json-string-bytes b i))
+          (= k 4) (if (json-int-ok? b i) (jr-put-text out n (string-from-i64 (json-int b i))) -1)
+          (= k 5) (jr-put-text out n "true")
+          (= k 6) (jr-put-text out n "false")
+          (= k 7) (jr-put-text out n "null")
+          :else -1)))
+
+(defn json-canonical-bytes [b :vector-i64 i :i64] :vector-i64
+  (let [out (vector-alloc (vector-count b)) n (jr-emit b i out 0)]
+    (if (< n 0) (vector-alloc 0)
+      (loop [k 0 r (vector-alloc n)] (if (= k n) r (recur (+ k 1) (vector-assoc! r k (vector-at out k))))))))
+
+(defn index-problem [media-type :string artifact-type :string] :string
+  (if (= media-type "application/vnd.oci.image.index.v1+json")
+    (if (= artifact-type "application/vnd.itonami.app.v1") "oci/ok" "itonami/not-an-itonami-app")
+    "itonami/not-an-image-index"))
+
+;; the tsukasa mask bits: wasm = 1, container = 2 (named fune); 0 = unknown.
+;; Owner 2026-10-22 "hako = fune": a Linux OCI image is one class, and
+;; container vs microVM is the node's choice, so "microvm" is not a class.
+(defn runtime-class-code [cls :string] :i64
+  (if (= cls "wasm") 1
+    (if (= cls "container") 2 0)))
+
+;; ANNOTATED is the OCI annotation, DECLARED the L5 manifest's class.
+(defn class-annotation-problem [annotated :string declared :string] :string
+  (cond (= (runtime-class-code declared) 0) "itonami/unknown-runtime-class"
+        (= (runtime-class-code annotated) 0) "itonami/unknown-runtime-class"
+        (= annotated declared) "oci/ok"
+        :else "itonami/runtime-class-mismatch"))
+
+;; ---------------------------------------------------------------------------
+;; Digests. Every scan walks bytes from the start and stops at the first one
+;; it does not admit, so it never reads into a multibyte character.
+
+(defn hex-value [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        :else -1))
+
+(defn hex-from? [s :string i :i64 n :i64] :bool
+  (cond (>= i n) true
+        (< (hex-value (string-code-point-at s i)) 0) false
+        :else (recur s (inc i) n)))
+
+;; s begins with p (p ASCII, s at least as long)
+(defn same-from? [s :string p :string i :i64] :bool
+  (cond (>= i (string-length p)) true
+        (= (string-code-point-at s i) (string-code-point-at p i)) (recur s p (inc i))
+        :else false))
+
+(defn digest-problem [d :string] :string
+  (let [n (string-length d)]
+    (cond (and (>= n 7) (same-from? d "sha256:" 0))
+            (if (= n 71) (if (hex-from? d 7 71) "oci/ok" "oci/bad-digest") "oci/bad-digest")
+          (> (string-index-of d ":") 0) "itonami/unsupported-digest"
+          :else "oci/bad-digest")))
+
+;; ---------------------------------------------------------------------------
+;; digest -> CIDv1 (multibase base32)
+
+(defn b32-char [v :i64] :string (string-substring "abcdefghijklmnopqrstuvwxyz234567" v (inc v)))
+
+;; byte I of the binary CID: 0x01, codec, 0x12, 0x20, then the digest's bytes
+(defn cid-byte [d :string codec :i64 i :i64] :i64
+  (cond (= i 0) 1
+        (= i 1) codec
+        (= i 2) 18
+        (= i 3) 32
+        :else (let [k (+ 7 (* 2 (- i 4)))]
+                (+ (* 16 (hex-value (string-code-point-at d k))) (hex-value (string-code-point-at d (inc k)))))))
+
+;; 36 bytes, 5 bits at a time; ACC holds the NBITS not yet written
+(defn b32-from [d :string codec :i64 i :i64 acc :i64 nbits :i64 out :string] :string
+  (cond (>= nbits 5)
+          (let [m (- nbits 5) v (bit-and (u64-shift-right acc m) 31)]
+            (recur d codec i (bit-and acc (dec (i64-shift-left 1 m))) m (string-concat out (b32-char v))))
+        (< i 36)
+          (recur d codec (inc i) (bit-or (i64-shift-left acc 8) (cid-byte d codec i)) (+ nbits 8) out)
+        (> nbits 0) (string-concat out (b32-char (bit-and (i64-shift-left acc (- 5 nbits)) 31)))
+        :else out))
+
+(defn digest-cid [d :string codec :i64] :string
+  (cond (not (= (digest-problem d) "oci/ok")) ""
+        (= codec 85) (b32-from d codec 0 0 0 "b")
+        (= codec 113) (b32-from d codec 0 0 0 "b")
+        :else ""))
+
+;; ---------------------------------------------------------------------------
+;; CIDv1 -> digest
+
+(defn b32-value [c :i64] :i64
+  (cond (and (>= c 97) (<= c 122)) (- c 97)
+        (and (>= c 50) (<= c 55)) (+ 26 (- c 50))
+        :else -1))
+
+;; the bytes of s from offset i; [-1] at the first character that is not
+;; base32
+(defn b32-decode [s :string i :i64 acc :i64 nbits :i64 out :vector-i64] :vector-i64
+  (cond (>= nbits 8)
+          (let [m (- nbits 8)]
+            (recur s i (bit-and acc (dec (i64-shift-left 1 m))) m (vector-conj out (bit-and (u64-shift-right acc m) 255))))
+        (>= i (string-length s)) out
+        :else (let [v (b32-value (string-code-point-at s i))]
+                (if (< v 0) [-1] (recur s (inc i) (bit-or (i64-shift-left acc 5) v) (+ nbits 5) out)))))
+
+;; "b" and 58 base32 characters: 36 bytes
+(defn cid-bytes [cid :string] :vector-i64
+  (if (= (string-length cid) 59)
+    (if (= (string-code-point-at cid 0) 98) (b32-decode cid 1 0 0 []) [-1])
+    [-1]))
+
+(defn cid-codec [cid :string] :i64
+  (let [b (cid-bytes cid)]
+    (if (= (count b) 36)
+      (let [c (vector-at b 1)]
+        (if (and (= (vector-at b 0) 1) (= (vector-at b 2) 18) (= (vector-at b 3) 32))
+          (if (= c 85) c (if (= c 113) c 0))
+          0))
+      0)))
+
+(defn hex-char [v :i64] :string (string-substring "0123456789abcdef" v (inc v)))
+
+(defn hex-of [b :vector-i64 i :i64 out :string] :string
+  (if (>= i 36) out
+    (recur b (inc i) (string-concat out (string-concat (hex-char (quot (vector-at b i) 16)) (hex-char (bit-and (vector-at b i) 15)))))))
+
+;; the digest, only when CID is the canonical spelling of it
+(defn cid-digest [cid :string] :string
+  (let [c (cid-codec cid)]
+    (if (= c 0) ""
+      (let [d (hex-of (cid-bytes cid) 4 "sha256:")]
+        (if (= (digest-cid d c) cid) d "")))))
+
+;; ---------------------------------------------------------------------------
+;; test-* : zero-arity, true when every assertion holds. Vectors: sha256 of
+;; "" and of "itonami", their CIDs computed independently.
+
+(defn test-index [] :bool
+  (if (and (= (index-problem "application/vnd.oci.image.index.v1+json" "application/vnd.itonami.app.v1") "oci/ok")
+           (= (index-problem "application/vnd.oci.image.manifest.v1+json" "application/vnd.itonami.app.v1") "itonami/not-an-image-index")
+           (= (index-problem "application/vnd.oci.image.index.v1+json" "") "itonami/not-an-itonami-app")
+           (= (index-problem "application/vnd.oci.image.index.v1+json" "application/vnd.itonami.app.v2") "itonami/not-an-itonami-app")
+           (= (index-problem "" "") "itonami/not-an-image-index")) true false))
+
+(defn test-classes [] :bool
+  (if (and (= (runtime-class-code "wasm") 1)
+           (= (runtime-class-code "container") 2)
+           (= (runtime-class-code "microvm") 0)
+           (= (runtime-class-code "hako") 0)
+           (= (class-annotation-problem "wasm" "wasm") "oci/ok")
+           (= (class-annotation-problem "container" "container") "oci/ok")
+           (= (class-annotation-problem "microvm" "microvm") "itonami/unknown-runtime-class")
+           (= (class-annotation-problem "container" "wasm") "itonami/runtime-class-mismatch")
+           (= (class-annotation-problem "oci" "wasm") "itonami/unknown-runtime-class")
+           (= (class-annotation-problem "wasm" "fune") "itonami/unknown-runtime-class")) true false))
+
+(defn test-digests [] :bool
+  (if (and (= (digest-problem "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") "oci/ok")
+           (= (digest-problem "sha256:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855") "oci/bad-digest")
+           (= (digest-problem "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85") "oci/bad-digest")
+           (= (digest-problem "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8555") "oci/bad-digest")
+           (= (digest-problem "sha256:g3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") "oci/bad-digest")
+           (= (digest-problem "sha512:cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce") "itonami/unsupported-digest")
+           (= (digest-problem "sha256") "oci/bad-digest")
+           (= (digest-problem ":abc") "oci/bad-digest")
+           (= (digest-problem "") "oci/bad-digest")) true false))
+
+(defn test-digest-cid [] :bool
+  (if (and (= (digest-cid "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" 85)
+              "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku")
+           (= (digest-cid "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" 113)
+              "bafyreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku")
+           (= (digest-cid "sha256:10b899caa9d789b7d21475312dfcf3cc7f79570dc3b4654b515e368c9c19be75" 85)
+              "bafkreiaqxcm4vkoxrg35efdvgew7z46mp54vododwrsuwuk6g2gjygn6ou")
+           (= (digest-cid "sha256:10b899caa9d789b7d21475312dfcf3cc7f79570dc3b4654b515e368c9c19be75" 113)
+              "bafyreiaqxcm4vkoxrg35efdvgew7z46mp54vododwrsuwuk6g2gjygn6ou")
+           (= (digest-cid "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" 112) "")
+           (= (digest-cid "sha256:e3b0" 85) "")) true false))
+
+(defn test-round-trip [] :bool
+  (if (and (= (cid-digest "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku")
+              "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+           (= (cid-codec "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku") 85)
+           (= (cid-codec "bafyreiaqxcm4vkoxrg35efdvgew7z46mp54vododwrsuwuk6g2gjygn6ou") 113)
+           (= (cid-digest "bafyreiaqxcm4vkoxrg35efdvgew7z46mp54vododwrsuwuk6g2gjygn6ou")
+              "sha256:10b899caa9d789b7d21475312dfcf3cc7f79570dc3b4654b515e368c9c19be75")
+           ;; dag-pb (0x70) is not an itonami codec
+           (= (cid-codec "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku") 0)
+           (= (cid-digest "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku") "")
+           ;; same bytes, non-canonical trailing bit: refused
+           (= (cid-digest "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvykv") "")
+           (= (cid-digest "Bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku") "")
+           (= (cid-digest "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyk") "")
+           (= (cid-digest "") "")) true false))
+
+(defn- ol-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- ol-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
+(defn- ol-frame [op :string path :string tail :string] :string
+  (str "\u0000FS2\u0000" op path "\u0000" tail))
+(defn- ol-digit [n :i64] :string
+  (case n 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7" 8 "8" "9"))
+(defn- ol-dec [n :i64] :string
+  (if (< n 10) (ol-digit n) (str (ol-dec (quot n 10)) (ol-digit (rem n 10)))))
+(defn- ol-size [reply :string limit :i64] :i64
+  (let [n (string-byte-length reply)]
+    (if (or (< n 8) (> n 128) (not (= (string-substring reply 0 5) "\u0000FS2\u0000"))) -1
+      (let [space (loop [i 5]
+                    (cond (>= i n) -1 (= (string-code-point-at reply i) 32) i
+                          (or (< (string-code-point-at reply i) 48) (> (string-code-point-at reply i) 57)) -1
+                          :else (recur (+ i 1))))]
+        (if (or (< space 6) (>= (+ space 1) n)) -1
+          (loop [i (+ space 1) total 0 digits 0]
+            (if (>= i n) -1
+              (let [c (string-code-point-at reply i)]
+                (cond (= c 32) (if (and (> digits 0) (<= total limit)) total -1)
+                      (or (< c 48) (> c 57)) -1
+                      (> total (quot (- limit (- c 48)) 10)) -1
+                      :else (recur (+ i 1) (+ (* total 10) (- c 48)) (+ digits 1)))))))))))
+(defn- ol-failed [] :vector-i64 (vector-assoc! (vector-alloc 1) 0 -1))
+(defn- ol-read-ok? [b :vector-i64] :bool
+  (not (and (= (vector-count b) 1) (= (vector-at b 0) -1))))
+;; Metadata limits allocation, and E replies are checked against each requested
+;; chunk. E does not give a stable snapshot if the source changes concurrently.
+(defn- ol-read [path :string limit :i64] :vector-i64
+  (let [size (ol-size (typed-cap-call :fs/app-data :string :string (ol-frame "F" path "")) limit)]
+    (if (< size 0) (ol-failed)
+      (let [out (vector-alloc size)
+            ok (loop [offset 0]
+                 (if (= offset size) true
+                   (let [count (if (> (- size offset) 262144) 262144 (- size offset))
+                         copied (arena-scope
+                                  (let [r (typed-cap-call :fs/app-data :string :bytes
+                                            (ol-frame "E" path (str (ol-dec offset) ":" (ol-dec count))))]
+                                    (if (not (and (= (bytes-count r) (+ count 5)) (= (bytes-at r 0) 0)
+                                                  (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+                                                  (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))) false
+                                      (loop [i 0]
+                                        (if (= i count) true
+                                          (let [ignored (vector-assoc! out (+ offset i) (bytes-at r (+ i 5)))]
+                                            (recur (+ i 1))))))))]
+                     (if copied (recur (+ offset count)) false))))]
+        (if ok out (ol-failed))))))
+
+(defn- ol-root [b :vector-i64] :i64
+  (loop [i 0] (if (and (< i (vector-count b)) (let [c (vector-at b i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i)))
+
+(defn- ol-text [b :vector-i64 obj :i64 key :string] :string
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+
+(defn- ol-int [b :vector-i64 obj :i64 key :string] :i64
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 4) (json-int-ok? b v)) (json-int b v) -1)))
+
+(defn- ol-blob-path [layout :string digest :string] :string
+  (str layout "/blobs/sha256/" (string-substring digest 7 71)))
+
+;; 0 ok, 1 bad descriptor, 2 missing, 3 size, 4 digest
+(defn- ol-blob-code [layout :string digest :string size :i64] :i64
+  (arena-scope
+    (cond (or (not (= (digest-problem digest) "oci/ok")) (< size 0)) 1
+          ;; Large models are separate OCI artifacts, not cell image layers.
+          (> size 4194304) 5
+          (not (ol-exists? (ol-blob-path layout digest))) 2
+          :else (let [b (ol-read (ol-blob-path layout digest) size)]
+                  (cond (not (ol-read-ok? b)) 3
+                        (not (= (vector-count b) size)) 3
+                        (not (= (string-concat "sha256:" (sha256-hex b)) digest)) 4
+                        :else 0)))))
+
+(defn- ol-reason [code :i64] :string
+  (case code 0 "layout/ok" 1 "layout/bad-descriptor" 2 "layout/missing-blob" 3 "layout/size-mismatch" 5 "layout/blob-too-large" "layout/digest-mismatch"))
+
+;; a descriptor object's blob
+(defn- ol-descriptor-code [layout :string b :vector-i64 d :i64] :i64
+  (if (or (< d 0) (not (= (json-kind b d) 1))) 1
+    (ol-blob-code layout (ol-text b d "digest") (ol-int b d "size"))))
+
+;; index.json's single manifest x0 is the release's, at its size
+(defn- ol-index-ok? [xb :vector-i64 x0 :i64 digest :string size :i64] :bool
+  (and (>= x0 0) (= (json-kind xb x0) 1) (= (ol-text xb x0 "digest") digest) (= (ol-int xb x0 "size") size)))
+
+(defn layout-verdict [layout :string manifest-digest :string manifest-size :i64] :string
+  (let [lf (string-concat layout "/oci-layout")
+        lb (if (ol-exists? lf) (ol-read lf 1024) (ol-failed))]
+    (if (not (and (ol-read-ok? lb) (json-valid? lb) (= (ol-text lb (ol-root lb) "imageLayoutVersion") "1.0.0"))) "layout/not-an-oci-layout"
+      (let [xf (string-concat layout "/index.json")
+            xb (if (ol-exists? xf) (ol-read xf 1048576) (ol-failed))
+            xs (if (and (ol-read-ok? xb) (json-valid? xb)) (json-member xb (ol-root xb) "manifests") -1)
+            x0 (if (and (>= xs 0) (= (json-kind xb xs) 2) (= (json-count xb xs) 1)) (json-element xb xs 0) -1)
+            mc (ol-blob-code layout manifest-digest manifest-size)]
+        (cond (not (ol-index-ok? xb x0 manifest-digest manifest-size)) "layout/index-mismatch"
+              (> mc 0) (ol-reason mc)
+              :else
+          (let [m (ol-read (ol-blob-path layout manifest-digest) manifest-size) root (ol-root m)
+                layers (if (and (ol-read-ok? m) (json-valid? m)) (json-member m root "layers") -1)]
+            (cond (or (not (ol-read-ok? m)) (not (= (vector-count m) manifest-size))) "layout/size-mismatch"
+              (not (= (string-concat "sha256:" (sha256-hex m)) manifest-digest)) "layout/digest-mismatch"
+              (not (and (json-valid? m) (= (ol-int m root "schemaVersion") 2)
+                          (= (ol-text m root "mediaType") "application/vnd.oci.image.manifest.v1+json")
+                          (>= layers 0) (= (json-kind m layers) 2) (<= (json-count m layers) 16)))
+              "layout/not-an-oci-manifest"
+              :else
+              (let [cc (ol-descriptor-code layout m (json-member m root "config"))]
+                (if (> cc 0) (ol-reason cc)
+                  (loop [k 0]
+                    (if (= k (json-count m layers)) "layout/ok"
+                      (let [lc (ol-descriptor-code layout m (json-element m layers k))]
+                        (if (> lc 0) (ol-reason lc) (recur (+ k 1)))))))))))))))
+
+;; the image ID podman gives what this manifest describes: its config digest
+(defn layout-config-digest [layout :string manifest-digest :string] :string
+  (if (not (= (digest-problem manifest-digest) "oci/ok")) ""
+    (let [f (ol-blob-path layout manifest-digest)
+          m (if (ol-exists? f) (ol-read f 4194304) (ol-failed))]
+      ;; This is a separate read after layout-verdict; authenticate these exact
+      ;; bytes before using their config digest to decide what image to run.
+      (if (not (and (ol-read-ok? m) (= (string-concat "sha256:" (sha256-hex m)) manifest-digest)
+                    (json-valid? m))) ""
+        (let [c (json-member m (ol-root m) "config")
+              d (if (or (< c 0) (not (= (json-kind m c) 1))) "" (ol-text m c "digest"))]
+          (if (= (digest-problem d) "oci/ok") d ""))))))
+
+(defn- md-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- md-out [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- md-regular? [meta :string] :bool
+  (let [n (string-length meta)]
+    (and (>= n 2) (= (string-substring meta (- n 2) n) " 0"))))
+(defn- md-decimal [s :string] :i64
+  ;; The current diagnostic Darwin E provider admits starting offsets below
+  ;; 16 GiB. A larger file needs a separately qualified provider profile.
+  (let [n (string-length s) limit 17179869184]
+    (if (or (= n 0) (> n 11) (and (> n 1) (= (string-substring s 0 1) "0"))) -1
+      (loop [i 0 value 0]
+        (if (= i n) value
+          (let [c (string-code-point-at s i) digit (- c 48)]
+            (if (or (< digit 0) (> digit 9) (> value (quot (- limit digit) 10))) -1
+              (recur (+ i 1) (+ (* value 10) digit)))))))))
+
+;; A caller gives a private, host-pinned path. Reject traversal and the legacy
+;; FS2 separator spelling; host must also prevent symlinks and hard-link races.
+(defn- md-path? [p :string] :bool
+  (and (> (string-length p) 1) (<= (string-length p) 512)
+       (= (string-substring p 0 1) "/") (< (string-index-of p "..") 0)
+       (< (string-index-of p "//") 0) (< (string-index-of p "/./") 0)
+       (< (string-index-of p "_SEP") 0)
+       (not (= (string-substring p (- (string-length p) 2) (string-length p)) "/."))
+       (loop [i 0]
+         (if (= i (string-length p)) true
+           (let [c (string-code-point-at p i)]
+             (and (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90))
+                      (and (>= c 48) (<= c 57)) (= c 47) (= c 45) (= c 95) (= c 46))
+                  (recur (+ i 1))))))))
+
+;; SHA-256 compression writes into the persistent work vector. Each input
+;; chunk is a multiple of 64 except the last; the final block carries the
+;; total file length, not the size of the last range.
+(defn- md-blocks [work :vector-i64 data :vector-i64 length :i64 k :vector-i64] :bool
+  (loop [i 0]
+    (if (= i length) true
+      (let [w (s2-add (s2-rounds (s2-begin (s2-expand (s2-load work data i (vector-count data)))) k))]
+        (recur (+ i 64))))))
+
+(defn- md-pad [work :vector-i64 data :vector-i64 offset :i64 remain :i64 total :i64 k :vector-i64] :bool
+  (let [size (if (< remain 56) 64 128)
+        padding (loop [i 0 out (vector-alloc size)]
+                  (if (= i size) out
+                    (let [v (cond (< i remain) (vector-at data (+ offset i))
+                                  (= i remain) 128
+                                  (>= i (- size 8)) (bit-and (u64-shift-right (* total 8) (* (- (- size 1) i) 8)) 255)
+                                  :else 0)]
+                      (recur (+ i 1) (vector-assoc! out i v)))))]
+    (md-blocks work padding size k)))
+
+(defn- md-stream [path :string size :i64 work :vector-i64] :bool
+  (let [k (s2-k)]
+    (loop [offset 0]
+      (if (= offset size)
+        (md-pad work (vector-alloc 0) 0 0 size k)
+        (let [left (- size offset) count (if (> left 65536) 65536 left)
+              last (= (+ offset count) size)
+              ok (arena-scope
+                   (let [r (typed-cap-call 35 :string :bytes (ol-frame "E" path (str (ol-dec offset) ":" (ol-dec count))))]
+                     (if (not (and (= (bytes-count r) (+ count 5)) (= (bytes-at r 0) 0)
+                                   (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+                                   (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))) false
+                       (let [data (vector-i64-from-bytes (bytes-slice r 5 (+ count 5)))
+                             whole (* (quot count 64) 64) good (md-blocks work data whole k)]
+                         (and good (if last (md-pad work data whole (- count whole) size k) true))))))]
+          (if (not ok) false (if last true (recur (+ offset count)))))))))
+
+(defn- md-observe [path :string wanted :string size :i64] :string
+  (let [valid (and (md-path? path) (= (digest-problem wanted) "oci/ok") (>= size 0) (<= size 17179869184))]
+    (if (not valid) "model/input-refused"
+      ;; O reports the no-follow file type; the diagnostic Darwin F provider
+      ;; traps on directories rather than returning metadata. This preflight
+      ;; is meaningful only under the host's exclusive-path contract.
+      (let [entry (typed-cap-call 35 :string :string (ol-frame "O" path ""))
+            entry-size (ol-size entry 17179869184)]
+        (if (or (not (md-regular? entry)) (not (= entry-size size))) "model/size-unknown"
+        (let [meta (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+              measured (ol-size meta 17179869184)]
+        (if (or (not (md-regular? meta)) (not (= measured size))) "model/size-unknown"
+          (let [work (s2-work (s2-iv 8)) ok (md-stream path size work)
+                after (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+                digest (if ok (str "sha256:" (hex (s2-out work 8))) "")
+                result (cond (not ok) "model/read-unknown"
+                             (not (= meta after)) "model/changed-unknown"
+                             (not (= digest wanted)) "model/digest-mismatch"
+                             :else "model/digest-observed")]
+            result))))))))
+
+(defn model-digest-main [] :i64
+  (let [size (md-decimal (md-arg 2))
+        result (if (= (md-arg 3) "") (md-observe (md-arg 0) (md-arg 1) size) "model/input-refused")
+        x (md-out result)]
+    (if (= result "model/digest-observed") 0 (if (= result "model/input-refused") 2 1))))
+
+;; Proposed private OCI artifact profile. This parses and authenticates the
+;; exact manifest and all named layer descriptors; it is not a snapshot,
+;; registry client, model loader, publisher identity, or execution grant.
+(defn- ma-read [path :string limit :i64] :vector-i64
+  (let [entry (if (md-path? path) (typed-cap-call 35 :string :string (ol-frame "O" path "")) "")
+        size (ol-size entry limit)]
+    (if (and (md-path? path) (md-regular? entry) (>= size 0)) (ol-read path limit) (ol-failed))))
+
+(defn- ma-layer? [m :vector-i64 d :i64 kind :string digest :string size :i64] :bool
+  (and (>= d 0) (= (json-kind m d) 1) (= (ol-text m d "mediaType") kind)
+       (= (ol-text m d "digest") digest) (= (ol-int m d "size") size)))
+
+(defn- md-present? [path :string size :i64] :bool
+  (let [entry (if (md-path? path) (typed-cap-call 35 :string :string (ol-frame "O" path "")) "")
+        meta (if (and (md-regular? entry) (= (ol-size entry 17179869184) size))
+               (typed-cap-call 35 :string :string (ol-frame "F" path "")) "")]
+    (and (md-path? path) (md-regular? entry) (= (ol-size entry 17179869184) size)
+         (md-regular? meta) (= (ol-size meta 17179869184) size))))
+
+(defn- ma-check [layout :string manifest :string manifest-size :i64 base :string base-size :i64 mtp :string mtp-size :i64
+                assets :string assets-size :i64 verify-weights :bool] :string
+  (if (or (not (md-path? layout)) (not (= (digest-problem manifest) "oci/ok"))
+          (not (= (digest-problem base) "oci/ok")) (not (= (digest-problem mtp) "oci/ok"))
+          (not (= (digest-problem assets) "oci/ok"))
+          (< manifest-size 1) (> manifest-size 1048576) (< base-size 1) (> base-size 17179869184)
+          (< mtp-size 1) (> mtp-size 17179869184) (< assets-size 1) (> assets-size 17179869184)
+          (= base mtp) (= base assets) (= mtp assets)) "model-artifact/input-refused"
+    (let [layout-bytes (ma-read (str layout "/oci-layout") 1024)
+          index (ma-read (str layout "/index.json") 1048576)
+          indexes (if (and (ol-read-ok? index) (json-valid? index)) (json-member index (ol-root index) "manifests") -1)
+          first (if (and (>= indexes 0) (= (json-kind index indexes) 2) (= (json-count index indexes) 1)) (json-element index indexes 0) -1)
+          m (ma-read (ol-blob-path layout manifest) manifest-size)]
+      (cond (not (and (ol-read-ok? layout-bytes) (json-valid? layout-bytes)
+                      (= (ol-text layout-bytes (ol-root layout-bytes) "imageLayoutVersion") "1.0.0"))) "model-artifact/layout-refused"
+            (not (and (= (ol-int index (ol-root index) "schemaVersion") 2)
+                      (ol-index-ok? index first manifest manifest-size)
+                      (= (ol-text index first "mediaType") "application/vnd.oci.image.manifest.v1+json"))) "model-artifact/index-refused"
+            (or (not (ol-read-ok? m)) (not (= (vector-count m) manifest-size))
+                (not (= (str "sha256:" (sha256-hex m)) manifest)) (not (json-valid? m))) "model-artifact/manifest-refused"
+            :else
+            (let [root (ol-root m) layers (json-member m root "layers") config (json-member m root "config")
+                  first-layer (if (and (>= layers 0) (= (json-kind m layers) 2) (= (json-count m layers) 3)) (json-element m layers 0) -1)
+                  second-layer (if (>= first-layer 0) (json-element m layers 1) -1)
+                  third-layer (if (>= first-layer 0) (json-element m layers 2) -1)
+                  empty-digest "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+                  empty-config (ma-read (ol-blob-path layout empty-digest) 2)]
+              (cond (or (not (= (ol-int m root "schemaVersion") 2))
+                        (not (= (ol-text m root "mediaType") "application/vnd.oci.image.manifest.v1+json"))
+                        (not (= (ol-text m root "artifactType") "application/vnd.awai.model.bonsai.v1"))
+                        (not (ma-layer? m config "application/vnd.oci.empty.v1+json" empty-digest 2))
+                        (not (ol-read-ok? empty-config)) (not (= (vector-count empty-config) 2))
+                        (not (= (str "sha256:" (sha256-hex empty-config)) empty-digest))
+                        (not (ma-layer? m first-layer "application/vnd.awai.model.bonsai.weights.v1" base base-size))
+                        (not (ma-layer? m second-layer "application/vnd.awai.model.bonsai.mtp.v1" mtp mtp-size))
+                        (not (ma-layer? m third-layer "application/vnd.awai.model.bonsai.assets.tar.v1" assets assets-size))) "model-artifact/descriptor-refused"
+                    (not (md-present? (ol-blob-path layout base) base-size)) "model-artifact/base-unknown"
+                    (not (md-present? (ol-blob-path layout mtp) mtp-size)) "model-artifact/mtp-unknown"
+                    (and verify-weights (not (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed"))) "model-artifact/base-unknown"
+                    (and verify-weights (not (= (md-observe (ol-blob-path layout mtp) mtp mtp-size) "model/digest-observed"))) "model-artifact/mtp-unknown"
+                    (not (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed")) "model-artifact/assets-unknown"
+                    :else (if verify-weights "model-artifact/digests-observed" "model-artifact/descriptors-observed")))))))
+
+(defn- ma-observe [layout :string manifest :string manifest-size :i64 base :string base-size :i64 mtp :string mtp-size :i64
+                  assets :string assets-size :i64] :string
+  (ma-check layout manifest manifest-size base base-size mtp mtp-size assets assets-size true))
+
+(defn model-artifact-main [] :i64
+  (let [result (if (= (md-arg 9) "")
+                 (ma-observe (md-arg 0) (md-arg 1) (md-decimal (md-arg 2))
+                             (md-arg 3) (md-decimal (md-arg 4)) (md-arg 5) (md-decimal (md-arg 6))
+                             (md-arg 7) (md-decimal (md-arg 8)))
+                 "model-artifact/input-refused")
+        x (md-out result)]
+    (if (= result "model-artifact/digests-observed") 0 1)))
+(defn- ta-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call 35 :string :string (ol-frame op path tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+(defn- ta-parent [p :string] :string
+  (loop [i (- (string-length p) 1)]
+    (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+(defn- ta-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0) (= (string-index-of b (str a "/")) 0)))
+(defn- ta-read [path :string offset :i64 count :i64] :vector-i64
+  (let [r (typed-cap-call 35 :string :bytes (ol-frame "E" path (str (ol-dec offset) ":" (ol-dec count))))]
+    (if (and (= (bytes-count r) (+ count 5)) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70)
+             (= (bytes-at r 2) 83) (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
+      (vector-i64-from-bytes (bytes-slice r 5 (+ count 5))) (vector-alloc 0))))
+
+;; B/C replies must echo every written byte. FS2 operates in the private host
+;; scope; arbitrary guests do not acquire this authority.
+(defn- ta-write [path :string data :vector-i64 count :i64 first :bool] :bool
+  (let [prefix (vector-i64-from-bytes (string-to-utf8 (ol-frame (if first "B" "C") path "")))
+        n (vector-count prefix)
+        body (loop [i 0 out (vector-alloc (+ n count))]
+               (if (= i (+ n count)) out
+                 (recur (+ i 1) (vector-assoc! out i (if (< i n) (vector-at prefix i) (vector-at data (- i n)))))))
+        r (typed-cap-call 35 :bytes :bytes (bytes-from-vector-i64 body))]
+    (and (= (bytes-count r) (+ count 5)) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70)
+         (= (bytes-at r 2) 83) (= (bytes-at r 3) 50) (= (bytes-at r 4) 0)
+         (loop [i 0] (if (= i count) true
+           (and (= (bytes-at r (+ i 5)) (vector-at data i)) (recur (+ i 1))))))))
+
+(defn- ta-zero? [b :vector-i64 start :i64 end :i64] :bool
+  (loop [i start] (if (= i end) true (and (= (vector-at b i) 0) (recur (+ i 1))))))
+(defn- ta-name? [b :vector-i64 s :string] :bool
+  (let [v (vector-i64-from-bytes (string-to-utf8 s)) n (vector-count v)]
+    (and (< n 100) (loop [i 0]
+      (if (= i 100) true
+        (and (= (vector-at b i) (if (< i n) (vector-at v i) 0)) (recur (+ i 1))))))))
+(defn- ta-name [id :i64] :string
+  (case id 0 "config.json" 1 "tokenizer.json" 2 "tokenizer_config.json" 3 "chat_template.jinja"
+    4 "hadamard.json" 5 "mtplx_runtime.json" 6 "model.safetensors.index.json" 7 "MTPLX_PACK_MANIFEST.json"
+    8 "generation_config.json" 9 "preprocessor_config.json" 10 "processor_config.json"
+    11 "video_preprocessor_config.json" 12 "LICENSE" 13 "NOTICE.txt" 14 "README.md" ""))
+(defn- ta-id [b :vector-i64] :i64
+  (loop [i 0] (if (= i 15) -1 (if (ta-name? b (ta-name i)) i (recur (+ i 1))))))
+
+;; Strict octal field; reject base-256, overflow and digits after a terminator.
+(defn- ta-octal [b :vector-i64 start :i64 end :i64] :i64
+  (loop [i start value 0 seen false ended false]
+    (if (= i end) (if seen value -1)
+      (let [c (vector-at b i)]
+        (cond (or (= c 0) (= c 32)) (recur (+ i 1) value seen (or ended seen))
+              (or ended (< c 48) (> c 55) (> value (quot (- 67108864 (- c 48)) 8))) -1
+              :else (recur (+ i 1) (+ (* value 8) (- c 48)) true false))))))
+(defn- ta-checksum [b :vector-i64] :i64
+  (loop [i 0 sum 0]
+    (if (= i 512) sum
+      (recur (+ i 1) (+ sum (if (and (>= i 148) (< i 156)) 32 (vector-at b i)))))))
+(defn- ta-header? [b :vector-i64] :bool
+  (and (= (vector-count b) 512) (= (vector-at b 257) 117) (= (vector-at b 258) 115)
+       (= (vector-at b 259) 116) (= (vector-at b 260) 97) (= (vector-at b 261) 114)
+       (= (vector-at b 262) 0) (= (vector-at b 263) 48) (= (vector-at b 264) 48)
+       (or (= (vector-at b 156) 48) (= (vector-at b 156) 0))
+       (ta-zero? b 157 257) (ta-zero? b 345 500)
+       (= (ta-octal b 148 156) (ta-checksum b))))
+
+;; File data is hashed exactly as read, including zero padding, then written
+;; to the private stage. A hash failure never yields a successful stage.
+(defn- ta-file [source :string stage :string start :i64 size :i64 work :vector-i64 k :vector-i64] :bool
+  (let [padded (* (quot (+ size 511) 512) 512)]
+    (loop [offset 0 first true]
+      (if (= offset padded)
+        (and (= (ta-fs "H" stage "600") "1") (= (ta-fs "M" stage "") "1"))
+        (let [count (if (> (- padded offset) 65536) 65536 (- padded offset))
+              useful (if (> (- size offset) count) count (if (> (- size offset) 0) (- size offset) 0))
+              ok (arena-scope
+                   (let [data (ta-read source (+ start offset) count)]
+                     (and (= (vector-count data) count) (ta-zero? data useful count)
+                          (md-blocks work data count k)
+                          (if (> useful 0) (ta-write stage data useful first) true))))]
+          (and ok (recur (+ offset count) (if (> useful 0) false first))))))))
+
+(defn- ta-walk [source :string stage :string size :i64 work :vector-i64] :bool
+  (let [k (s2-k) summary (vector-alloc 3)]
+    (loop [offset 0 seen 0 zeros 0]
+      (if (= offset size)
+        (and (>= zeros 2) (= (bit-and seen 255) 255) (md-pad work (vector-alloc 0) 0 0 size k))
+        (let [read-ok (arena-scope
+                        (let [header (ta-read source offset 512)]
+                          (if (not (= (vector-count header) 512)) false
+                            (let [hashed (md-blocks work header 512 k)
+                                  zero (ta-zero? header 0 512)
+                                  id (if zero -1 (ta-id header)) n (if zero 0 (ta-octal header 124 136))
+                                  valid (or zero (ta-header? header))
+                                  a (vector-assoc! summary 0 (if zero 0 1))
+                                  b (vector-assoc! summary 1 id) c (vector-assoc! summary 2 n)]
+                              (and hashed valid)))))
+              zero (= (vector-at summary 0) 0) id (vector-at summary 1) n (vector-at summary 2)
+              padded (if (and (> n 0) (<= n 16777216)) (* (quot (+ n 511) 512) 512) -1)
+              next (+ offset 512 padded)]
+          (cond (not read-ok) false
+                zero (recur (+ offset 512) seen (+ zeros 1))
+                (or (> zeros 0) (< id 0) (< padded 0) (> next size)
+                    (not (= (bit-and seen (i64-shift-left 1 id)) 0))) false
+                (ta-file source (str stage "/" (ta-name id)) (+ offset 512) n work k)
+                (recur next (bit-or seen (i64-shift-left 1 id)) 0)
+                :else false))))))
+
+(defn- ta-stage [source :string stage :string digest :string size :i64] :string
+  (let [entry (if (md-path? source) (typed-cap-call 35 :string :string (ol-frame "O" source "")) "")
+        meta (if (and (md-regular? entry) (= (ol-size entry 67108864) size))
+               (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")]
+    (if (or (not (md-path? source)) (not (md-path? stage))
+            (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/")
+            (ta-overlap? source stage)
+            (not (= (digest-problem digest) "oci/ok")) (< size 1024) (> size 67108864) (not (= (rem size 512) 0))
+            (not (md-regular? entry)) (not (= (ol-size entry 67108864) size))
+            (not (md-regular? meta)) (not (= (ol-size meta 67108864) size)) (not (= (ta-fs "D" stage "") "0")))
+      "assets/input-refused"
+      (if (not (and (= (ta-fs "I" stage "") "1") (= (ta-fs "H" stage "700") "1")
+                    (= (ta-fs "M" (ta-parent stage) "") "1")))
+        "assets/staging-unknown"
+        (let [work (s2-work (s2-iv 8)) ok (ta-walk source stage size work)
+              after (typed-cap-call 35 :string :string (ol-frame "F" source ""))
+              actual (if ok (str "sha256:" (hex (s2-out work 8))) "")
+              result (if (and ok (= after meta) (= actual digest) (= (ta-fs "M" stage "") "1"))
+                       "assets/staged" "assets/staging-unknown")]
+          result)))))
+
+(defn model-assets-stage-main [] :i64
+  (let [result (if (= (md-arg 4) "") (ta-stage (md-arg 0) (md-arg 1) (md-arg 2) (md-decimal (md-arg 3))) "assets/input-refused")
+        x (md-out result)]
+    (if (= result "assets/staged") 0 (if (= result "assets/input-refused") 2 1))))
+
+;; Copy and hash the exact same chunks, including the final SHA-256 padding.
+;; This makes a completed stage reflect the pinned bytes without reading the
+;; large source twice. It does not seal the destination after this function.
+(defn- tw-copy [source :string dest :string digest :string size :i64] :bool
+  (let [entry (if (md-path? source) (typed-cap-call 35 :string :string (ol-frame "O" source "")) "")
+        meta (if (and (md-regular? entry) (= (ol-size entry 17179869184) size))
+               (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")]
+    (if (or (not (md-path? dest)) (not (md-regular? meta)) (not (= (ol-size meta 17179869184) size))
+            (< size 1) (> size 17179869184) (not (= (ta-fs "D" dest "") "0"))) false
+      (let [work (s2-work (s2-iv 8)) k (s2-k)
+            copied (loop [offset 0]
+                     (if (= offset size) true
+                       (let [remaining (- size offset) count (if (> remaining 65536) 65536 remaining)
+                             last (= (+ offset count) size)
+                             ok (arena-scope
+                                  (let [data (ta-read source offset count) whole (* (quot count 64) 64)]
+                                    (and (= (vector-count data) count) (md-blocks work data whole k)
+                                         (if last (md-pad work data whole (- count whole) size k) true)
+                                         (ta-write dest data count (= offset 0)))))]
+                         (and ok (recur (+ offset count))))))
+            after (typed-cap-call 35 :string :string (ol-frame "F" source ""))
+            actual (if copied (str "sha256:" (hex (s2-out work 8))) "")]
+        (and copied (= meta after) (= actual digest)
+             (= (ta-fs "H" dest "600") "1") (= (ta-fs "M" dest "") "1"))))))
+
+;; The pinned OCI manifest and asset layer are checked before any directory
+;; is created. Each weight is then copied and hashed once into the stage.
+;; The caller owns/isolates the layout and the target throughout this flow.
+(defn- ma-stage-checked [layout :string base :string base-size :i64 mtp :string mtp-size :i64
+                        assets :string size :i64 stage :string] :string
+  (let [staged (ta-stage (ol-blob-path layout assets) stage assets size)]
+    (if (not (= staged "assets/staged")) staged
+      (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
+               (tw-copy (ol-blob-path layout mtp) (str stage "/mtp.safetensors") mtp mtp-size)
+               (= (ta-fs "M" stage "") "1"))
+        "model-artifact/staged" "model-artifact/staging-unknown"))))
+
+(defn model-artifact-stage-main [] :i64
+  (let [layout (md-arg 0) base (md-arg 3) base-size (md-decimal (md-arg 4))
+        mtp (md-arg 5) mtp-size (md-decimal (md-arg 6)) assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9)
+        result (if (or (not (= (md-arg 10) "")) (not (md-path? layout)) (not (md-path? stage))
+                       (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/")
+                       (ta-overlap? layout stage) (< size 1024) (> size 67108864) (not (= (rem size 512) 0))
+                       (not (= (ta-fs "D" stage "") "0"))) "model-artifact/input-refused"
+                 (let [checked (ma-check layout (md-arg 1) (md-decimal (md-arg 2))
+                                         base base-size mtp mtp-size assets size false)]
+                   (if (not (= checked "model-artifact/descriptors-observed")) checked
+                     (ma-stage-checked layout base base-size mtp mtp-size assets size stage))))
+        x (md-out result)]
+    (if (= result "model-artifact/staged") 0 1)))
+
+;; A private local publication journal. Intent must be durable before stage
+;; creation; T is a host-provided atomic no-replace rename, not an emulation
+;; using D followed by replacing rename. Any uncertainty stops for reconciliation.
+(defn- mp-save [path :string value :string] :bool
+  (let [b (vector-i64-from-bytes (string-to-utf8 value))]
+    (and (= (ta-fs "D" path "") "0") (ta-write path b (vector-count b) true)
+         (= (ta-fs "H" path "600") "1") (= (ta-fs "M" path "") "1"))))
+
+(defn- mp-intent [manifest :string stage :string dest :string] :string
+  (str "awai-model-publish/1\n" manifest "\n" stage "\n" dest "\n"))
+(defn- mp-receipt [manifest :string manifest-size :i64 base :string base-size :i64 mtp :string mtp-size :i64
+                  assets :string size :i64] :string
+  (str "{\"assets\":\"" assets "\",\"assetsSize\":" size
+       ",\"base\":\"" base "\",\"baseSize\":" base-size
+       ",\"kind\":\"awai.model-stage-receipt/1\",\"manifest\":\"" manifest
+       "\",\"manifestSize\":" manifest-size ",\"mtp\":\"" mtp "\",\"mtpSize\":" mtp-size "}"))
+
+(defn model-artifact-publish-main [] :i64
+  (let [layout (md-arg 0) manifest (md-arg 1) manifest-size (md-decimal (md-arg 2))
+        base (md-arg 3) base-size (md-decimal (md-arg 4)) mtp (md-arg 5) mtp-size (md-decimal (md-arg 6))
+        assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9) dest (md-arg 10)
+        intent (str dest ".intent") done (str dest ".complete")
+        valid (and (= (md-arg 11) "") (md-path? layout) (md-path? stage) (md-path? dest)
+                   (md-path? intent) (md-path? done)
+                   (not (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/"))
+                   (not (= (string-substring dest (- (string-length dest) 1) (string-length dest)) "/"))
+                   (= (ta-parent stage) (ta-parent dest))
+                   (not (ta-overlap? layout stage)) (not (ta-overlap? layout dest))
+                   (not (ta-overlap? layout intent)) (not (ta-overlap? layout done))
+                   (not (ta-overlap? stage dest)) (not (ta-overlap? stage intent)) (not (ta-overlap? stage done))
+                   (>= size 1024) (<= size 67108864) (= (rem size 512) 0)
+                   (= (ta-fs "D" stage "") "0") (= (ta-fs "D" dest "") "0")
+                   (= (ta-fs "D" intent "") "0") (= (ta-fs "D" done "") "0"))
+        checked (if valid (ma-check layout manifest manifest-size base base-size mtp mtp-size assets size false)
+                  "model-artifact/input-refused")
+        result (if (not (= checked "model-artifact/descriptors-observed")) checked
+                 (let [intent-body (mp-intent manifest stage dest)
+                       prepared (and (mp-save intent intent-body) (= (ta-fs "M" (ta-parent dest) "") "1"))]
+                   (if (not prepared) "model-artifact/publication-unknown"
+                     (let [staged (ma-stage-checked layout base base-size mtp mtp-size assets size stage)
+                           receipt (mp-receipt manifest manifest-size base base-size mtp mtp-size assets size)]
+                       (if (and (= staged "model-artifact/staged")
+                                (mp-save (str stage "/.awai-model-receipt.json") receipt)
+                                (= (ta-fs "M" stage "") "1")
+                                (= (ta-fs "T" stage dest) "1")
+                                (= (ta-fs "M" (ta-parent dest) "") "1")
+                                (= (ta-fs "T" intent done) "1")
+                                (= (ta-fs "M" (ta-parent dest) "") "1"))
+                         "model-artifact/published" "model-artifact/publication-unknown")))))
+        x (md-out result)]
+    (if (= result "model-artifact/published") 0 1)))
+
+;; Recovery checks only a completed rename, never copies or dispatches work.
+;; Mode and name checks assume the host excludes other writers and aliases.
+(defn- mp-mode? [path :string mode :string kind :string] :bool
+  (let [meta (ta-fs "U" path "") n (string-length meta) space (string-index-of meta " ")]
+    (and (> space 0) (>= n 2) (= (string-substring meta 0 space) mode)
+         (= (string-substring meta (- n 2) n) (str " " kind)))))
+(defn- mp-exact? [path :string text :string] :bool
+  (let [actual (ma-read path 2048) expected (vector-i64-from-bytes (string-to-utf8 text))
+        n (vector-count expected)]
+    (and (mp-mode? path "384" "0") (ol-read-ok? actual) (= (vector-count actual) n)
+         (loop [i 0] (if (= i n) true (and (= (vector-at actual i) (vector-at expected i)) (recur (+ i 1))))))))
+
+(defn- tv-file [source :string dest :string start :i64 size :i64 work :vector-i64 k :vector-i64] :bool
+  (let [padded (* (quot (+ size 511) 512) 512)
+        entry (if (md-path? dest) (typed-cap-call 35 :string :string (ol-frame "O" dest "")) "")
+        before (if (and (md-regular? entry) (= (ol-size entry 16777216) size) (mp-mode? dest "384" "0"))
+                 (typed-cap-call 35 :string :string (ol-frame "F" dest "")) "")]
+    (if (or (not (md-regular? before)) (not (= (ol-size before 16777216) size))) false
+      (let [ok (loop [offset 0]
+                 (if (= offset padded) true
+                   (let [count (if (> (- padded offset) 65536) 65536 (- padded offset))
+                         useful (if (> (- size offset) count) count (if (> (- size offset) 0) (- size offset) 0))
+                         same (arena-scope
+                                (let [src (ta-read source (+ start offset) count)
+                                      out (if (> useful 0) (ta-read dest offset useful) (vector-alloc 0))]
+                                  (and (= (vector-count src) count) (= (vector-count out) useful)
+                                       (ta-zero? src useful count) (md-blocks work src count k)
+                                       (loop [i 0] (if (= i useful) true
+                                         (and (= (vector-at src i) (vector-at out i)) (recur (+ i 1))))))))]
+                     (and same (recur (+ offset count))))))
+            after (typed-cap-call 35 :string :string (ol-frame "F" dest ""))]
+        (and ok (= before after) (= (ta-fs "M" dest "") "1"))))))
+
+(defn- tv-walk [source :string dest :string size :i64 digest :string] :bool
+  (let [work (s2-work (s2-iv 8)) k (s2-k) summary (vector-alloc 3)]
+    (loop [offset 0 seen 0 zeros 0]
+      (if (= offset size)
+        (and (>= zeros 2) (= (bit-and seen 255) 255)
+             (loop [i 0] (if (= i 15) true
+               (and (or (not (= (bit-and seen (i64-shift-left 1 i)) 0))
+                        (= (ta-fs "D" (str dest "/" (ta-name i)) "") "0")) (recur (+ i 1)))))
+             (md-pad work (vector-alloc 0) 0 0 size k)
+             (= (str "sha256:" (hex (s2-out work 8))) digest))
+        (let [read-ok (arena-scope
+                        (let [header (ta-read source offset 512)]
+                          (if (not (= (vector-count header) 512)) false
+                            (let [hashed (md-blocks work header 512 k) zero (ta-zero? header 0 512)
+                                  id (if zero -1 (ta-id header)) n (if zero 0 (ta-octal header 124 136))
+                                  valid (or zero (ta-header? header))
+                                  a (vector-assoc! summary 0 (if zero 0 1))
+                                  b (vector-assoc! summary 1 id) c (vector-assoc! summary 2 n)]
+                              (and hashed valid)))))
+              zero (= (vector-at summary 0) 0) id (vector-at summary 1) n (vector-at summary 2)
+              padded (if (and (> n 0) (<= n 16777216)) (* (quot (+ n 511) 512) 512) -1)
+              next (+ offset 512 padded)]
+          (cond (not read-ok) false
+                zero (recur (+ offset 512) seen (+ zeros 1))
+                (or (> zeros 0) (< id 0) (< padded 0) (> next size)
+                    (not (= (bit-and seen (i64-shift-left 1 id)) 0))) false
+                (tv-file source (str dest "/" (ta-name id)) (+ offset 512) n work k)
+                (recur next (bit-or seen (i64-shift-left 1 id)) 0)
+                :else false))))))
+
+(defn model-artifact-recover-main [] :i64
+  (let [layout (md-arg 0) manifest (md-arg 1) manifest-size (md-decimal (md-arg 2))
+        base (md-arg 3) base-size (md-decimal (md-arg 4)) mtp (md-arg 5) mtp-size (md-decimal (md-arg 6))
+        assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9) dest (md-arg 10)
+        intent (str dest ".intent") done (str dest ".complete")
+        valid (and (= (md-arg 11) "") (md-path? layout) (md-path? stage) (md-path? dest)
+                   (md-path? intent) (md-path? done)
+                   (not (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/"))
+                   (not (= (string-substring dest (- (string-length dest) 1) (string-length dest)) "/"))
+                   (= (ta-parent stage) (ta-parent dest))
+                   (not (ta-overlap? layout stage)) (not (ta-overlap? layout dest))
+                   (not (ta-overlap? layout intent)) (not (ta-overlap? layout done))
+                   (not (ta-overlap? stage dest)) (not (ta-overlap? stage intent)) (not (ta-overlap? stage done))
+                   (>= size 1024) (<= size 67108864) (= (rem size 512) 0)
+                   (= (ta-fs "D" stage "") "0") (= (ta-fs "D" dest "") "1"))
+        is (if valid (ta-fs "D" intent "") "?") ds (if valid (ta-fs "D" done "") "?")
+        marker (if (and (= is "1") (= ds "0")) intent (if (and (= is "0") (= ds "1")) done ""))
+        expected-intent (mp-intent manifest stage dest)
+        receipt (mp-receipt manifest manifest-size base base-size mtp mtp-size assets size)
+        preflight (and valid (not (= marker "")) (mp-mode? dest "448" "1") (mp-exact? marker expected-intent)
+                       (mp-exact? (str dest "/.awai-model-receipt.json") receipt))
+        checked (if preflight (ma-check layout manifest manifest-size base base-size mtp mtp-size assets size false) "")
+        result (if (not (= checked "model-artifact/descriptors-observed")) "model-artifact/recovery-unknown"
+                 (let [base-path (str dest "/model.safetensors") mtp-path (str dest "/mtp.safetensors")
+                       asset-path (ol-blob-path layout assets)
+                       verified (and (mp-mode? base-path "384" "0") (mp-mode? mtp-path "384" "0")
+                                     (= (md-observe base-path base base-size) "model/digest-observed")
+                                     (= (md-observe mtp-path mtp mtp-size) "model/digest-observed")
+                                     (= (ta-fs "M" base-path "") "1") (= (ta-fs "M" mtp-path "") "1")
+                                     (tv-walk asset-path dest size assets) (= (ta-fs "M" (str dest "/.awai-model-receipt.json") "") "1")
+                                     (= (ta-fs "M" dest "") "1") (= (ta-fs "M" (ta-parent dest) "") "1"))]
+                   (if (not verified) "model-artifact/recovery-unknown"
+                     (if (= marker intent)
+                       (if (and (= (ta-fs "T" intent done) "1") (= (ta-fs "M" (ta-parent dest) "") "1"))
+                         "model-artifact/recovered" "model-artifact/recovery-unknown")
+                       (if (and (= (ta-fs "M" done "") "1") (= (ta-fs "M" (ta-parent dest) "") "1"))
+                         "model-artifact/recovered" "model-artifact/recovery-unknown")))))
+        x (md-out result)]
+    (if (= result "model-artifact/recovered") 0 1)))
+
+(defn main [] :i64
+ (if (= (md-arg 0) "verify")
+  (let [ok (model-flint-parent-verified-inventory? (md-arg 1) (md-arg 2) (md-decimal (md-arg 3))
+   (md-arg 4) (md-decimal (md-arg 5)) (md-arg 6) (md-decimal (md-arg 7)) (md-arg 8) (md-decimal (md-arg 9))
+   (md-arg 10) (md-arg 11) (md-arg 12) (md-arg 13) (md-arg 14) (md-arg 15) (md-arg 16))
+   x (md-out (if ok "inventory/verified" "inventory/refused"))] (if ok 0 1))
+  (model-flint-oci-stage-main)))
+
+;; Experimental native OCI layout completion for the Bonsai model profile.
+;; Compose after fleet_model_assets and its actual dependencies. The trusted
+;; host owns the private layout and prevents aliases and concurrent writers.
+;; Its blobs directory already contains independently pinned base, MTP and
+;; asset blobs. This component does not create the asset tar, fetch a registry,
+;; attest a publisher, reserve resources, load a model or authorize execution.
+;; Any partial or unknown result requires host quarantine and reconciliation.
+
+
+(defn- ms-bytes [s :string] :vector-i64
+  (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- ms-digest [s :string] :string
+  (str "sha256:" (sha256-hex (ms-bytes s))))
+(defn- ms-descriptor [media :string digest :string size :i64] :string
+  (str "{\"digest\":\"" digest "\",\"mediaType\":\"" media "\",\"size\":" (ol-dec size) "}"))
+(defn- ms-manifest [base :string base-size :i64 mtp :string mtp-size :i64 assets :string assets-size :i64] :string
+  (let [empty "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"]
+    (str "{\"artifactType\":\"application/vnd.awai.model.bonsai.v1\",\"config\":"
+         (ms-descriptor "application/vnd.oci.empty.v1+json" empty 2)
+         ",\"layers\":["
+         (ms-descriptor "application/vnd.awai.model.bonsai.weights.v1" base base-size) ","
+         (ms-descriptor "application/vnd.awai.model.bonsai.mtp.v1" mtp mtp-size) ","
+         (ms-descriptor "application/vnd.awai.model.bonsai.assets.tar.v1" assets assets-size)
+         "],\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"schemaVersion\":2}")))
+(defn- ms-index [manifest :string size :i64] :string
+  (str "{\"manifests\":["
+       (ms-descriptor "application/vnd.oci.image.manifest.v1+json" manifest size)
+       "],\"schemaVersion\":2}"))
+
+;; A fresh private layout is required. The byte writer's full echo, mode and
+;; both fsync operations must succeed; no partial file is removed or retried.
+(defn- ms-write [path :string value :string] :bool
+  (let [b (ms-bytes value)]
+    (and (= (ta-fs "D" path "") "0") (ta-write path b (vector-count b) true)
+         (= (ta-fs "H" path "600") "1") (mp-mode? path "384" "0")
+         (= (ta-fs "M" path "") "1") (= (ta-fs "M" (ta-parent path) "") "1"))))
+
+;; argv: layout, base digest/size, MTP digest/size, tar digest/size, expected
+;; manifest digest. The host pins these independently, provisions private
+;; layout/blobs/sha256 directories and places all three blobs before calling.
+;; Index is written last, but its presence is not a publication receipt:
+;; only a zero result plus independent consumer verification is meaningful.
+(defn model-oci-seal-main [] :i64
+  (let [layout (md-arg 0) base (md-arg 1) base-size (md-decimal (md-arg 2))
+        mtp (md-arg 3) mtp-size (md-decimal (md-arg 4)) assets (md-arg 5)
+        assets-size (md-decimal (md-arg 6)) expected (md-arg 7)
+        empty "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        valid (and (= (md-arg 8) "") (md-path? layout)
+                   (not (= (string-substring layout (- (string-length layout) 1) (string-length layout)) "/"))
+                   (= (digest-problem base) "oci/ok") (= (digest-problem mtp) "oci/ok")
+                   (= (digest-problem assets) "oci/ok") (= (digest-problem expected) "oci/ok")
+                   (> base-size 0) (> mtp-size 0) (>= assets-size 1024) (<= assets-size 67108864)
+                   (= (rem assets-size 512) 0)
+                   (not (= base mtp)) (not (= base assets)) (not (= mtp assets))
+                   (not (= empty base)) (not (= empty mtp)) (not (= empty assets))
+                   (not (= expected empty)) (not (= expected base)) (not (= expected mtp)) (not (= expected assets)))
+        manifest (if valid (ms-manifest base base-size mtp mtp-size assets assets-size) "")
+        manifest-size (string-byte-length manifest)
+        ready (and valid (= (ms-digest manifest) expected)
+                   (mp-mode? layout "448" "1") (mp-mode? (str layout "/blobs") "448" "1")
+                   (mp-mode? (str layout "/blobs/sha256") "448" "1")
+                   (= (ta-fs "D" (str layout "/oci-layout") "") "0")
+                   (= (ta-fs "D" (str layout "/index.json") "") "0")
+                   (= (ta-fs "D" (ol-blob-path layout empty) "") "0")
+                   (= (ta-fs "D" (ol-blob-path layout expected) "") "0"))]
+    (if (not ready) (let [x (md-out "model-layout/input-refused")] 2)
+      (let [verified (and (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed")
+                          (= (md-observe (ol-blob-path layout mtp) mtp mtp-size) "model/digest-observed")
+                          (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed"))]
+        (if (not verified) (let [x (md-out "model-layout/blob-refused")] 1)
+          (let [written (and (ms-write (ol-blob-path layout empty) "{}")
+                             (ms-write (ol-blob-path layout expected) manifest)
+                             (ms-write (str layout "/oci-layout") "{\"imageLayoutVersion\":\"1.0.0\"}")
+                             (ms-write (str layout "/index.json") (ms-index expected manifest-size)))
+                checked (if written (ma-check layout expected manifest-size base base-size mtp mtp-size assets assets-size true) "")
+                result (if (= checked "model-artifact/digests-observed")
+                         (str "model-layout/sealed " expected " " (ol-dec manifest-size)) "model-layout/publication-unknown")
+                x (md-out result)]
+            (if (= checked "model-artifact/digests-observed") 0 1)))))))
+
+;; Compose after fleet_model_oci_seal and its native dependency closure.
+;; The fixture digest was calculated independently from compact JSON bytes.
+
+
+(defn test-model-oci-seal-descriptors [] :bool
+  (let [base "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mtp "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        assets "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        expected "sha256:6575a990965422340f1e5cecd0494a0b93ce32ea38ce01fc70082c051cbb1f01"
+        text (ms-manifest base 1234 mtp 512 assets 1024)
+        bytes (ms-bytes text) layers (json-member bytes 0 "layers")
+        index (ms-bytes (ms-index expected 758))
+        manifests (json-member index 0 "manifests")]
+    (and (= (vector-count bytes) 758) (= (ms-digest text) expected)
+         (not (= (ms-digest (ms-manifest base 1234 mtp 512 assets 1025)) expected))
+         (not (= (ms-digest (ms-manifest mtp 1234 base 512 assets 1024)) expected))
+         (json-valid? bytes) (json-canonical? bytes)
+         (= (ol-text bytes 0 "artifactType") "application/vnd.awai.model.bonsai.v1")
+         (>= layers 0) (= (json-kind bytes layers) 2) (= (json-count bytes layers) 3)
+         (ma-layer? bytes (json-element bytes layers 0) "application/vnd.awai.model.bonsai.weights.v1" base 1234)
+         (ma-layer? bytes (json-element bytes layers 1) "application/vnd.awai.model.bonsai.mtp.v1" mtp 512)
+         (ma-layer? bytes (json-element bytes layers 2) "application/vnd.awai.model.bonsai.assets.tar.v1" assets 1024)
+         (json-valid? index) (json-canonical? index) (>= manifests 0)
+         (= (json-count index manifests) 1)
+         (ol-index-ok? index (json-element index manifests 0) expected 758))))
+
+(defn- mf-manifest [base :string base-size :i64 experts :string experts-size :i64 assets :string assets-size :i64] :string
+  (let [empty "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"]
+    (str "{\"artifactType\":\"application/vnd.awai.model.flint.v1\",\"config\":"
+         (ms-descriptor "application/vnd.oci.empty.v1+json" empty 2)
+         ",\"layers\":["
+         (ms-descriptor "application/vnd.awai.model.flint.model.v1" base base-size) ","
+         (ms-descriptor "application/vnd.awai.model.flint.experts.v1" experts experts-size) ","
+         (ms-descriptor "application/vnd.awai.model.flint.assets.tar.v1" assets assets-size)
+         "],\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"schemaVersion\":2}")))
+
+(defn- mf-check [layout :string manifest :string manifest-size :i64 base :string base-size :i64 experts :string experts-size :i64
+                assets :string assets-size :i64 verify-weights :bool] :string
+  (if (or (not (md-path? layout)) (not (= (digest-problem manifest) "oci/ok"))
+          (not (= (digest-problem base) "oci/ok")) (not (= (digest-problem experts) "oci/ok"))
+          (not (= (digest-problem assets) "oci/ok"))
+          (< manifest-size 1) (> manifest-size 1048576) (< base-size 1) (> base-size 17179869184)
+          (< experts-size 1) (> experts-size 17179869184) (< assets-size 1) (> assets-size 17179869184)
+          (= base experts) (= base assets) (= experts assets)) "flint-artifact/input-refused"
+    (let [layout-bytes (ma-read (str layout "/oci-layout") 1024)
+          index (ma-read (str layout "/index.json") 1048576)
+          indexes (if (and (ol-read-ok? index) (json-valid? index)) (json-member index (ol-root index) "manifests") -1)
+          first (if (and (>= indexes 0) (= (json-kind index indexes) 2) (= (json-count index indexes) 1)) (json-element index indexes 0) -1)
+          m (ma-read (ol-blob-path layout manifest) manifest-size)]
+      (cond (not (and (ol-read-ok? layout-bytes) (json-valid? layout-bytes)
+                      (= (ol-text layout-bytes (ol-root layout-bytes) "imageLayoutVersion") "1.0.0"))) "flint-artifact/layout-refused"
+            (not (and (= (ol-int index (ol-root index) "schemaVersion") 2)
+                      (ol-index-ok? index first manifest manifest-size)
+                      (= (ol-text index first "mediaType") "application/vnd.oci.image.manifest.v1+json"))) "flint-artifact/index-refused"
+            (or (not (ol-read-ok? m)) (not (= (vector-count m) manifest-size))
+                (not (= (str "sha256:" (sha256-hex m)) manifest)) (not (json-valid? m))) "flint-artifact/manifest-refused"
+            :else
+            (let [root (ol-root m) layers (json-member m root "layers") config (json-member m root "config")
+                  first-layer (if (and (>= layers 0) (= (json-kind m layers) 2) (= (json-count m layers) 3)) (json-element m layers 0) -1)
+                  second-layer (if (>= first-layer 0) (json-element m layers 1) -1)
+                  third-layer (if (>= first-layer 0) (json-element m layers 2) -1)
+                  empty-digest "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+                  empty-config (ma-read (ol-blob-path layout empty-digest) 2)]
+              (cond (or (not (= (ol-int m root "schemaVersion") 2))
+                        (not (= (ol-text m root "mediaType") "application/vnd.oci.image.manifest.v1+json"))
+                        (not (= (ol-text m root "artifactType") "application/vnd.awai.model.flint.v1"))
+                        (not (ma-layer? m config "application/vnd.oci.empty.v1+json" empty-digest 2))
+                        (not (ol-read-ok? empty-config)) (not (= (vector-count empty-config) 2))
+                        (not (= (str "sha256:" (sha256-hex empty-config)) empty-digest))
+                        (not (ma-layer? m first-layer "application/vnd.awai.model.flint.model.v1" base base-size))
+                        (not (ma-layer? m second-layer "application/vnd.awai.model.flint.experts.v1" experts experts-size))
+                        (not (ma-layer? m third-layer "application/vnd.awai.model.flint.assets.tar.v1" assets assets-size))) "flint-artifact/descriptor-refused"
+                    (not (md-present? (ol-blob-path layout base) base-size)) "flint-artifact/base-unknown"
+                    (not (md-present? (ol-blob-path layout experts) experts-size)) "flint-artifact/experts-unknown"
+                    (and verify-weights (not (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed"))) "flint-artifact/base-unknown"
+                    (and verify-weights (not (= (md-observe (ol-blob-path layout experts) experts experts-size) "model/digest-observed"))) "flint-artifact/experts-unknown"
+                    (not (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed")) "flint-artifact/assets-unknown"
+                    :else (if verify-weights "flint-artifact/digests-observed" "flint-artifact/descriptors-observed")))))))
+
+(defn model-flint-oci-seal-main [] :i64
+  (let [layout (md-arg 0) base (md-arg 1) base-size (md-decimal (md-arg 2))
+        experts (md-arg 3) experts-size (md-decimal (md-arg 4)) assets (md-arg 5)
+        assets-size (md-decimal (md-arg 6)) expected (md-arg 7)
+        empty "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        valid (and (= (md-arg 8) "") (md-path? layout)
+                   (not (= (string-substring layout (- (string-length layout) 1) (string-length layout)) "/"))
+                   (= (digest-problem base) "oci/ok") (= (digest-problem experts) "oci/ok")
+                   (= (digest-problem assets) "oci/ok") (= (digest-problem expected) "oci/ok")
+                   (> base-size 0) (> experts-size 0) (>= assets-size 1024) (<= assets-size 67108864)
+                   (= (rem assets-size 512) 0)
+                   (not (= base experts)) (not (= base assets)) (not (= experts assets))
+                   (not (= empty base)) (not (= empty experts)) (not (= empty assets))
+                   (not (= expected empty)) (not (= expected base)) (not (= expected experts)) (not (= expected assets)))
+        manifest (if valid (mf-manifest base base-size experts experts-size assets assets-size) "")
+        manifest-size (string-byte-length manifest)
+        ready (and valid (= (ms-digest manifest) expected)
+                   (mp-mode? layout "448" "1") (mp-mode? (str layout "/blobs") "448" "1")
+                   (mp-mode? (str layout "/blobs/sha256") "448" "1")
+                   (= (ta-fs "D" (str layout "/oci-layout") "") "0")
+                   (= (ta-fs "D" (str layout "/index.json") "") "0")
+                   (= (ta-fs "D" (ol-blob-path layout empty) "") "0")
+                   (= (ta-fs "D" (ol-blob-path layout expected) "") "0"))]
+    (if (not ready) (let [x (md-out "flint-layout/input-refused")] 2)
+      (let [verified (and (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed")
+                          (= (md-observe (ol-blob-path layout experts) experts experts-size) "model/digest-observed")
+                          (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed"))]
+        (if (not verified) (let [x (md-out "flint-layout/blob-refused")] 1)
+          (let [written (and (ms-write (ol-blob-path layout empty) "{}")
+                             (ms-write (ol-blob-path layout expected) manifest)
+                             (ms-write (str layout "/oci-layout") "{\"imageLayoutVersion\":\"1.0.0\"}")
+                             (ms-write (str layout "/index.json") (ms-index expected manifest-size)))
+                checked (if written (mf-check layout expected manifest-size base base-size experts experts-size assets assets-size true) "")
+                result (if (= checked "flint-artifact/digests-observed")
+                         (str "flint-layout/sealed " expected " " (ol-dec manifest-size)) "flint-layout/publication-unknown")
+                x (md-out result)]
+            (if (= checked "flint-artifact/digests-observed") 0 1)))))))
+
+(defn test-flint-oci-descriptors [] :bool
+  (let [base "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        experts "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        assets "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        expected "sha256:574c1edcd63fd9f17e25b210c36f3007ee073c15304d61a4bdce2e87351c19c3"
+        text (mf-manifest base 1234 experts 512 assets 1024)
+        b (ms-bytes text) layers (json-member b 0 "layers")]
+    (and (= (vector-count b) 756) (= (ms-digest text) expected)
+         (json-valid? b) (json-canonical? b)
+         (= (ol-text b 0 "artifactType") "application/vnd.awai.model.flint.v1")
+         (>= layers 0) (= (json-kind b layers) 2) (= (json-count b layers) 3)
+         (ma-layer? b (json-element b layers 0) "application/vnd.awai.model.flint.model.v1" base 1234)
+         (ma-layer? b (json-element b layers 1) "application/vnd.awai.model.flint.experts.v1" experts 512)
+         (ma-layer? b (json-element b layers 2) "application/vnd.awai.model.flint.assets.tar.v1" assets 1024)
+         (not (ma-layer? b (json-element b layers 1) "application/vnd.awai.model.bonsai.mtp.v1" experts 512))
+         (not (= (ms-digest (mf-manifest experts 1234 base 512 assets 1024)) expected))
+         (not (= (ms-digest (mf-manifest base 1234 experts 512 assets 1025)) expected)))))
+
+(defn- ft-name [id :i64] :string
+  (case id 0 "config.json" 1 "tokenizer.json" 2 "tokenizer_config.json"
+    3 "chat_template.jinja" 4 "generation_config.json"
+    5 "model.safetensors.index.json" 6 ".kapitsa/manifest.json" ""))
+
+(defn- ft-id [b :vector-i64] :i64
+  (loop [i 0] (if (= i 7) -1 (if (ta-name? b (ft-name i)) i (recur (+ i 1))))))
+
+(defn- ft-walk [source :string stage :string size :i64 work :vector-i64] :bool
+  (let [k (s2-k) summary (vector-alloc 3)]
+    (loop [offset 0 seen 0 zeros 0]
+      (if (= offset size)
+        (and (>= zeros 2) (= (bit-and seen 127) 127) (md-pad work (vector-alloc 0) 0 0 size k))
+        (let [read-ok (arena-scope
+                        (let [header (ta-read source offset 512)]
+                          (if (not (= (vector-count header) 512)) false
+                            (let [hashed (md-blocks work header 512 k)
+                                  zero (ta-zero? header 0 512)
+                                  id (if zero -1 (ft-id header)) n (if zero 0 (ta-octal header 124 136))
+                                  valid (or zero (ta-header? header))
+                                  a (vector-assoc! summary 0 (if zero 0 1))
+                                  b (vector-assoc! summary 1 id) c (vector-assoc! summary 2 n)]
+                              (and hashed valid)))))
+              zero (= (vector-at summary 0) 0) id (vector-at summary 1) n (vector-at summary 2)
+              padded (if (and (> n 0) (<= n 16777216)) (* (quot (+ n 511) 512) 512) -1)
+              next (+ offset 512 padded)]
+          (cond (not read-ok) false
+                zero (recur (+ offset 512) seen (+ zeros 1))
+                (or (> zeros 0) (< id 0) (< padded 0) (> next size)
+                    (not (= (bit-and seen (i64-shift-left 1 id)) 0))) false
+                (ta-file source (str stage "/" (ft-name id)) (+ offset 512) n work k)
+                (recur next (bit-or seen (i64-shift-left 1 id)) 0)
+                :else false))))))
+
+(defn- ft-stage [source :string stage :string digest :string size :i64] :string
+  (let [entry (if (md-path? source) (typed-cap-call 35 :string :string (ol-frame "O" source "")) "")
+        meta (if (and (md-regular? entry) (= (ol-size entry 67108864) size))
+               (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")
+        metadata-dir (str stage "/.kapitsa")]
+    (if (or (not (md-path? source)) (not (md-path? stage)) (not (md-path? (str metadata-dir "/manifest.json")))
+            (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/")
+            (ta-overlap? source stage) (not (= (digest-problem digest) "oci/ok"))
+            (< size 1024) (> size 67108864) (not (= (rem size 512) 0))
+            (not (md-regular? entry)) (not (= (ol-size entry 67108864) size))
+            (not (md-regular? meta)) (not (= (ol-size meta 67108864) size)) (not (= (ta-fs "D" stage "") "0")))
+      "flint-assets/input-refused"
+      (if (not (and (= (ta-fs "I" stage "") "1") (= (ta-fs "H" stage "700") "1")
+                    (= (ta-fs "M" (ta-parent stage) "") "1")
+                    (= (ta-fs "I" metadata-dir "") "1") (= (ta-fs "H" metadata-dir "700") "1")
+                    (= (ta-fs "M" stage "") "1")))
+        "flint-assets/staging-unknown"
+        (let [work (s2-work (s2-iv 8)) ok (ft-walk source stage size work)
+              after (typed-cap-call 35 :string :string (ol-frame "F" source ""))
+              actual (if ok (str "sha256:" (hex (s2-out work 8))) "")]
+          (if (and ok (= after meta) (= actual digest) (= (ta-fs "M" metadata-dir "") "1")
+                   (= (ta-fs "M" stage "") "1"))
+            "flint-assets/staged" "flint-assets/staging-unknown"))))))
+
+(defn model-flint-oci-stage-main [] :i64
+  (let [layout (md-arg 0) manifest (md-arg 1) manifest-size (md-decimal (md-arg 2))
+        base (md-arg 3) base-size (md-decimal (md-arg 4)) experts (md-arg 5) experts-size (md-decimal (md-arg 6))
+        assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9)
+        valid (and (= (md-arg 10) "") (md-path? layout) (md-path? stage)
+                   (not (ta-overlap? layout stage)) (>= size 1024) (<= size 67108864) (= (rem size 512) 0)
+                   (= (ta-fs "D" stage "") "0"))
+        checked (if valid (mf-check layout manifest manifest-size base base-size experts experts-size assets size false) "")
+        result (if (not (= checked "flint-artifact/descriptors-observed")) "flint-artifact/input-refused"
+                 (let [staged (ft-stage (ol-blob-path layout assets) stage assets size)]
+                   (if (not (= staged "flint-assets/staged")) "flint-artifact/staging-unknown"
+                     (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
+                              (tw-copy (ol-blob-path layout experts) (str stage "/experts.safetensors") experts experts-size)
+                              (fk-stage-manifest? stage base-size experts-size) (fk-stage-index? stage)
+                              (= (ta-fs "M" stage "") "1"))
+                       "flint-artifact/staged-file-list-verified" "flint-artifact/staging-unknown"))))
+        x (md-out result)]
+    (if (= result "flint-artifact/staged-file-list-verified") 0 1)))
+
+(defn- ft-test-header [name :string] :vector-i64
+  (let [b (vector-i64-from-bytes (string-to-utf8 name))]
+    (loop [i 0 out (vector-alloc 512)]
+      (if (= i (vector-count b)) out
+        (recur (+ i 1) (vector-assoc! out i (vector-at b i)))))))
+
+(defn test-flint-asset-names [] :bool
+  (and (= (ft-id (ft-test-header "config.json")) 0)
+       (= (ft-id (ft-test-header "tokenizer.json")) 1)
+       (= (ft-id (ft-test-header "tokenizer_config.json")) 2)
+       (= (ft-id (ft-test-header "chat_template.jinja")) 3)
+       (= (ft-id (ft-test-header "generation_config.json")) 4)
+       (= (ft-id (ft-test-header "model.safetensors.index.json")) 5)
+       (= (ft-id (ft-test-header ".kapitsa/manifest.json")) 6)
+       (= (ft-id (ft-test-header "experts.safetensors")) -1)
+       (= (ft-id (ft-test-header "../config.json")) -1)
+       (= (ft-id (ft-test-header ".kapitsa/other.json")) -1)))
+
+(defn- fk-file-name [id :i64] :string
+  (if (< id 6) (ft-name id) (case id 6 "model.safetensors" 7 "experts.safetensors" "")))
+
+(defn- fk-file-id [name :string] :i64
+  (loop [i 0] (if (= i 8) -1 (if (= name (fk-file-name i)) i (recur (+ i 1))))))
+
+(defn- fk-manifest-valid? [b :vector-i64 base-size :i64 experts-size :i64 metadata-sizes :vector-i64] :bool
+  (if (or (not (ol-read-ok? b)) (= (vector-count b) 0) (> (vector-count b) 16384)
+          (not (= (vector-count metadata-sizes) 6)) (not (json-valid? b))) false
+    (let [root (ol-root b) files (json-member b root "files")]
+      (and (= (json-kind b root) 1) (= (ol-text b root "name") "flint-ud-iq2_xxs")
+           (= (ol-text b root "kapitsa") "0.2.26") (= (ol-text b root "variant") "gguf IQ2_XXS")
+           (>= files 0) (= (json-kind b files) 2) (= (json-count b files) 8)
+           (loop [i 0 seen 0 total 0]
+             (if (= i 8) (and (= seen 255) (= (ol-int b root "total_bytes") total))
+               (let [item (json-element b files i) id (if (>= item 0) (fk-file-id (ol-text b item "path")) -1)
+                     size (if (>= item 0) (ol-int b item "size") -1)
+                     expected (cond (< id 0) -1 (< id 6) (vector-at metadata-sizes id)
+                                    (= id 6) base-size :else experts-size)]
+                 (and (>= item 0) (= (json-kind b item) 1) (= (json-count b item) 2)
+                      (>= id 0) (= (bit-and seen (i64-shift-left 1 id)) 0)
+                      (> expected 0) (= size expected)
+                      (recur (+ i 1) (bit-or seen (i64-shift-left 1 id)) (+ total size))))))))))
+
+(defn- fk-stage-manifest? [stage :string base-size :i64 experts-size :i64] :bool
+  (let [sizes (loop [i 0 out (vector-alloc 6)]
+                (if (= i 6) out
+                  (let [p (str stage "/" (ft-name i))
+                        meta (typed-cap-call 35 :string :string (ol-frame "O" p ""))
+                        n (if (and (md-regular? meta) (mp-mode? p "384" "0")) (ol-size meta 16777216) -1)]
+                    (recur (+ i 1) (vector-assoc! out i n)))))
+        path (str stage "/.kapitsa/manifest.json")
+        b (if (mp-mode? path "384" "0") (ma-read path 16384) (ol-failed))]
+    (fk-manifest-valid? b base-size experts-size sizes)))
+
+(defn- fk-index-valid? [b :vector-i64] :bool
+  (if (or (not (ol-read-ok? b)) (= (vector-count b) 0) (> (vector-count b) 1048576)
+          (not (json-valid? b))) false
+    (let [root (ol-root b) mapping (if (= (json-kind b root) 1) (json-member b root "weight_map") -1)]
+      (if (or (< mapping 0) (not (= (json-kind b mapping) 1))) false
+        (loop [i (jr-skip b (+ mapping 1)) seen 0]
+          (if (not (= (jr-at b i) 34)) false
+            (let [end (jr-skip-string b i) colon (jr-skip b end) value (jr-skip b (+ colon 1))
+                  shard (if (= (json-kind b value) 3) (json-string b value) "")
+                  kind (cond (= shard "model.safetensors") 1 (= shard "experts.safetensors") 2 :else 0)
+                  next (jr-skip b (jr-skip-value b value)) sep (jr-at b next)
+                  updated (bit-or seen kind)]
+              (if (or (= kind 0) (<= end (+ i 2))) false
+                (cond (= sep 125) (= updated 3)
+                      (= sep 44) (recur (jr-skip b (+ next 1)) updated)
+                      :else false)))))))))
+
+(defn- fk-stage-index? [stage :string] :bool
+  (fk-index-valid? (ma-read (str stage "/model.safetensors.index.json") 1048576)))
+
+(defn- di-nibble [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (+ 10 (- c 97)) :else -1))
+
+(defn- di-hex? [s :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 17) (<= n 8209) (= (rem n 2) 1) (= (string-substring s (- n 1) n) "\n")
+         (loop [i 0] (if (= i (- n 1)) true
+           (and (>= (di-nibble (string-code-point-at s i)) 0) (recur (+ i 1))))))))
+
+(defn- di-byte [s :string i :i64] :i64
+  (+ (* 16 (di-nibble (string-code-point-at s (* i 2)))) (di-nibble (string-code-point-at s (+ (* i 2) 1)))))
+
+(defn- di-u16 [s :string i :i64] :i64 (+ (di-byte s i) (* 256 (di-byte s (+ i 1)))))
+
+(defn- di-u32 [s :string i :i64] :i64 (+ (di-u16 s i) (* 65536 (di-u16 s (+ i 2)))))
+
+(defn- di-nonzero-ino? [s :string i :i64] :bool
+  (loop [k 0] (if (= k 8) false (if (not (= (di-byte s (+ i k)) 0)) true (recur (+ k 1))))))
+
+(defn- di-name? [s :string start :i64 n :i64 name :string] :bool
+  (let [b (vector-i64-from-bytes (string-to-utf8 name))]
+    (and (= n (vector-count b))
+         (loop [i 0] (if (= i n) true (and (= (di-byte s (+ start i)) (vector-at b i)) (recur (+ i 1))))))))
+
+(defn- di-id [s :string start :i64 n :i64] :i64
+  (loop [i 0]
+    (if (= i 20) -1
+      (let [name (if (< i 15) (ta-name i)
+                   (case i 15 "model.safetensors" 16 "mtp.safetensors" 17 ".awai-model-receipt.json" 18 "." ".."))]
+        (if (di-name? s start n name) i (recur (+ i 1)))))))
+
+(defn- di-inventory? [s :string assets :i64] :bool
+  (if (or (not (di-hex? s)) (< assets 0) (> assets 32767) (not (= (bit-and assets 255) 255))) false
+    (let [bytes (quot (- (string-length s) 1) 2) declared (di-u32 s 4)
+          expected (bit-or assets 229376)]
+      (if (or (not (= (string-substring s 0 8) "41444931")) (> declared 4096) (not (= bytes (+ declared 8)))) false
+        (loop [offset 8 seen 0]
+          (if (= offset bytes) (= (bit-and seen 262143) expected)
+            (if (< (- bytes offset) 22) false
+              (let [reclen (di-u16 s (+ offset 16)) namelen (di-u16 s (+ offset 18)) typ (di-byte s (+ offset 20))
+                    valid (and (di-nonzero-ino? s offset) (>= reclen 22) (= (rem reclen 4) 0)
+                               (<= reclen (- bytes offset)) (> namelen 0) (<= namelen 255)
+                               (<= (+ namelen 22) reclen))
+                    id (if valid (di-id s (+ offset 21) namelen) -1)]
+                (if (or (not valid) (< id 0) (not (= (di-byte s (+ offset 21 namelen)) 0))
+                        (not (= (bit-and seen (i64-shift-left 1 id)) 0))
+                        (if (>= id 18) (not (= typ 4)) (not (= typ 8)))) false
+                  (recur (+ offset reclen) (bit-or seen (i64-shift-left 1 id))))))))))))
+
+(defn- di-id-hex? [s :string] :bool
+  (and (= (string-length s) 16)
+       (loop [i 0] (if (= i 16) true
+         (and (>= (di-nibble (string-code-point-at s i)) 0) (recur (+ i 1)))))))
+
+(defn di-bound-inventory? [s :string assets :i64 dev :string ino :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 49) (<= n 8241) (= (rem n 2) 1)
+         (= (string-substring s (- n 1) n) "\n")
+         (= (string-substring s 0 8) "41444932")
+         (di-id-hex? dev) (di-id-hex? ino)
+         (= (string-substring dev 8 16) "00000000")
+         (not (= ino "0000000000000000"))
+         (= (string-substring s 16 32) dev) (= (string-substring s 32 48) ino)
+         (di-inventory? (str "41444931" (string-substring s 8 16) (string-substring s 48 n)) assets))))
+
+(defn model-inventory-main [] :i64
+  (let [assets (md-decimal (md-arg 0)) extra (md-arg 1)
+        input (if (= extra "") (typed-cap-call 41 :string :string "") "")
+        ok (and (= extra "") (di-inventory? input assets)) x (md-out (if ok "inventory/match" "inventory/refused"))]
+    (if ok 0 1)))
+
+(defn- fi-root-name [id :i64] :string
+  (if (< id 6) (ft-name id)
+    (case id 6 "model.safetensors" 7 "experts.safetensors" 8 ".kapitsa"
+      9 ".awai-model-receipt.json" 10 "." 11 ".." "")))
+
+(defn- fi-child-name [id :i64] :string
+  (case id 0 "manifest.json" 1 "." 2 ".." ""))
+
+(defn- fi-id [s :string start :i64 n :i64 root :bool] :i64
+  (let [limit (if root 12 3)]
+    (loop [i 0]
+      (if (= i limit) -1
+        (if (di-name? s start n (if root (fi-root-name i) (fi-child-name i))) i (recur (+ i 1)))))))
+
+(defn- fi-inventory? [s :string root :bool receipt :bool] :bool
+  (if (or (not (di-hex? s)) (and (not root) receipt)) false
+    (let [bytes (quot (- (string-length s) 1) 2) declared (di-u32 s 4)
+          expected (if root (if receipt 4095 3583) 7)]
+      (if (or (not (= (string-substring s 0 8) "41444931")) (> declared 4096)
+              (not (= bytes (+ declared 8)))) false
+        (loop [offset 8 seen 0]
+          (if (= offset bytes) (= seen expected)
+            (if (< (- bytes offset) 22) false
+              (let [reclen (di-u16 s (+ offset 16)) namelen (di-u16 s (+ offset 18)) typ (di-byte s (+ offset 20))
+                    valid (and (di-nonzero-ino? s offset) (>= reclen 22) (= (rem reclen 4) 0)
+                               (<= reclen (- bytes offset)) (> namelen 0) (<= namelen 255)
+                               (<= (+ namelen 22) reclen))
+                    id (if valid (fi-id s (+ offset 21) namelen root) -1)
+                    dir (if root (or (= id 8) (= id 10) (= id 11)) (or (= id 1) (= id 2)))]
+                (if (or (not valid) (< id 0) (and root (= id 9) (not receipt))
+                        (not (= (di-byte s (+ offset 21 namelen)) 0))
+                        (not (= (bit-and seen (i64-shift-left 1 id)) 0))
+                        (if dir (not (= typ 4)) (not (= typ 8)))) false
+                  (recur (+ offset reclen) (bit-or seen (i64-shift-left 1 id))))))))))))
+
+(defn flint-bound-inventory? [s :string root :bool receipt :bool dev :string ino :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 49) (<= n 8241) (= (rem n 2) 1)
+         (= (string-substring s (- n 1) n) "\n")
+         (= (string-substring s 0 8) "41444932")
+         (di-id-hex? dev) (di-id-hex? ino)
+         (= (string-substring dev 8 16) "00000000")
+         (not (= ino "0000000000000000"))
+         (= (string-substring s 16 32) dev) (= (string-substring s 32 48) ino)
+         (fi-inventory? (str "41444931" (string-substring s 8 16) (string-substring s 48 n)) root receipt))))
+
+(defn flint-parent-frame? [s :string root-dev :string root-ino :string child-dev :string child-ino :string] :bool
+  (and (= (string-length s) 81) (di-hex? s)
+       (= (string-substring s 0 16) "4144503100000000")
+       (di-id-hex? root-dev) (di-id-hex? root-ino) (di-id-hex? child-dev) (di-id-hex? child-ino)
+       (= (string-substring root-dev 8 16) "00000000") (= root-dev child-dev)
+       (not (= root-ino "0000000000000000")) (not (= child-ino "0000000000000000"))
+       (not (= root-ino child-ino))
+       (= (string-substring s 16 32) root-dev) (= (string-substring s 32 48) root-ino)
+       (= (string-substring s 48 64) child-dev) (= (string-substring s 64 80) child-ino)))
+
+(defn- fv-tar-match? [source :string dest :string size :i64 digest :string] :bool
+  (let [entry (typed-cap-call 35 :string :string (ol-frame "O" source ""))
+        before (if (and (md-regular? entry) (= (ol-size entry 67108864) size))
+                 (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")]
+    (if (or (not (md-regular? before)) (not (= (ol-size before 67108864) size))) false
+      (let [work (s2-work (s2-iv 8)) k (s2-k) summary (vector-alloc 3)
+            ok (loop [offset 0 seen 0 zeros 0]
+                 (if (= offset size)
+                   (and (>= zeros 2) (= seen 127) (md-pad work (vector-alloc 0) 0 0 size k)
+                        (= (str "sha256:" (hex (s2-out work 8))) digest))
+                   (let [read-ok (arena-scope
+                                   (let [h (ta-read source offset 512)]
+                                     (if (not (= (vector-count h) 512)) false
+                                       (let [hashed (md-blocks work h 512 k) zero (ta-zero? h 0 512)
+                                             id (if zero -1 (ft-id h)) n (if zero 0 (ta-octal h 124 136))
+                                             valid (or zero (ta-header? h))
+                                             a (vector-assoc! summary 0 (if zero 0 1))
+                                             b (vector-assoc! summary 1 id) c (vector-assoc! summary 2 n)]
+                                         (and hashed valid)))))
+                         zero (= (vector-at summary 0) 0) id (vector-at summary 1) n (vector-at summary 2)
+                         padded (if (and (> n 0) (<= n 16777216)) (* (quot (+ n 511) 512) 512) -1)
+                         next (+ offset 512 padded)]
+                     (cond (not read-ok) false
+                           zero (recur (+ offset 512) seen (+ zeros 1))
+                           (or (> zeros 0) (< id 0) (< padded 0) (> next size)
+                               (not (= (bit-and seen (i64-shift-left 1 id)) 0))) false
+                           (tv-file source (str dest "/" (ft-name id)) (+ offset 512) n work k)
+                           (recur next (bit-or seen (i64-shift-left 1 id)) 0)
+                           :else false))))
+            after (typed-cap-call 35 :string :string (ol-frame "F" source ""))]
+        (and ok (= before after))))))
+
+(defn model-flint-verified-inventory? [layout :string manifest :string manifest-size :i64
+                                     base :string base-size :i64 experts :string experts-size :i64
+                                     assets :string assets-size :i64 stage :string
+                                     root-frame :string root-dev :string root-ino :string
+                                     child-frame :string child-dev :string child-ino :string] :bool
+  (let [valid (and (md-path? layout) (md-path? stage) (not (ta-overlap? layout stage))
+                   (>= assets-size 1024) (<= assets-size 67108864) (= (rem assets-size 512) 0)
+                   (= root-dev child-dev) (not (= root-ino child-ino))
+                   (mp-mode? stage "448" "1") (mp-mode? (str stage "/.kapitsa") "448" "1")
+                   (flint-bound-inventory? root-frame true false root-dev root-ino)
+                   (flint-bound-inventory? child-frame false false child-dev child-ino))
+        checked (if valid (mf-check layout manifest manifest-size base base-size experts experts-size assets assets-size false) "")]
+    (and (= checked "flint-artifact/descriptors-observed")
+         (mp-mode? (str stage "/model.safetensors") "384" "0")
+         (mp-mode? (str stage "/experts.safetensors") "384" "0")
+         (= (md-observe (str stage "/model.safetensors") base base-size) "model/digest-observed")
+         (= (md-observe (str stage "/experts.safetensors") experts experts-size) "model/digest-observed")
+         (fv-tar-match? (ol-blob-path layout assets) stage assets-size assets)
+         (fk-stage-manifest? stage base-size experts-size) (fk-stage-index? stage))))
+
+(defn model-flint-parent-verified-inventory? [layout :string manifest :string manifest-size :i64
+                                            base :string base-size :i64 experts :string experts-size :i64
+                                            assets :string assets-size :i64 stage :string
+                                            parent-frame :string root-frame :string root-dev :string root-ino :string
+                                            child-frame :string child-ino :string] :bool
+  (and (flint-parent-frame? parent-frame root-dev root-ino root-dev child-ino)
+       (model-flint-verified-inventory? layout manifest manifest-size base base-size experts experts-size
+                                       assets assets-size stage root-frame root-dev root-ino child-frame root-dev child-ino)))

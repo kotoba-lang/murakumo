@@ -4,8 +4,8 @@ import argparse,errno,hashlib,importlib.util,io,json,os,pathlib,re,resource,shut
 sys.dont_write_bytecode=True
 repo=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('descriptor',repo/'scripts/verify-flint-oci-descriptor-native.py');h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
-s=(repo/'docs/evidence/awai149-flint-stage-inventory-20261105/fixture.kotoba').read_text()
-files={'fleet_model_flint_oci_stage.kotoba':['ft-name','ft-id','ft-walk','ft-stage','fk-file-name','fk-file-id','fk-manifest-valid?','fk-stage-manifest?','model-flint-oci-stage-main'],'fleet_model_flint_oci_seal.kotoba':['mf-check'],'fleet_model_digest.kotoba':['md-observe','ma-read','md-present?'],'fleet_model_assets.kotoba':['ta-header?','tw-copy','mp-mode?'],'fleet_directory_inventory.kotoba':['di-nibble','di-hex?','di-byte','di-u16','di-u32','di-nonzero-ino?','di-name?','di-id','di-inventory?','di-id-hex?','di-bound-inventory?','model-inventory-main'],'fleet_flint_directory_inventory.kotoba':['fi-root-name','fi-child-name','fi-id','fi-inventory?','flint-bound-inventory?','flint-parent-frame?'],'fleet_flint_verified_inventory.kotoba':['fv-tar-match?','model-flint-verified-inventory?','model-flint-parent-verified-inventory?']}
+s=(repo/'docs/evidence/awai149-flint-index-20261105/fixture.kotoba').read_text()
+files={'fleet_model_flint_oci_stage.kotoba':['ft-name','ft-id','ft-walk','ft-stage','fk-file-name','fk-file-id','fk-manifest-valid?','fk-stage-manifest?','fk-index-valid?','fk-stage-index?','model-flint-oci-stage-main'],'fleet_model_flint_oci_seal.kotoba':['mf-check'],'fleet_model_digest.kotoba':['md-observe','ma-read','md-present?'],'fleet_model_assets.kotoba':['ta-header?','tw-copy','mp-mode?'],'fleet_directory_inventory.kotoba':['di-nibble','di-hex?','di-byte','di-u16','di-u32','di-nonzero-ino?','di-name?','di-id','di-inventory?','di-id-hex?','di-bound-inventory?','model-inventory-main'],'fleet_flint_directory_inventory.kotoba':['fi-root-name','fi-child-name','fi-id','fi-inventory?','flint-bound-inventory?','flint-parent-frame?'],'fleet_flint_verified_inventory.kotoba':['fv-tar-match?','model-flint-verified-inventory?','model-flint-parent-verified-inventory?']}
 for file,names in files.items():
  src=(repo/'kotoba'/file).read_text()
  for name in names:
@@ -19,6 +19,7 @@ for path,digest in [(compiler,args.compiler_sha256),(pack,args.packager_sha256),
  if not re.fullmatch('[0-9a-f]{64}',digest) or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise RuntimeError('tool pin mismatch')
 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(helper)],check=True,capture_output=True,timeout=15)
 metadata=['config.json','tokenizer.json','tokenizer_config.json','chat_template.jinja','generation_config.json','model.safetensors.index.json'];content={n:('fixture '+n+'\n').encode() for n in metadata};base=b'base-weights-fixture'*7;experts=b'expert-weights-fixture'*11
+content['model.safetensors.index.json']=json.dumps({'weight_map':{'a':'model.safetensors','b':'experts.safetensors'}},separators=(',',':')).encode()
 items=[{'path':n,'size':len(content[n])} for n in metadata]+[{'path':'model.safetensors','size':len(base)},{'path':'experts.safetensors','size':len(experts)}]
 manifest={'name':'flint-ud-iq2_xxs','kapitsa':'0.2.26','variant':'gguf IQ2_XXS','total_bytes':sum(x['size'] for x in items),'files':items};content['.kapitsa/manifest.json']=json.dumps(manifest,separators=(',',':')).encode()
 def digest(b):return 'sha256:'+hashlib.sha256(b).hexdigest()
@@ -41,6 +42,10 @@ with tempfile.TemporaryDirectory(prefix='awai149-flint-full-',dir='/private/tmp'
   return [digest(mb),str(len(mb)),digest(base),str(len(base)),digest(experts),str(len(experts)),digest(assets),str(len(assets))]
  good=layout('layout',archive(content))
  invalid=dict(content);m=dict(manifest);m['total_bytes']+=1;invalid['.kapitsa/manifest.json']=json.dumps(m,separators=(',',':')).encode();bad=layout('badlayout',archive(invalid))
+ invalid_index=dict(content);invalid_index['model.safetensors.index.json']=json.dumps({'weight_map':{'a':'model.safetensors','b':'../experts.safetensors'}},separators=(',',':')).encode()
+ baditems=[{'path':n,'size':len(invalid_index[n])} for n in metadata]+[{'path':'model.safetensors','size':len(base)},{'path':'experts.safetensors','size':len(experts)}]
+ badmanifest=dict(manifest);badmanifest['files']=baditems;badmanifest['total_bytes']=sum(x['size'] for x in baditems)
+ invalid_index['.kapitsa/manifest.json']=json.dumps(badmanifest,separators=(',',':')).encode();badindex=layout('badindexlayout',archive(invalid_index))
  fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY);saved=None
  if fd!=3:
   try:saved=os.dup(3)
@@ -143,6 +148,8 @@ with tempfile.TemporaryDirectory(prefix='awai149-flint-full-',dir='/private/tmp'
   else:raise RuntimeError('host accepted mismatched stage path')
   call('bad-manifest','badlayout',bad,'badstage',1,'flint-artifact/staging-unknown')
   verify('partial-stage','badlayout',bad,'badstage',1,'inventory/refused')
+  call('bad-index','badindexlayout',badindex,'badindexstage',1,'flint-artifact/staging-unknown')
+  verify('bad-index-stage','badindexlayout',badindex,'badindexstage',1,'inventory/refused')
   wrong=good.copy();wrong[2]='sha256:'+'0'*64;call('wrong-pin','layout',wrong,'wrongstage',1,'flint-artifact/input-refused')
   call('overlap','layout',good,'layout/nested',1,'flint-artifact/input-refused')
   for name,index,original in [('base',2,base),('experts',4,experts)]:

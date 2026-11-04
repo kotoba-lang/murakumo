@@ -1,5 +1,16 @@
 ;; Pure name vectors only. These do not execute tar staging or filesystem I/O.
-(ns murakumo.fleet-model-flint-oci-stage-test (:export [test-flint-asset-names test-flint-file-list]))
+(ns murakumo.fleet-model-flint-oci-stage-test (:export [test-flint-asset-names test-flint-file-list test-flint-index]))
+
+(defn test-flint-index [] :bool
+  (let [good "{\"metadata\":{\"total_size\":1},\"weight_map\":{\"layer.a\":\"model.safetensors\",\"layer.b\":\"experts.safetensors\"}}"]
+    (and (fk-index-valid? (ms-bytes good))
+         (not (fk-index-valid? (ms-bytes "{\"weight_map\":{}}")))
+         (not (fk-index-valid? (ms-bytes "{\"weight_map\":{\"a\":\"model.safetensors\"}}")))
+         (not (fk-index-valid? (ms-bytes "{\"weight_map\":{\"a\":\"model.safetensors\",\"b\":\"../experts.safetensors\"}}")))
+         (not (fk-index-valid? (ms-bytes "{\"weight_map\":{\"a\":\"model.safetensors\",\"b\":7}}")))
+         (not (fk-index-valid? (ms-bytes "{\"weight_map\":{\"a\":\"model.safetensors\",\"a\":\"experts.safetensors\"}}")))
+         (not (fk-index-valid? (ms-bytes "{\"weight_map\":{\"\":\"model.safetensors\",\"b\":\"experts.safetensors\"}}")))
+         (not (fk-index-valid? (vector-alloc 0))))))
 
 (defn- ft-test-header [name :string] :vector-i64
   (let [b (vector-i64-from-bytes (string-to-utf8 name))]

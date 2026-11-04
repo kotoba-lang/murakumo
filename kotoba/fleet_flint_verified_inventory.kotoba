@@ -60,7 +60,7 @@
          (= (md-observe (str stage "/model.safetensors") base base-size) "model/digest-observed")
          (= (md-observe (str stage "/experts.safetensors") experts experts-size) "model/digest-observed")
          (fv-tar-match? (ol-blob-path layout assets) stage assets-size assets)
-         (fk-stage-manifest? stage base-size experts-size))))
+         (fk-stage-manifest? stage base-size experts-size) (fk-stage-index? stage))))
 
 ;; This composes frame checks only; actual FD provenance, helper identity,
 ;; output/exit binding and no-mutation enforcement are trusted host duties.
