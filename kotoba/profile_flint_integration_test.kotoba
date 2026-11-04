@@ -1,5 +1,5 @@
 ;; Source cases: execution requires the qualified runtime and FS2 host.
-(ns murakumo.profile-flint-integration-test (:export [test-flint-profile-integration]))
+(ns murakumo.profile-flint-integration-test (:export [test-flint-profile-integration test-flint-public-environment]))
 
 (defn test-flint-profile-integration [] :bool
   (let [runtime (cp-bytes "{\"authorizationFile\":\"/private/auth\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"socket\":\"/private/socket\"}")
@@ -14,3 +14,22 @@
          (pr-local-response? runtime done) (not (pr-local-response? runtime incomplete))
          (> (vector-count compact) 0) (pr-local-response? runtime compact)
          (= (vector-count (pr-local-compact runtime compact)) 0))))
+
+;; The fixture uses deliberately public test values, never a credential.
+(defn test-flint-public-environment [] :bool
+  (let [d (str "sha256:" "0000000000000000000000000000000000000000000000000000000000000000")
+        src "0000000000000000000000000000000000000000"
+        cfg (cp-bytes (str "{\"modelArtifactDigest\":\"" d "\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"" d "\",\"task\":\"task1\"}"))
+        common (str ",\"model\":\"flint\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d
+                    "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"socket\":\"/private/socket\",\"source\":\"" src "\",\"task\":\"task1\",\"tools\":\"none\",\"workDigest\":\"" d "\"}")
+        flint (cp-bytes (str "{\"authorizationFile\":\"/private/auth\",\"contextDigest\":\"" d "\",\"contextTokens\":8192,\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-flint/1\",\"maxTokens\":6144" common))
+        mtp (cp-bytes (str "{\"authorizationFile\":\"/private/auth\",\"contextDigest\":\"" d "\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"maxTokens\":768" common))
+        env-flint (cp-bytes (str "{\"contextDigest\":\"" d "\",\"contextTokens\":8192,\"kind\":\"itonami.profile-environment-public-flint/1\",\"maxTokens\":6144,\"model\":\"flint\",\"modelArtifactDigest\":\"" d "\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"source\":\"" src "\",\"task\":\"task1\",\"tools\":\"none\",\"workDigest\":\"" d "\"}"))
+        env-mtp (cp-bytes (str "{\"contextDigest\":\"" d "\",\"kind\":\"itonami.profile-environment-public/2\",\"maxTokens\":768,\"model\":\"flint\",\"modelArtifactDigest\":\"" d "\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"source\":\"" src "\",\"task\":\"task1\",\"tools\":\"none\",\"workDigest\":\"" d "\"}"))
+        public-text (cp-text env-flint)
+        leaked (cp-bytes (str "{\"authorizationFile\":\"/private/auth\"," (string-substring public-text 1 (string-length public-text))))]
+    (and (rt-public-environment? cfg flint env-flint)
+         (rt-public-environment? cfg mtp env-mtp)
+         (not (rt-public-environment? cfg flint leaked))
+         (not (rt-public-environment? cfg mtp env-flint))
+         (not (rt-public-environment? cfg flint env-mtp)))))
