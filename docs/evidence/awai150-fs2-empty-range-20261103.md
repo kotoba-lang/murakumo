@@ -28,6 +28,24 @@ SIGTRAP rather than a recoverable short response. The updated probe asserts
 both successful byte comparisons and the failure. This emphasizes that a
 metadata/range race may terminate this diagnostic instead of returning false.
 
+The Amu source at commit `ebbcaee09bbaf93ff82c36b1271a0ee354f56015`
+contains a corresponding Darwin F/E helper and its assembly derivation:
+[`fs2-ef.derivation.s`](https://github.com/kotoba-lang/amu/blob/ebbcaee09bbaf93ff82c36b1271a0ee354f56015/docs/evidence/mac-fs2-ef-20261026/fs2-ef.derivation.s).
+For E, its `fstat` size check sends `offset + count > size` to `Lbad`;
+after that check, an EOF during the exact-read loop also goes to `Lbad`.
+`Lbad` is `brk #0x36`. This explains how both an already-invalid range and
+a truncation between `fstat` and `read` can trap in that source. The Amu
+derivation checker passed for all 293 F/E words and both relocation slots
+on 2026-11-04. This source comparison does not establish that the separately
+pinned diagnostic binary was built from this exact commit.
+
+An empty successful frame cannot safely be substituted for this failure:
+`0:0` already uses that frame as a successful response. A recoverable error
+therefore needs an unambiguous provider contract and audited callers, or a
+supervisor that treats termination as an unknown operation outcome. Until
+that path is qualified, a trap cannot be reported as a clean checkpoint
+refusal or used as evidence that no prior side effect occurred.
+
 The diagnostic requests a **string** response and prints it. The checkpoint
 candidate requests a **bytes** response, and the modified checkpoint code
 was not executed. This observation therefore does not qualify that ABI, its
