@@ -45,7 +45,7 @@ def main():
         variants[phase] = path
     with tempfile.TemporaryDirectory(prefix='awai151-fifo-target-') as tmp:
         root = Path(tmp); q = root / 'case'; q.mkdir(mode=0o700)
-        (q/'queue.lock').write_text(''); (q/'queue').write_text('RGQ2\n')
+        (q/'queue.lock').write_text(''); (q/'queue').write_text('RGQ3\n')
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY); saved = None
         if fd != 3:
             try: saved = os.dup(3)
@@ -66,15 +66,17 @@ def main():
             expect('front', (1, 'fifo/reservation-held'))
             expect('dequeue', (1, 'fifo/reservation-held'), x)
             expect('release', (1, 'fifo/reservation-unknown'), y)
-            expect('release', (0, 'fifo/released'), x)
-            expect('front', (0, 'fifo/front '+x))
-            expect('dequeue', (1, 'fifo/not-front'), y)
+            expect('release', (0, 'fifo/release-pending'), x)
+            expect('front', (1, 'fifo/release-pending'))
+            expect('dequeue', (1, 'fifo/reservation-unknown'), y)
             expect('dequeue', (0, 'fifo/dequeued'), x)
+            expect('front', (1, 'fifo/release-pending'))
+            expect('settle', (0, 'fifo/settled'), x)
             expect('front', (0, 'fifo/front '+y))
             (q/'queue.pending').write_text('partial')
             expect('front', (1, 'fifo/pending-unknown'))
             (q/'queue.pending').unlink()
-            old, new = 'RGQ2\n', 'RGQ2\n'+x+'\n'
+            old, new = 'RGQ3\n', 'RGQ3\n'+x+'\n'
             (q/'queue').write_text(old); (q/'queue.intent').write_text('RGI1\n'+old+'NEXT\n'+new)
             expect('recover', (0, 'fifo/aborted'))
             if (q/'queue').read_text() != old: raise ValueError('old state changed')

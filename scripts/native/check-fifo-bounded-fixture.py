@@ -57,7 +57,7 @@ def main():
              '\n(defn main [] :i64 (if (and (test-fifo-meta-size) (test-fifo-bounded-reads "/cases")) 0 1))\n')
     with tempfile.TemporaryDirectory(prefix='awai151-fifo-boundary-', dir='/private/tmp') as tmp:
         root = Path(tmp); scope = root / 'cases'; scope.mkdir(mode=0o700)
-        for name, data in [('small', b'RGQ2\n'), ('queue-limit', b'x'*4165), ('queue-over', b'x'*4166),
+        for name, data in [('small', b'RGQ3\n'), ('queue-limit', b'x'*4165), ('queue-over', b'x'*4166),
                            ('journal-limit', b'x'*8340), ('journal-over', b'x'*8341), ('empty', b'')]:
             (scope / name).write_bytes(data)
         (root / 'fixture.kotoba').write_text(unity)
@@ -93,6 +93,13 @@ def main():
             raise ValueError('reservation pause anchor changed')
         (root / 'reserve-pause.kotoba').write_text(plain.replace('(defn- rq-commit ', helper + '(defn- rq-commit ')
             .replace(reserve_anchor, reserve_anchor.replace(')) "fifo/reserved"', ') ' + pause + ') "fifo/reserved"')))
+        release_anchor = '(= (rq-fs "L" hold release) "1")\n                       (= (rq-fs "M" root "") "1")) "fifo/release-pending"'
+        if plain.count(release_anchor) != 1:
+            raise ValueError('release fault anchor changed')
+        (root / 'release-sync-fault.kotoba').write_text(plain.replace(
+            release_anchor, release_anchor.replace('(= (rq-fs "M" root "") "1")', 'false')))
+        (root / 'release-pause.kotoba').write_text(plain.replace('(defn- rq-commit ', helper + '(defn- rq-commit ')
+            .replace(release_anchor, release_anchor.replace('"1")\n', '"1") ' + pause + '\n', 1)))
         recovery_start = plain.index('(defn- rq-recover ')
         recovery_end = plain.index('(defn- rq-commit ', recovery_start)
         recovery_source = plain[recovery_start:recovery_end]
@@ -139,12 +146,12 @@ def main():
             fifo = build('fifo')
             reserve_bypass = build('reserve-bypass')
             queue = root / 'queuecase'; queue.mkdir(mode=0o700)
-            (queue / 'queue.lock').write_text(''); (queue / 'queue').write_text('RGQ2\n')
+            (queue / 'queue.lock').write_text(''); (queue / 'queue').write_text('RGQ3\n')
             if legacy:
                 old = subprocess.run([str(legacy), '/queuecase', 'front'], cwd=root, pass_fds=(3,),
                                      capture_output=True, timeout=15, env={'PATH':'/nonexistent'})
                 if old.returncode != 1 or old.stdout != b'fifo/state-invalid\n' or old.stderr:
-                    raise ValueError(('old FIFO did not refuse RGQ2', old.returncode, old.stdout, old.stderr))
+                    raise ValueError(('old FIFO did not refuse RGQ3', old.returncode, old.stdout, old.stderr))
             first, second, third = 'a'*64, 'b'*64, 'c'*64
             def op(action, ticket=None):
                 args = [str(fifo), '/queuecase', action] + ([ticket] if ticket else [])
@@ -158,10 +165,16 @@ def main():
             (queue / 'queue').write_text('RGQ1\n')
             expect('front', (1, 'fifo/state-invalid'))
             (queue / 'queue').write_text('RGQ2\n')
+            expect('front', (1, 'fifo/state-invalid'))
+            (queue / 'queue').write_text('RGQ3\n')
             expect('front', (0, 'fifo/empty'))
             expect('enqueue', (0, 'fifo/enqueued'), first)
             expect('enqueue', (0, 'fifo/enqueued'), second)
             expect('enqueue', (1, 'fifo/already-queued'), first)
+            expect('dequeue', (1, 'fifo/release-required'), first)
+            expect('cancel', (1, 'fifo/cancel-front-refused'), first)
+            expect('enqueue', (0, 'fifo/enqueued'), third)
+            expect('cancel', (0, 'fifo/cancelled'), third)
             expect('reserve', (1, 'fifo/not-front'), second)
             expect('reserve', (0, 'fifo/reserved'), first)
             if (queue / 'queue.reservation').read_text() != 'RGH1\n' + first + '\n':
@@ -175,8 +188,42 @@ def main():
             expect('enqueue', (1, 'fifo/reservation-held'), third)
             expect('reserve', (1, 'fifo/reservation-held'), first)
             expect('release', (1, 'fifo/reservation-unknown'), second)
-            expect('release', (0, 'fifo/released'), first)
+            expect('release', (0, 'fifo/release-pending'), first)
+            expect('front', (1, 'fifo/release-pending'))
             expect('release', (1, 'fifo/reservation-unknown'), first)
+            expect('settle', (1, 'fifo/reservation-unknown'), first)
+            expect('dequeue', (0, 'fifo/dequeued'), first)
+            expect('front', (1, 'fifo/release-pending'))
+            expect('settle', (0, 'fifo/settled'), first)
+            # Reset this private synthetic queue for the killed-owner case.
+            (queue / 'queue').write_text('RGQ3\n' + first + '\n' + second + '\n')
+            for variant_name in ('release-sync-fault', 'release-pause'):
+                release_image = build(variant_name)
+                expect('reserve', (0, 'fifo/reserved'), first)
+                args = [str(release_image), '/queuecase', 'release', first]
+                if variant_name == 'release-sync-fault':
+                    result = subprocess.run(args, cwd=root, pass_fds=(3,), capture_output=True,
+                                            timeout=15, env={'PATH':'/nonexistent'})
+                    if result.returncode != 1 or result.stdout != b'fifo/reservation-unknown\n' or result.stderr:
+                        raise ValueError('release sync fault did not remain unknown')
+                else:
+                    stopped = subprocess.Popen(args, cwd=root, pass_fds=(3,), stdout=subprocess.PIPE,
+                                               stderr=subprocess.PIPE, env={'PATH':'/nonexistent'})
+                    try:
+                        if not select.select([stopped.stdout], [], [], 10)[0] or os.read(stopped.stdout.fileno(), 1) != b'\0':
+                            raise RuntimeError('release pause not reached')
+                        if stopped.poll() is not None: raise RuntimeError('release owner already exited')
+                        stopped.kill()
+                        if stopped.wait(timeout=3) != -9: raise RuntimeError('release owner not killed')
+                    finally:
+                        if stopped.poll() is None: stopped.kill(); stopped.wait(timeout=3)
+                        stopped.stdout.close(); stopped.stderr.close()
+                expect('front', (1, 'fifo/release-pending'))
+                expect('enqueue', (1, 'fifo/release-pending'), third)
+                expect('dequeue', (0, 'fifo/dequeued'), first)
+                expect('front', (1, 'fifo/release-pending'))
+                expect('settle', (0, 'fifo/settled'), first)
+                (queue / 'queue').write_text('RGQ3\n' + first + '\n' + second + '\n')
             (queue / 'queue.reservation').write_text('partial')
             expect('front', (1, 'fifo/reservation-held'))
             expect('release', (1, 'fifo/reservation-unknown'), first)
@@ -200,16 +247,19 @@ def main():
                 killed.stdout.close(); killed.stderr.close()
             expect('front', (1, 'fifo/reservation-held'))
             expect('dequeue', (1, 'fifo/reservation-held'), first)
-            expect('release', (0, 'fifo/released'), first)
-            expect('dequeue', (1, 'fifo/not-front'), second)
-            expect('cancel', (1, 'fifo/cancel-front-refused'), first)
-            expect('cancel', (0, 'fifo/cancelled'), second)
+            expect('release', (0, 'fifo/release-pending'), first)
+            expect('dequeue', (1, 'fifo/reservation-unknown'), second)
+            expect('cancel', (1, 'fifo/release-pending'), first)
             expect('dequeue', (0, 'fifo/dequeued'), first)
-            expect('front', (0, 'fifo/empty'))
+            expect('front', (1, 'fifo/release-pending'))
+            expect('settle', (0, 'fifo/settled'), first)
+            expect('front', (0, 'fifo/front '+second))
+            # Clear the private fixture only after the settled test.
+            (queue / 'queue').write_text('RGQ3\n')
             (queue / 'queue.pending').write_text('partial')
             expect('enqueue', (1, 'fifo/pending-unknown'), third)
             (queue / 'queue.pending').unlink()
-            old = 'RGQ2\n'; new = old + first + '\n'
+            old = 'RGQ3\n'; new = old + first + '\n'
             (queue / 'queue.intent').write_text('RGI1\n' + old + 'NEXT\n' + new)
             expect('front', (1, 'fifo/pending-unknown'))
             expect('recover', (0, 'fifo/aborted'))
@@ -229,7 +279,7 @@ def main():
                 raise ValueError(('unexpected concurrent outcome', outcomes))
             accepted = [ticket for ticket, outcome in zip(tickets, outcomes) if outcome == (0, 'fifo/enqueued')]
             lines = (queue / 'queue').read_text().splitlines()
-            if lines[0] != 'RGQ2' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
+            if lines[0] != 'RGQ3' or len(lines[1:]) != len(accepted) or set(lines[1:]) != set(accepted):
                 raise ValueError('concurrent state mismatch')
             killed_phases = []; variants = {}
             for phase in anchors:
@@ -274,6 +324,46 @@ def main():
                     killed_phases.append(phase)
                 finally:
                     if child.poll() is None: child.kill(); child.wait(timeout=3)
+            for phase, variant in variants.items():
+                case = root / ('release-kill-' + phase); case.mkdir(mode=0o700)
+                (case / 'queue.lock').write_text('')
+                (case / 'queue').write_text('RGQ3\n' + first + '\n')
+                (case / 'queue.release.pending').write_text('RGH1\n' + first + '\n')
+                path = '/release-kill-' + phase
+                child = subprocess.Popen([str(variant), path, 'dequeue', first], cwd=root, pass_fds=(3,),
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={'PATH':'/nonexistent'})
+                try:
+                    if not select.select([child.stdout], [], [], 10)[0] or os.read(child.stdout.fileno(), 1) != b'\0':
+                        raise RuntimeError('release dequeue pause not reached: ' + phase)
+                    if child.poll() is not None: raise RuntimeError('release dequeue already exited')
+                    child.kill()
+                    if child.wait(timeout=3) != -9: raise ValueError('release dequeue owner not killed')
+                finally:
+                    if child.poll() is None: child.kill(); child.wait(timeout=3)
+                    child.stdout.close(); child.stderr.close()
+                def release_op(action, ticket=None):
+                    argv = [str(fifo), path, action] + ([ticket] if ticket else [])
+                    r = subprocess.run(argv, cwd=root, pass_fds=(3,), capture_output=True,
+                                       timeout=15, env={'PATH':'/nonexistent'})
+                    if r.stderr: raise ValueError('release recovery stderr')
+                    return r.returncode, r.stdout.decode().strip()
+                if release_op('front') != (1, 'fifo/release-pending'):
+                    raise ValueError('release barrier lost after dequeue kill: ' + phase)
+                recovered = release_op('recover')
+                expected = {'after-intent': (0, 'fifo/aborted'), 'after-pending': (1, 'fifo/recovery-unresolved'),
+                            'after-rename': (0, 'fifo/recovered'), 'after-sync': (0, 'fifo/recovered'),
+                            'after-archive': (1, 'fifo/no-intent')}[phase]
+                if recovered != expected: raise ValueError(('release recovery mismatch', phase, recovered))
+                if phase == 'after-pending':
+                    if release_op('settle', first) != (1, 'fifo/pending-unknown'):
+                        raise ValueError('unresolved release permitted settle')
+                    continue
+                if phase == 'after-intent' and release_op('dequeue', first) != (0, 'fifo/dequeued'):
+                    raise ValueError('aborted release dequeue did not resume')
+                if release_op('settle', first) != (0, 'fifo/settled'):
+                    raise ValueError('reconciled release did not settle: ' + phase)
+                if release_op('front') != (0, 'fifo/empty'):
+                    raise ValueError('settled release did not expose queue: ' + phase)
             injected_faults = []
             for fault in faults:
                 variant = build(fault)

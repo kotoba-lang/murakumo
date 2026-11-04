@@ -1,5 +1,9 @@
 # Diagnostic FIFO reservation barrier
 
+This records the earlier `411af30` / `RGQ2` revision. The later `RGQ3`
+release-pending protocol and its new evidence supersede the release behavior
+described below; see `awai151-fifo-release-pending-20261104.md`.
+
 The candidate adds a host-owned reservation marker bound to the current FIFO
 head. `reserve` succeeds only for the head after writing and syncing the marker
 and directory. While the marker is present, `front`, `dequeue`, enqueue and
