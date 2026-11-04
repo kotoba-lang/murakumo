@@ -64,6 +64,19 @@ This does not test the real response parser or filesystem race. Publication
 operations after this last sample may still outlive the deadline; the other
 limitations below still apply.
 
+`publication-real.py` additionally runs the selected current `pr-step-range`
+with the actual bounded response read, Flint parser, compact projection, output
+write and state rename through the pinned diagnostic Darwin FS2 provider. Its
+stubbed wait writes a synthetic response after recording the floor. The valid
+control advanced `next`, retained the expected text in a valid compact output,
+and linked state to that output's CID. Wrong model, `length` completion and
+clock rollback each retained the previous state without an output. A rollback
+guard mutant was detected. The source SHA-256 was
+`0a9f7bc47aba72f2d58c44c6ea1c3b16977f0fffef597aa19d92340ab11d0504`.
+This uses a stubbed wait and synthetic response, not an actual server, GitHub
+write, authenticated peer, crash/power-loss test or production FS2 provider.
+It does not test concurrent response mutation or later publication deadlines.
+
 This does not qualify the actual clock provider or monotonicity, protect
 against clock changes between observations, retain the floor across crashes,
 bound an in-flight query, fence the remote receiver, verify a real lease or
