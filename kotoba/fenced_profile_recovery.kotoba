@@ -111,23 +111,28 @@
       (rf-previous-value-status previous expected (cp-str plan 0 "node")
         (cp-str plan 0 "task") (cp-num plan 0 "previousEpoch") now))))
 
+(defn- rf-wait-previous [plan :vector-i64] :string
+  (loop [waits 0]
+    (let [status (rf-previous-status plan)]
+      (cond (= status -1) "recovery/previous-lease-unavailable"
+            (= status -2) "recovery/previous-lease-epoch"
+            (= status -3) "recovery/previous-lease-task"
+            (= status -4) "recovery/clock-or-epoch-unknown"
+            (= status -5) "recovery/previous-lease-invalid"
+            (= status 1) (rf-run plan true)
+            (>= waits 1800) "recovery/lease-wait-expired"
+            (pr-pause) (recur (+ waits 1))
+            :else "recovery/wait-unavailable"))))
+
 (defn- rf-watch [plan :vector-i64] :string
   (loop [i 0 seen false misses 0]
     (let [alive (arena-scope (pr-alive? (cp-str plan 0 "peer"))) lost (if alive 0 (+ misses 1))]
       (cond (and seen (>= lost 2))
             (let [event (cp-say "recovery/producer-lost")]
-              (loop [waits 0]
-                (let [status (rf-previous-status plan)]
-                  (cond (= status -1) "recovery/previous-lease-unavailable"
-                        (= status -2) "recovery/previous-lease-epoch"
-                        (= status -3) "recovery/previous-lease-task"
-                        (= status -4) "recovery/clock-or-epoch-unknown"
-                        (= status -5) "recovery/previous-lease-invalid"
-                        (= status 1) (rf-run plan true)
-                        (>= waits 1800) "recovery/lease-wait-expired"
-                        :else (let [z (pr-pause)] (recur (+ waits 1)))))))
+              (rf-wait-previous plan))
             (>= i 1800) "recovery/watch-expired"
-            :else (let [z (pr-pause)] (recur (+ i 1) (or seen alive) lost))))))
+            (pr-pause) (recur (+ i 1) (or seen alive) lost)
+            :else "recovery/wait-unavailable"))))
 
 (defn fenced-profile-main [] :i64
   (let [plan (cp-read (cp-arg 1))]
