@@ -45,3 +45,47 @@ were respectively `f0fd968e52df1875bfa2862f1c581ce4f350ed1f2705aafce703f8209bc99
 This exercises budget exhaustion at the selected seam using an actual host
 clock, not real voters, inference, monotonic time, atomic fencing or a
 qualified governor. Injected delay is not an estimate of fleet latency.
+
+## Count finishes after the shared deadline
+
+On 2026-11-05 JST, the current `rt-dispatch` was substituted into the archived
+fixture and tested on Xavier with the selected native count, lease client,
+diagnostic FS2 and actual host clock. A task-owned transient systemd count
+unit ran `/usr/bin/sleep 4`; its synthetic count response and matching request
+were pre-created. The runtime used actual systemd state queries and a separate
+`/usr/bin/sleep` pause while awaiting the unit. The synthetic retention window
+was 12 seconds, leaving about two seconds after the existing ten-second margin.
+
+The timed case returned `profile/budget-refused`, retained its busy marker and
+did not call the generation stub. Each loopback voter observed four requests:
+two prepare/accept rounds, before count completion. The unchanged control
+reached the generation stub and each voter observed six requests. A separate
+guard-bypass mutant under the same setup also returned budget refusal before
+generation, but each voter received six requests, demonstrating the extra
+post-count quorum round the new guard avoids. These counts were assertions in
+the operator; both fixture runs and their controls exited zero. This mutant is
+expected to perform the extra round, so its zero exit is a successful
+negative-control observation, not a passing version of the guard.
+
+All listeners were closed and the test-owned units stopped. An independent
+check after each run found the unit `not-found` / `inactive`. The compiler
+sampled peaks were 61,340 and 64,244 KiB; timed guests sampled at 2,668 and
+2,932 KiB. Controls sampled at 3,988 KiB. The same CPU and address-space
+limits and RSS sampling policy described above applied; sampled RSS is not a
+hard bound. Remote synthetic artifacts remain at
+`/tmp/awai-lease-loopback-f4b9lfvi` and `/tmp/awai-lease-loopback-f2jlhmsq`.
+
+The baseline fixture, ELF and operator SHA-256 values were
+`7fcef72a99da5fd4dbcb585a6054ed07cb62abca8bf80aa86d4fa15e0ad95e2d`,
+`07f3137b5f4eb905a3274851e267fbc59b343edb2066b93ab28ffa1c8e7e3ef7`, and
+`393e1d5013db3119001b4384e2ad1cf6483789bac6745f81a71ae0e94f314827`.
+The mutant fixture, ELF and operator hashes were
+`08ff9fdc01b0c0f4f637fe4e4a922ab7eb687c0ba415cfa5ae8e4e093a8a59a3`,
+`b4db617e31a41ec9e05bc5f332ffb8d89dc5b398cad3f28cf21e60f59998e33e`, and
+`c6ab25ad86f1d2c99990d4c97d5d7e8debff63dc03f9a7f3c00a5755f2cf3288`.
+The `count-expired` patches record the exact changes from the archived source
+and operator, with the mutant patches applied on top of those changes.
+
+The voters and count response were synthetic, generation was stubbed and no
+model or GitHub publication was run. This is not a real quorum, a qualified
+clock or governor, nor an atomic receiver-side fence.
