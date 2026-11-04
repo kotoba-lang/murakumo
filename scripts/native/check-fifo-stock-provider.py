@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare pinned stock and diagnostic Darwin FS2 T behavior in a private scope."""
+"""Compare pinned stock and diagnostic Darwin FS2 behavior in a private scope."""
 import argparse
 import hashlib
 import importlib.util
@@ -17,7 +17,7 @@ PROBE = '''(ns fs2-t-probe (:export [main]))
 (defn main [] :i64
   (let [op (typed-cap-call 38 :string :string "0")
         nul (string-from-utf8 (bytes-from-vector-i64 [0]))
-        response (typed-cap-call 35 :string :string (str nul "FS2" nul op "/a" nul (if (= op "D") "" "/b")))
+        response (typed-cap-call 35 :string :string (str nul "FS2" nul op "/a" nul (if (= op "T") "/b" "")))
         sent (typed-cap-call 37 :string :string (str response "\\n"))] 0))
 '''
 
@@ -60,6 +60,15 @@ def main():
                 check = run([image, 'D'])
                 if check.returncode or check.stdout != b'\0FS2\x001\n' or check.stderr:
                     raise ValueError(('D control', name, check.returncode, check.stdout, check.stderr))
+                check = run([image, 'O'])
+                if name == 'stock':
+                    if check.returncode != -5 or check.stdout or check.stderr:
+                        raise ValueError(('stock O observation', check.returncode, check.stdout, check.stderr))
+                else:
+                    fields = check.stdout[5:].strip().split()
+                    if check.returncode or check.stderr or not check.stdout.startswith(b'\0FS2\0') or len(fields) != 4 or fields[1] != b'6' or fields[3] != b'0':
+                        raise ValueError(('diagnostic O observation', check.returncode, check.stdout, check.stderr))
+                print(name, 'O exit', check.returncode, 'stdout', repr(check.stdout), flush=True)
                 result = run([image, 'T'])
                 expected = (-5, b'') if name == 'stock' else (0, b'\0FS2\x000\n')
                 if (result.returncode, result.stdout) != expected or result.stderr:

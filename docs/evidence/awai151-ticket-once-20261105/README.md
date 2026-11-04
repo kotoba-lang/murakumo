@@ -184,6 +184,19 @@ or hosts behave the same. A trapping child is an unknown outcome that a host
 must handle, not a successful FIFO refusal. Production FS2 T and host error
 handling remain unqualified.
 
+An instrumented RGQ5 fixture subsequently wrote each synthetic FS2 operation
+name before invoking it. With the same stock provider, its trace was
+`DDDDDDO` followed by SIGTRAP; the queue remained empty. The instrumented
+source SHA-256 was
+`68084a84104e5f2a981ba638bcf9e1692bd3276c3d1522f88ad9ecef3164dfea`.
+An independent small probe confirmed stock O and T both trap, whereas the
+diagnostic provider returned framed regular-file metadata for O and a framed
+no-replace refusal for T. D succeeded with both; test files remained intact.
+The updated observer SHA-256 was
+`58a05e611c248d02803e7f6aed8c961c4082f2bb0764f931eff7e34f0698b63c`.
+This isolates the first observed unsupported request in the instrumented
+run; it does not make the diagnostic provider a production host.
+
 ## Preserve the barrier when a claim is lost
 
 The current candidate also validates the exact claim before release, dequeue,
