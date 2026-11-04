@@ -35,7 +35,13 @@ def main():
     p.add_argument('--packager', type=Path, required=True)
     p.add_argument('--packager-sha256', required=True)
     p.add_argument('--local-archive', action='store_true', help='also exercise a stubbed-private local bare Git remote')
+    p.add_argument('--fault-profile-read', choices=('empty', 'short'),
+                   help='inject a test-only failed/short range read for the synthetic profile')
+    p.add_argument('--mutate-profile-validation', action='store_true',
+                   help='negative control: bypass profile read validation in the fault fixture')
     a = p.parse_args()
+    if a.mutate_profile_validation and not a.fault_profile_read:
+        p.error('--mutate-profile-validation requires --fault-profile-read')
     if (platform.system(), platform.machine()) != ('Darwin', 'arm64'):
         raise ValueError('Apple Silicon macOS required')
     compiler = verified(a.compiler, a.compiler_sha256)
@@ -50,6 +56,24 @@ def main():
                               '--fixture-parent', str(root), '--output', str(root / 'fixture.kotoba')],
                              check=True, capture_output=True, text=True, timeout=30)
         receipt = json.loads(gen.stdout)
+        if a.fault_profile_read:
+            # Instrument only this fixture. The real host/provider is unchanged.
+            fixture_source = (root / 'fixture.kotoba').read_text()
+            declaration = '(defn- cp-read-op [p :string op :string tail :string] :vector-i64'
+            next_form = '(defn- cp-read [p :string] :vector-i64'
+            if fixture_source.count(declaration) != 1 or fixture_source.count(next_form) != 1:
+                raise ValueError('read fault injection anchor changed')
+            fixture_source = fixture_source.replace(declaration, declaration.replace('cp-read-op', 'cp-read-op-real'), 1)
+            n = 0 if a.fault_profile_read == 'empty' else 1
+            wrapper = ('(defn- cp-read-op [p :string op :string tail :string] :vector-i64\n'
+                       '  (if (and (= p "/fixture3/input/profile") (= op "E")) '
+                       f'(vector-alloc {n}) (cp-read-op-real p op tail)))\n')
+            if a.mutate_profile_validation:
+                guard = '(cp-capture-read-valid? (cp-arg 4) profile-bytes)'
+                if fixture_source.count(guard) != 1:
+                    raise ValueError('profile guard mutation anchor changed')
+                fixture_source = fixture_source.replace(guard, 'true', 1)
+            (root / 'fixture.kotoba').write_text(fixture_source.replace(next_form, wrapper + next_form, 1))
         env = {'PATH': '/usr/bin:/bin', 'HOME': str(fixture / 'home'),
                'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'LANG': 'C'}
         def git(repo, *args):
@@ -127,6 +151,21 @@ def main():
                     finally: git('repo', 'config', '--local', '--unset-all', key)
                 guest(['config-test', '/fixture3/missing'], 1)
             before = snapshot('repo')
+            if a.fault_profile_read:
+                result = guest(['capture', '/fixture3/repo', '/fixture3/store', '/fixture3/input/seed',
+                                '/fixture3/input/profile', '/fixture3/input/policy', '/fixture3/input/environment',
+                                '/fixture3/input/summary', '/fixture3/input/untracked', '1', 'root', 'fixture'],
+                               0 if a.mutate_profile_validation else 1)
+                if a.mutate_profile_validation and not result.startswith('checkpoint/created '):
+                    raise ValueError(('mutant was not detected', result))
+                if not a.mutate_profile_validation and (not result.startswith('checkpoint/') or 'checkpoint/created ' in result):
+                    raise ValueError(('faulted capture accepted', result))
+                if snapshot('repo') != before:
+                    raise ValueError('faulted capture changed source snapshot')
+                print(json.dumps({'fault': a.fault_profile_read, 'captureRefused': not a.mutate_profile_validation,
+                                  'guardBypassAccepted': a.mutate_profile_validation,
+                                  'scope': 'source-injected diagnostic; not a provider failure or production Git'}))
+                return
             captured = guest(['capture', '/fixture3/repo', '/fixture3/store', '/fixture3/input/seed',
                               '/fixture3/input/profile', '/fixture3/input/policy', '/fixture3/input/environment',
                               '/fixture3/input/summary', '/fixture3/input/untracked', '1', 'root', 'fixture'])
