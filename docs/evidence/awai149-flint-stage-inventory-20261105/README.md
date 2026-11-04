@@ -78,3 +78,25 @@ before/after checks cannot rule out a change-and-revert race or bind those
 reads to an immutable snapshot. The Python operator is not a trusted native
 host. Real model data, production FS2, authenticated helper composition,
 crash recovery, selfhost and governor qualification remain untested.
+
+## Deliberately mismatched stage and inventory
+
+On 2026-11-05 JST, the diagnostic was extended with a counterexample. A
+second private stage was copied from the valid one and given an extra file.
+With its own native ADI2 frames the verifier refused it. When the test
+deliberately supplied the original stage's held FDs and matching ADI2/ADP1
+frames while asking the verifier to read the second stage by path, the same
+selected verifier returned `inventory/verified`. This is a test-controlled
+violation of the helper's documented host-binding requirement, not evidence
+that an authenticated production host exists or is exploitable.
+
+The diagnostic now also compares the requested stage path's device/inode
+with the held root FD before and after invoking the verifier. It rejected the
+same permanent mismatch before calling the verifier. This Python-side control
+is not a production fix: path checks around a call can miss a change-and-
+revert race, do not bind the verifier's internal reads to the FDs, and do
+not replace exclusive ownership, no-follow traversal or a qualified native
+host. The parent ADP1 frame remained synthetic. The updated diagnostic
+script SHA-256 was
+`dc74147e66b538a6b2302606f962d87293220889f85fda31258be044724575e8`.
+All test files were synthetic and the task-owned temporary tree was removed.

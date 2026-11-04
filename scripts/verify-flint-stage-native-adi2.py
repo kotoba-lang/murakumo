@@ -14,6 +14,7 @@ for file,names in files.items():
 p=argparse.ArgumentParser();p.add_argument('--compiler',type=pathlib.Path,required=True);p.add_argument('--compiler-sha256',required=True);p.add_argument('--packager',type=pathlib.Path,required=True);p.add_argument('--packager-sha256',required=True);p.add_argument('--inventory-helper',type=pathlib.Path,required=True);p.add_argument('--inventory-helper-sha256',required=True);args=p.parse_args()
 compiler=args.compiler.resolve(strict=True);pack=args.packager.resolve(strict=True)
 helper=args.inventory_helper.resolve(strict=True)
+class BindingMismatch(Exception):pass
 for path,digest in [(compiler,args.compiler_sha256),(pack,args.packager_sha256),(helper,args.inventory_helper_sha256)]:
  if not re.fullmatch('[0-9a-f]{64}',digest) or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise RuntimeError('tool pin mismatch')
 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(helper)],check=True,capture_output=True,timeout=15)
@@ -71,13 +72,16 @@ with tempfile.TemporaryDirectory(prefix='awai149-flint-full-',dir='/private/tmp'
     if not frame.startswith('41444932') or not frame.endswith('\n'):raise RuntimeError('bad ADI2 frame')
     return frame
    finally:os.dup2(savedfd,3);os.close(savedfd)
-  def verify(name,layoutname,args,stage,rc,expected,bad_parent=False,bad_root=False):
+  def verify(name,layoutname,args,stage,rc,expected,bad_parent=False,bad_root=False,observed_stage=None,enforce_binding=True):
    flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW
-   rootfd=os.open(root/stage,flags);childfd=None
+   observed=stage if observed_stage is None else observed_stage
+   rootfd=os.open(root/observed,flags);childfd=None
    try:
     childfd=os.open('.kapitsa',flags,dir_fd=rootfd)
     rs=os.fstat(rootfd);cs=os.fstat(childfd);entry=os.stat('.kapitsa',dir_fd=rootfd,follow_symlinks=False)
     if (entry.st_dev,entry.st_ino)!=(cs.st_dev,cs.st_ino):raise RuntimeError('child identity changed')
+    target=os.stat(root/stage,follow_symlinks=False)
+    if enforce_binding and (not stat.S_ISDIR(target.st_mode) or (target.st_dev,target.st_ino)!=(rs.st_dev,rs.st_ino)):raise BindingMismatch('stage path differs from held root FD')
     ident=lambda n:struct.pack('<Q',n).hex()
     parent=(b'ADP1'+b'\0'*4+struct.pack('<QQQQ',rs.st_dev,rs.st_ino,cs.st_dev,cs.st_ino)).hex()+'\n'
     if bad_parent:parent='4144503101000000'+parent[16:]
@@ -88,8 +92,10 @@ with tempfile.TemporaryDirectory(prefix='awai149-flint-full-',dir='/private/tmp'
      f[0]=f[0][:32]+f[3]+f[0][48:]
     out=run([img,'verify','/'+layoutname,*args,'/'+stage,*f],rc)
     if out!=expected:raise RuntimeError((name,out,expected))
-    entry_after=os.stat('.kapitsa',dir_fd=rootfd,follow_symlinks=False);root_after=os.stat(root/stage,follow_symlinks=False)
+    entry_after=os.stat('.kapitsa',dir_fd=rootfd,follow_symlinks=False);root_after=os.stat(root/observed,follow_symlinks=False)
     if (os.fstat(rootfd).st_dev,os.fstat(rootfd).st_ino)!=(rs.st_dev,rs.st_ino) or (os.fstat(childfd).st_dev,os.fstat(childfd).st_ino)!=(cs.st_dev,cs.st_ino) or (entry_after.st_dev,entry_after.st_ino)!=(cs.st_dev,cs.st_ino) or (root_after.st_dev,root_after.st_ino)!=(rs.st_dev,rs.st_ino):raise RuntimeError('FD or path identity changed')
+    target_after=os.stat(root/stage,follow_symlinks=False)
+    if enforce_binding and (not stat.S_ISDIR(target_after.st_mode) or (target_after.st_dev,target_after.st_ino)!=(rs.st_dev,rs.st_ino)):raise BindingMismatch('stage path changed during verification')
     print(name,out,flush=True)
    finally:
     if childfd is not None:os.close(childfd)
@@ -124,6 +130,17 @@ with tempfile.TemporaryDirectory(prefix='awai149-flint-full-',dir='/private/tmp'
    if childpath.is_symlink():childpath.unlink()
    heldpath.rename(childpath)
   verify('restored-stage','layout',good,'stage',0,'inventory/verified')
+  shutil.copytree(root/'stage',root/'other-stage')
+  (root/'other-stage'/'extra').write_bytes(b'extra')
+  verify('other-stage-own-inventory','layout',good,'other-stage',1,'inventory/refused')
+  # Deliberate host-binding failure: the frame/FDs refer to stage while the
+  # verifier reads other-stage. Success is the counterexample, not approval.
+  verify('unbound-inventory-counterexample','layout',good,'other-stage',0,'inventory/verified',observed_stage='stage',enforce_binding=False)
+  try:
+   verify('host-bound-other-stage','layout',good,'other-stage',0,'inventory/verified',observed_stage='stage')
+  except BindingMismatch:
+   print('host-bound-other-stage refused before verifier',flush=True)
+  else:raise RuntimeError('host accepted mismatched stage path')
   call('bad-manifest','badlayout',bad,'badstage',1,'flint-artifact/staging-unknown')
   verify('partial-stage','badlayout',bad,'badstage',1,'inventory/refused')
   wrong=good.copy();wrong[2]='sha256:'+'0'*64;call('wrong-pin','layout',wrong,'wrongstage',1,'flint-artifact/input-refused')
