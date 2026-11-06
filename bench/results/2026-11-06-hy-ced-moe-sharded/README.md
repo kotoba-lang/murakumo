@@ -51,4 +51,60 @@ and bind its own qualification receipt to host/OS/source. No daemon/systemwide
 limit or pre-existing job was changed. Whole-interface counters and transfer
 bytes are distinct from measured training.
 
-Global checkpoint and actual3B save/restart remain pending at this unit.
+Global checkpoint and actual3B save/restart remained pending at that unit.
+
+## Global checkpoint / separate-process continuation controls
+
+Each owner writes its own weight/FP32-master tensor files with hashes, headers,
+config/options/source/runtime/corpus identity, sampler and local MLXRNG state.
+Files/directories are fsynced before atomic local publication. All ranks agree
+on common state and every rank's sealed shard manifest, then write and read back
+the same global commit certificate. A prepared local directory is not a completed
+global snapshot. Load independently checks every local file, ownership/layout,
+counts, source/runtime/data/options and the certificate before tensor loading,
+and requires all ranks to agree on one generation. No layout-changing resume.
+
+Small F32 physical3-rank training on the same32K train-only tokenizer:2 updates,
+global checkpoint, actual new processes2 more updates. Independently compare
+against uninterrupted4 updates. All155 owned weights and FP32 masters match
+exactly across the partition, both at restored boundary and final continuation.
+Sampler input sequence and local MLXRNG state are exact; boundary held-out CE
+is identical. Continuous and resumed final global-manifest hashes are identical.
+
+Six cooperative load refusals: missing global commit, corrupted tensor, missing
+master, changed optimizer options, mixed valid global generations, and partial
+directory. One rank's defect causes all ranks to refuse. Instrumentation forbids
+both mx.load and MasterStore construction in these cases; neither is reached.
+One rank's failed prepare also prevents every COMMITTED certificate. All controls
+pass under requested2GiB/fatal1GiB, no timeout, children reaped. The initial
+checker-only parenthesis error exited before model work; its supervisors remain
+recorded and the corrected checker passes asv2. Executing trainer/source remained
+unchanged between prefix, suffix and continuous runs.
+
+## Preregistered actual3B measurement
+
+Model config3b:3,003,341,824 total parameters,24 layers,width1024,64experts,
+top4,FF608,16heads,64head-dim,CSA2-style/sharedKV/SWA/CED unchanged. Random
+per-key initialization(seed936), no imported pretrained model. BF16 weights/
+gradients, owner-local FP32 SGD/NVMe masters, lr0.001/decay0.01/global clip1.
+Sequence64/globalbatch1, same sampler/tokenizer/corpus and fixed2-batch128-token
+held-out CE. Compare2 and3 physical owners, contiguous12/8 layers per owner,
+with one tied embedding/head owner(rank0). Each layout uses2 updates, global
+checkpoint2, separate processes restore then2 more updates/global checkpoint4.
+Total4 updates/256 global training tokens counted once per layout.
+
+All ranks request10GiB and independently read back XNU active/inactive fatal9GiB.
+Outer deadline600s/rank/process, serial layout/phase execution, no cap increases
+or stopping unrelated jobs. If a condition fails, preserve its terminal evidence
+and do not claim capacity success. Original7 checkpoint-bound sources remain
+unchanged. Actual links1Gb/s; model/master weights never move with activations.
+The serial model-parallel schedule has no pipeline overlap or EP dispatch.
+
+Measure maximum-rank phase times and supervisors (including init/load/eval/save),
+actual partition counts, local compute, collective transfer/metadata/barrier wait,
+logical boundary payloads/ring estimates/whole-en0 traffic, process memory and
+NVMe I/O, loss/norm/input hashes, source identity, checkpoint files/global seals,
+and actual resumed step/sampler/boundary CE. Transfer and peer-compute/barrier
+wait are separate. Global byte counts and per-rank collective estimates must not
+be summed as exclusive wire traffic. Short runs do not establish convergence or
+sustained scaling.3B results are pending at this checkpoint implementation unit.
