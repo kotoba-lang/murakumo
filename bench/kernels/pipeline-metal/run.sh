@@ -30,8 +30,8 @@ LAYOUT=${LAYOUT:-hf}
 # the conditional prompt mixes ASCII, Japanese, accented Latin, fullwidth forms and an emoji, so the whole path (tokenizer, towers, render) is exercised on non-ASCII text
 # ComfyUI prompt weighting in both prompts: nested and explicit weights, an escaped parenthesis, a weighted special token
 # both prompts run past 75 tokens: ComfyUI cuts them into blocks of 77 (here 2 and 3), each through the towers, joined along the sequence axis; the shorter is repeated to the common length
-export PROMPT_C=${PROMPT_C:-"(桜の花:1.3) が咲く夜景、a ((photo)) of a (cat:0.7) \\(x\\) ÀÉ Привет ΑΘΗΝΑ Ողջույն שלום (Straße:1.15) ＡＢＣ１２３ 😀 école が $(python3 -c "print(' '.join(['sharp', 'detail'] * 14))")"}
-export PROMPT_U=${PROMPT_U:-"(blurry:1.4), ugly, (bad hands:0.6) $(python3 -c "print(' '.join(['blur', 'noise', 'grain'] * 50))")"}
+export PROMPT_C=${PROMPT_C:-"(桜の花:1.3) が咲く夜景、a ((photo)) of a (cat:0.7) \\(x\\) ÀÉ Привет ΑΘΗΝΑ Ողջույն שלום (Straße:1.15) embedding:half ＡＢＣ１２３ 😀 école が $(python3 -c "print(' '.join(['sharp', 'detail'] * 14))")"}
+export PROMPT_U=${PROMPT_U:-"(blurry:1.4), ugly, (bad hands:0.6) embedding:one, embedding:sub/tri $(python3 -c "print(' '.join(['blur', 'noise', 'grain'] * 50))")"}
 if [ "$LAYOUT" = single ]; then PRE_L=conditioner.embedders.0.transformer.; PRE_G=conditioner.embedders.1.model.; SCH_G=1; else PRE_L=clip_l.; PRE_G=clip_g.; SCH_G=0; fi
 PYTHONPATH="$STUBS" "$PYC" "$HERE/make_fixture.py" write "$WK/fx" "$COMFY" "$MC" "$LAT" "$CH" "$STEPS" "$TOKDIR" "$LAYOUT" > "$WK/fx.log" 2>&1
 # the pinned digest the program must find in the checkpoint before reading it (here taken from the fixture just written; for a real
@@ -42,7 +42,7 @@ printf "%s%s" "$(cut -c1-63 "$WK/fx/model.sha256")" "$flip" > "$WK/fx/bad.sha256
 SB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',($CH*4)**-0.5))[0])")
 CFGB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',4.0))[0])")
 build() { # name [from to]
-  sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@EXPECT@#$WK/fx/model.sha256#;s#@PRE_L@#$PRE_L#;s#@PRE_G@#$PRE_G#;s#@SCHEME_L@#0#;s#@SCHEME_G@#$SCH_G#;s#@X@#$WK/fx/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/fx/prompt_c.txt#;s#@PROMPTU@#$WK/fx/prompt_u.txt#;s#@SZ@#$WK/fx/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/$1.kotoba"
+  sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@EMBDIR@#$WK/fx/emb#;s#@EXPECT@#$WK/fx/model.sha256#;s#@PRE_L@#$PRE_L#;s#@PRE_G@#$PRE_G#;s#@SCHEME_L@#0#;s#@SCHEME_G@#$SCH_G#;s#@X@#$WK/fx/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/fx/prompt_c.txt#;s#@PROMPTU@#$WK/fx/prompt_u.txt#;s#@SZ@#$WK/fx/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/$1.kotoba"
   if [ -n "${2:-}" ]; then
     FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/$1.kotoba"
   fi
@@ -73,6 +73,8 @@ mutant weight-scale 'float w = float(wi) / 65536.0f; Z[i] = (Z[i] - E[i]) * w + 
 kernel void blend_g' 'float w = float(wi) / 32768.0f; Z[i] = (Z[i] - E[i]) * w + E[i];
 }
 kernel void blend_g'
+mutant embedding-rows-off 'if (r < T && Ov[r] != 0u) X[i] =' 'if (false) X[i] ='
+mutant embedding-row-index 'Tab[(Ov[r] - 1u) * H + c] + Pos[r * H + c];' 'Tab[(Ov[r] - 0u) * H + c] + Pos[r * H + c];'
 mutant context-repeat 'uint s = r % src;' 'uint s = (r < src) ? r : 0u;'
 mutant block-ids 'i1 (emit! S (vector-i64 idsL idl) (vector-i64 (* c 308) 0)' 'i1 (emit! S (vector-i64 idsL idl) (vector-i64 0 0)'
 mutant block-output 'o1 (emit! S (vector-i64 penL outL) (vector-i64 0 (* c (* 77 3072)))' 'o1 (emit! S (vector-i64 penL outL) (vector-i64 0 0)'

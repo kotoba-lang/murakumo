@@ -585,6 +585,241 @@
         x (loop [j (+ len 1)] (if (>= j 77) 0 (let [a1 (vector-assoc! IDS (+ (* c 77) j) pad) b1 (vector-assoc! WTS (+ (* c 77) j) 65536)] (recur (+ j 1)))))]
     (+ c 1)))
 
+;; ---- textual-inversion embeddings (ComfyUI's "embedding:name" words), slice 48 ----
+;; A word "embedding:name" (at the start of a segment or after whitespace) is replaced by the rows of the file name / name.safetensors in the embedding
+;; directory (keys clip_l and clip_g, F32 or F16, the same number of rows, at most 32 in all); the text that follows the name is tokenized on its own.
+(defn- embdir [] :string "@EMBDIR@")
+(defn- is-asp [b :i64] :bool (or (= b 32) (or (within b 9 13) (within b 28 31))))
+
+;; first index of the literal lit in [s, e), or -1
+(defn- sub-find [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :i64 e :i64 lit :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 lit))
+        n (vector-count v)]
+    (loop [i s]
+      (if (> (+ i n) e) -1
+        (if (= (loop [k 0] (if (= k n) 1 (if (= (byte-at f (+ p (+ i k))) (vector-at v k)) (recur (+ k 1)) 0))) 1) i (recur (+ i 1)))))))
+
+;; write dir + "/" + name + ext as a C string at PB
+(defn- mk-path! [f [:fn [[:i64 :i64 :i64] :i64]] PB :i64 name :i64 len :i64 ext :string] :i64
+  (let [dn (string-length (embdir))
+        u0 (put-text f PB (embdir))
+        u1 (poke8 f (+ PB dn) 47)
+        u2 (loop [k 0] (if (= k len) 0 (let [x (poke8 f (+ PB (+ dn (+ 1 k))) (byte-at f (+ name k)))] (recur (+ k 1)))))
+        u3 (put-text f (+ PB (+ dn (+ 1 len))) ext)]
+    0))
+
+;; the descriptor of path PB if it is a regular file, else -1
+(defn- open-reg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 PB :i64] :i64
+  (let [fd (cc f (sym f "open") PB 0 0 0 0)]
+    (if (< fd 0) -1
+      (let [sb (cc f (vector-at R 3) 160 0 0 0 0)
+            r (cc f (sym f "fstat") fd sb 0 0 0)
+            mode (bit-and (peek f (+ sb 4)) 65535)]
+        (if (and (= r 0) (= (bit-and mode 61440) 32768)) fd (let [x (cc f (sym f "close") fd 0 0 0 0)] -1))))))
+
+;; ComfyUI's search order: the name itself, then .safetensors, .pt, .bin; returns descriptor * 4 + kind (1 = safetensors, 2 = other), or -1
+(defn- emb-find-file [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 name :i64 len :i64] :i64
+  (let [PB (cc f (vector-at R 3) 1200 0 0 0 0)
+        m0 (mk-path! f PB name len "")
+        fd0 (open-reg f R PB)
+        endsst (if (and (>= len 12) (= (sub-find f name (- len 12) len ".safetensors") (- len 12))) 1 0)]
+    (if (>= fd0 0) (+ (* fd0 4) (if (= endsst 1) 1 2))
+      (let [m1 (mk-path! f PB name len ".safetensors")
+            fd1 (open-reg f R PB)]
+        (if (>= fd1 0) (+ (* fd1 4) 1)
+          (let [m2 (mk-path! f PB name len ".pt")
+                fd2 (open-reg f R PB)]
+            (if (>= fd2 0) (+ (* fd2 4) 2)
+              (let [m3 (mk-path! f PB name len ".bin")
+                    fd3 (open-reg f R PB)]
+                (if (>= fd3 0) (+ (* fd3 4) 2) -1)))))))))
+
+;; the integers of the list that starts after the "[" at i, into OUTV (at most 4), count returned
+(defn- parse-ints [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 OUTV :vector-i64] :i64
+  (loop [j i k 0 cur 0 have 0]
+    (let [b (byte-at f (+ p j))]
+      (cond
+        (within b 48 57) (recur (+ j 1) k (+ (* cur 10) (- b 48)) 1)
+        (= b 44) (let [u (vector-assoc! OUTV k cur)] (recur (+ j 1) (+ k 1) 0 0))
+        :else (if (= have 1) (let [u (vector-assoc! OUTV k cur)] (+ k 1)) k)))))
+
+;; half precision bits to float32 bits
+(defn- half-bits [h :i64] :i64
+  (let [sg (i64-shift-left (bit-and (i64-shift-right h 15) 1) 31)
+        ex (bit-and (i64-shift-right h 10) 31)
+        mn (bit-and h 1023)]
+    (cond
+      (= ex 31) (bit-or sg (bit-or 2139095040 (i64-shift-left mn 13)))
+      (> ex 0) (bit-or sg (bit-or (i64-shift-left (+ ex 112) 23) (i64-shift-left mn 13)))
+      (= mn 0) sg
+      :else (loop [m mn e 113]
+              (if (>= m 1024) (bit-or sg (bit-or (i64-shift-left e 23) (i64-shift-left (bit-and m 1023) 13)))
+                (recur (i64-shift-left m 1) (- e 1)))))))
+
+;; the rows of the tensor `key` of a safetensors header: checks dtype (F32 or F16) and width, copies the rows to dst + row * width * 4 when dst is set; returns the row count
+(defn- emb-tensor! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 hdr :i64 hlen :i64 key :string width :i64 dst :i64 base :i64 IV :vector-i64] :i64
+  (let [ks (sub-find f hdr 0 hlen key)
+        u0 (if (< ks 0) (refuse-text f R "refused: an embedding without both clip_l and clip_g\n") 0)
+        oe (sub-find f hdr ks hlen "}")
+        f32 (sub-find f hdr ks oe "\"F32\"")
+        f16 (sub-find f hdr ks oe "\"F16\"")
+        u1 (if (and (< f32 0) (< f16 0)) (refuse-text f R "refused: an embedding that is neither F32 nor F16\n") 0)
+        sh (sub-find f hdr ks oe "\"shape\":[")
+        u2 (if (< sh 0) (refuse-text f R "refused: an embedding header without a shape\n") 0)
+        rank (parse-ints f hdr (+ sh 9) IV)
+        rows (if (= rank 1) 1 (if (= rank 2) (vector-at IV 0) (refuse-text f R "refused: an embedding of rank other than 1 or 2\n")))
+        dim (vector-at IV (- rank 1))
+        u3 (if (= dim width) 0 (refuse-text f R "refused: an embedding of the wrong width\n"))
+        od (sub-find f hdr ks oe "\"data_offsets\":[")
+        u4 (if (< od 0) (refuse-text f R "refused: an embedding header without offsets\n") 0)
+        no (parse-ints f hdr (+ od 16) IV)
+        off (+ (+ 8 hlen) (vector-at IV 0))
+        u5 (if (> (+ base rows) 32) (refuse-text f R "refused: more than 32 embedding rows in a prompt\n") 0)
+        u6 (if (= dst 0) 0
+             (if (>= f32 0)
+               (cc f (sym f "pread") fd (+ dst (* (* base width) 4)) (* (* rows width) 4) off 0)
+               (let [tmp (cc f (vector-at R 3) (+ (* (* rows width) 2) 16) 0 0 0 0)
+                     g (cc f (sym f "pread") fd tmp (* (* rows width) 2) off 0)
+                     o (+ dst (* (* base width) 4))]
+                 (loop [i 0]
+                   (if (= i (* rows width)) 0
+                     (let [hb (bit-or (byte-at f (+ tmp (* i 2))) (i64-shift-left (byte-at f (+ tmp (+ (* i 2) 1))) 8))
+                           fb (half-bits hb)
+                           w0 (poke8 f (+ o (* i 4)) (bit-and fb 255))
+                           w1 (poke8 f (+ o (+ (* i 4) 1)) (bit-and (i64-shift-right fb 8) 255))
+                           w2 (poke8 f (+ o (+ (* i 4) 2)) (bit-and (i64-shift-right fb 16) 255))
+                           w3 (poke8 f (+ o (+ (* i 4) 3)) (bit-and (i64-shift-right fb 24) 255))]
+                       (recur (+ i 1))))))))]
+    rows))
+
+;; the registry EM: [0] embeddings, [1] rows so far, then (name hash, first row, rows) per embedding. Returns the first row of the embedding `name`, loading
+;; it (and, when the tables EM[3] / EM[4] are set, copying its rows there as float32) on first use; -1 when there is no such file
+(defn- emb-load! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 EM :vector-i64 name :i64 len :i64] :i64
+  (let [bad (if (or (= len 0) (or (= (byte-at f name) 47) (>= (sub-find f name 0 len "..") 0))) 1 0)]
+    (if (= bad 1) -1
+      (let [h (fnv f name len)
+            reg (loop [i 0] (if (= i (vector-at EM 0)) -1 (if (= (vector-at EM (+ 2 (* i 3))) h) i (recur (+ i 1)))))]
+        (if (>= reg 0) (vector-at EM (+ 3 (* reg 3)))
+          (let [r (emb-find-file f R name len)]
+            (if (< r 0) -1
+              (let [fd (i64-shift-right r 2)
+                    u0 (if (= (bit-and r 3) 1) 0 (refuse-text f R "refused: an embedding file that is not .safetensors\n"))
+                    lb (cc f (vector-at R 3) 16 0 0 0 0)
+                    u1 (cc f (sym f "pread") fd lb 8 0 0)
+                    hlen (peek f lb)
+                    hdr (cc f (vector-at R 3) (+ hlen 16) 0 0 0 0)
+                    u2 (cc f (sym f "pread") fd hdr hlen 8 0)
+                    IV (vector-alloc 8)
+                    base (vector-at EM 1)
+                    nl (emb-tensor! f R fd hdr hlen "\"clip_l\"" 768 (vector-at EM 67) base IV)
+                    ng (emb-tensor! f R fd hdr hlen "\"clip_g\"" 1280 (vector-at EM 68) base IV)
+                    u3 (if (= nl ng) 0 (refuse-text f R "refused: an embedding whose clip_l and clip_g have different numbers of rows\n"))
+                    u4 (if (> (+ base nl) 32) (refuse-text f R "refused: more than 32 embedding rows in a prompt\n") 0)
+                    u5 (if (>= (vector-at EM 0) 15) (refuse-text f R "refused: more than 15 different embeddings\n") 0)
+                    q (+ 2 (* (vector-at EM 0) 3))
+                    a (vector-assoc! EM q h) b (vector-assoc! EM (+ q 1) base) c (vector-assoc! EM (+ q 2) nl)
+                    d (vector-assoc! EM 0 (+ (vector-at EM 0) 1)) e (vector-assoc! EM 1 (+ base nl))
+                    cl (cc f (sym f "close") fd 0 0 0 0)]
+                base))))))))
+
+;; rows of the embedding whose first row is base
+(defn- emb-rows [EM :vector-i64 base :i64] :i64
+  (loop [i 0] (if (= i (vector-at EM 0)) 0 (if (= (vector-at EM (+ 3 (* i 3))) base) (vector-at EM (+ 4 (* i 3))) (recur (+ i 1))))))
+
+;; one text group over the bytes [s, e) of src
+(defn- text-group! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 src :i64 s :i64 e :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                   EM :vector-i64] :i64
+  (let [g (vector-at EM 64)
+        u (vector-assoc! EM 64 (+ g 1))]
+    (decode-seg f R src s e CP CL WT SGI k w g)))
+
+;; one group of n embedding rows (class 6, the code point is the row), then a boundary
+(defn- emb-group! [CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64 EM :vector-i64 base :i64 n :i64 w :i64] :i64
+  (let [g (vector-at EM 64)
+        u (vector-assoc! EM 64 (+ g 1))
+        d (loop [j 0] (if (= j n) 0 (let [a (vector-assoc! CP (+ k j) (+ base j)) b (vector-assoc! CL (+ k j) 6) c (vector-assoc! WT (+ k j) w) e (vector-assoc! SGI (+ k j) g)] (recur (+ j 1)))))
+        a (vector-assoc! CP (+ k n) 32) b (vector-assoc! CL (+ k n) 0) c (vector-assoc! WT (+ k n) 0) e (vector-assoc! SGI (+ k n) g)]
+    (+ k (+ n 1))))
+
+;; ComfyUI's handling of one "embedding:..." word [ps, pe) of weight w (_try_get_embedding and the code after it)
+(defn- emb-word! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 ps :i64 pe :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                  EM :vector-i64] :i64
+  (let [r0 (+ ps 10)
+        a0 (loop [i r0] (if (and (< i pe) (= (byte-at f (+ pbuf i)) 10)) (recur (+ i 1)) i))
+        e2 (loop [i pe] (if (and (> i a0) (= (byte-at f (+ pbuf (- i 1))) 10)) (recur (- i 1)) i))
+        n0 (loop [i a0] (if (and (< i e2) (is-asp (byte-at f (+ pbuf i)))) (recur (+ i 1)) i))
+        u0 (if (>= n0 e2) (refuse-text f R "refused: an embedding word without a name\n") 0)
+        n1 (loop [i n0] (if (and (< i e2) (not (is-asp (byte-at f (+ pbuf i))))) (recur (+ i 1)) i))
+        ;; the rest of the word, its tokens joined by single spaces, into the scratch buffer
+        xb (vector-at EM 65)
+        x0 (vector-at EM 66)
+        xe (loop [i n1 x x0 first 1]
+             (let [t0 (loop [q i] (if (and (< q e2) (is-asp (byte-at f (+ pbuf q)))) (recur (+ q 1)) q))]
+               (if (>= t0 e2) x
+                 (let [t1 (loop [q t0] (if (and (< q e2) (not (is-asp (byte-at f (+ pbuf q))))) (recur (+ q 1)) q))
+                       sp1 (if (= first 1) 0 (poke8 f (+ xb x) 32))
+                       x1 (if (= first 1) x (+ x 1))
+                       cp1 (loop [q 0] (if (= q (- t1 t0)) 0 (let [y1 (poke8 f (+ xb (+ x1 q)) (byte-at f (+ pbuf (+ t0 q))))] (recur (+ q 1)))))]
+                   (recur t1 (+ x1 (- t1 t0)) 0)))))
+        ;; a name with "<" or "[" in it ends there, the rest goes in front of the leftover
+        cut (loop [i n0] (if (>= i n1) -1 (if (or (= (byte-at f (+ pbuf i)) 60) (= (byte-at f (+ pbuf i)) 91)) i (recur (+ i 1)))))
+        nameend (if (< cut 0) n1 cut)
+        lt (if (< cut 0) (- xe x0)
+             (let [rest (- xe x0)
+                   shift (loop [q (- rest 1)] (if (< q 0) 0 (let [y2 (poke8 f (+ xb (+ x0 (+ q (+ (- n1 cut) (if (> rest 0) 1 0))))) (byte-at f (+ xb (+ x0 q))))] (recur (- q 1)))))
+                   head (loop [q 0] (if (= q (- n1 cut)) 0 (let [y3 (poke8 f (+ xb (+ x0 q)) (byte-at f (+ pbuf (+ cut q))))] (recur (+ q 1)))))
+                   sp2 (if (> rest 0) (poke8 f (+ xb (+ x0 (- n1 cut))) 32) 0)]
+               (+ (- n1 cut) (if (> rest 0) (+ rest 1) 0))))
+        base (emb-load! f R EM (+ pbuf n0) (- nameend n0))]
+    (if (>= base 0)
+      (let [n (emb-rows EM base)
+            k2 (emb-group! CP CL WT SGI k EM base n w)
+            u1 (vector-assoc! EM 66 (+ x0 lt))]
+        (if (> lt 0) (text-group! f R xb x0 (+ x0 lt) w CP CL WT SGI k2 EM) k2))
+      ;; not found: with commas around the name, ComfyUI tries the name without them and glues the commas in front of the leftover (this also when that fails)
+      (let [cs (loop [i n0] (if (and (< i nameend) (= (byte-at f (+ pbuf i)) 44)) (recur (+ i 1)) i))
+            ce (loop [i nameend] (if (and (> i cs) (= (byte-at f (+ pbuf (- i 1))) 44)) (recur (- i 1)) i))
+            slen (- ce cs)
+            tlen (- nameend n0)]
+        (if (< slen tlen)
+          (let [b2 (emb-load! f R EM (+ pbuf cs) slen)
+                ;; leftover := name[len(stripped):] + " " + leftover
+                sufflen (- tlen slen)
+                ox (+ x0 lt)
+                nbuf (+ ox 0)
+                c1 (loop [q 0] (if (= q sufflen) 0 (let [y4 (poke8 f (+ xb (+ nbuf q)) (byte-at f (+ pbuf (+ n0 (+ slen q)))))] (recur (+ q 1)))))
+                c2 (poke8 f (+ xb (+ nbuf sufflen)) 32)
+                c3 (loop [q 0] (if (= q lt) 0 (let [y5 (poke8 f (+ xb (+ nbuf (+ sufflen (+ 1 q)))) (byte-at f (+ xb (+ x0 q))))] (recur (+ q 1)))))
+                tot (+ sufflen (+ 1 lt))
+                u2 (vector-assoc! EM 66 (+ nbuf tot))
+                k3 (if (>= b2 0) (emb-group! CP CL WT SGI k EM b2 (emb-rows EM b2) w) k)]
+            (text-group! f R xb nbuf (+ nbuf tot) w CP CL WT SGI k3 EM))
+          (let [u3 (vector-assoc! EM 66 (+ x0 lt))]
+            (if (> lt 0) (text-group! f R xb x0 (+ x0 lt) w CP CL WT SGI k EM) k)))))))
+
+;; a segment [s, e): cut before every "embedding:" that follows whitespace, each piece is its own group; with no embedding directory it is one group
+(defn- emit-segment! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 s :i64 e :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                      EM :vector-i64] :i64
+  (if (= (string-length (embdir)) 0)
+    (text-group! f R pbuf s e w CP CL WT SGI k EM)
+    (let [SPV (vector-alloc 66)
+          n (loop [i (+ s 1) c 0]
+              (if (> (+ i 10) e) c
+                (if (and (is-asp (byte-at f (+ pbuf (- i 1)))) (= (sub-find f pbuf i (+ i 10) "embedding:") i))
+                  (let [u0 (if (>= c 64) (refuse-text f R "refused: more than 64 embedding words in a segment\n") 0)
+                        u (vector-assoc! SPV c i)]
+                    (recur (+ i 1) (+ c 1)))
+                  (recur (+ i 1) c))))]
+      (loop [j 0 kk k]
+        (if (> j n) kk
+          (let [ps (if (= j 0) s (vector-at SPV (- j 1)))
+                pe (if (= j n) e (vector-at SPV j))
+                isemb (if (and (> pe ps) (and (>= (- pe ps) 10) (= (sub-find f pbuf ps (+ ps 10) "embedding:") ps))) 1 0)]
+            (if (<= pe ps) (recur (+ j 1) kk)
+              (if (= isemb 1)
+                (recur (+ j 1) (emb-word! f R pbuf ps pe w CP CL WT SGI kk EM))
+                (recur (+ j 1) (text-group! f R pbuf ps pe w CP CL WT SGI kk EM))))))))))
+
 (defn- wr-num [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 v :i64] :i64
   (let [t (string-from-i64 v)
         p (cstr f (vector-at R 3) t)]
@@ -625,6 +860,8 @@
         OFF (vector-alloc 520)
         CP (vector-alloc 8192) CL (vector-alloc 8192)
         tmpw (cc f (vector-at R 3) 1024 0 0 0 0)
+        EM (vector-alloc 80) XBP (cc f (vector-at R 3) 65536 0 0 0 0)
+        stx (vector-assoc! EM 65 XBP)
         OUT (vector-alloc 4096) OUTW (vector-alloc 4096) OUTG (vector-alloc 4096) SGI (vector-alloc 8192) IDS (vector-alloc 320) WTS (vector-alloc 320)
         SEG (vector-alloc 1840) STK (vector-alloc 1600) PCS (vector-alloc 920) WT (vector-alloc 8192)]
     ;; one output line per prompt line
@@ -632,13 +869,18 @@
       (if (>= ls plen) 0
         (let [le (loop [q ls] (if (or (>= q plen) (= (byte-at f (+ pbuf q)) 10)) q (recur (+ q 1))))
               u (vector-assoc! OUT 0 0)
+              st0 (vector-assoc! EM 64 0) st2 (vector-assoc! EM 66 0)
               nseg (segments f R pbuf ls le SEG STK PCS)
               ncp (loop [g 0 k 0]
                     (if (= g nseg) k
-                      (recur (+ g 1) (decode-seg f R pbuf (vector-at SEG (* g 3)) (vector-at SEG (+ (* g 3) 1)) CP CL WT SGI k (vector-at SEG (+ (* g 3) 2)) g))))
+                      (recur (+ g 1) (emit-segment! f R pbuf (vector-at SEG (* g 3)) (vector-at SEG (+ (* g 3) 1)) (vector-at SEG (+ (* g 3) 2)) CP CL WT SGI k EM))))
               walk (loop [i 0]
                      (if (>= i ncp) 0
                        (if (= (vector-at CL i) 0) (recur (+ i 1))
+                         (if (= (vector-at CL i) 6)
+                           (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (+ 1000000 (vector-at CP i)))
+                                 ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) gg (vector-assoc! OUTG (+ 1 cc) (vector-at SGI i)) v (vector-assoc! OUT 0 (+ cc 1))]
+                             (recur (+ i 1)))
                          (if (= (vector-at CL i) 5)
                            (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (if (= (vector-at CP i) 2097153) bos eos))
                                  ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) gg (vector-assoc! OUTG (+ 1 cc) (vector-at SGI i)) v (vector-assoc! OUT 0 (+ cc 1))]
@@ -649,7 +891,7 @@
                                  b (bpe-word f R VT arena PT wbuf (vector-at r 0) (vector-at r 1) OFF SS SE SI OUT)
                                  c1 (vector-at OUT 0)
                                  ws (loop [j c0] (if (>= j c1) 0 (let [x (vector-assoc! OUTW (+ 1 j) (vector-at WT i)) y (vector-assoc! OUTG (+ 1 j) (vector-at SGI i))] (recur (+ j 1)))))]
-                             (recur (+ i n)))))))
+                             (recur (+ i n))))))))
               cnt (vector-at OUT 0)
               nb (batch-blocks f R OUT OUTW OUTG IDS WTS bos eos eos)
               keep (if (> cnt 75) 75 cnt)
