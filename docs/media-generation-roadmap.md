@@ -106,6 +106,16 @@ them.
 The first executable unit is I1, one kernel at a time, starting with GroupNorm +
 SiLU because it is the smallest kernel with a fused-activation question.
 
+**I1 progress (2026-11-06).** Slice 1, GroupNorm (affine) + SiLU in f32, is in
+`bench/kernels/groupnorm-silu/`: a Kotoba kernel built by `bin/amu`, a C twin, an
+f64 oracle and `run.sh`. Its checksum equals the C twin's bit for bit, a 1-ulp
+mutant is caught, and the outputs are within 5e-6 of the f64 reference. It is
+about 17x slower than `cc -O2` (diagnostic). Record:
+[bench/results/2026-11-06-groupnorm-silu](../bench/results/2026-11-06-groupnorm-silu/README.md).
+Still open in I1: conv2d, LayerNorm, GEGLU, attention, upsample, timestep
+embedding. The reference here is the twin's own math in double, not yet
+comfyui-clj or ComfyUI output.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
@@ -142,10 +152,10 @@ Blocked behind I3. Recorded here so the dependency is explicit.
 3. **Kernel strategy.** Write each kernel in Kotoba (I1 as planned), or route
    the diffusion graph through the KIR v2 → MSL path of amu ADR 0373/0375 once
    it can batch dispatches.
-4. **comfyui-clj's role.** Keep it as the graph engine and make its nodes call
-   native kernels, or keep it only as the oracle and put the graph in the
-   native runner. This document assumes the oracle role because the engine is
-   `.cljk` and cannot be the Amu-built runner.
+4. ~~comfyui-clj's role.~~ **Decided 2026-11-06 (owner): comfyui-clj stays a
+   verification reference (oracle) only.** The graph executor and the kernels
+   live in the native runner; comfyui-clj supplies reference tensors and
+   graphs for gates, run on a developer machine and recorded as in principle 2.
 
 ## Related work
 
