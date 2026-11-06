@@ -26,7 +26,7 @@ python3 "$HERE/make_unicode_prompts.py" > "$WK/prompts_unicode.txt"
 "$PY" "$HERE/oracle.py" "$TOKDIR" "$WK/prompts_unicode.txt" > "$WK/expect_u.txt" 2>/dev/null
 PROMPTS=${PROMPTS:-$HERE/prompts.txt}
 build() { # name [from to]
-  sed -e "s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTS@#$PROMPTS#;s#@WLINES@#${WLINES:-0}#;s#@WEIGHTS@#${WEIGHTS:-0}#" "$HERE/clip_tokenizer_metal.kotoba.in" > "$WK/$1.kotoba"
+  sed -e "s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTS@#$PROMPTS#;s#@WLINES@#${WLINES:-0}#;s#@WEIGHTS@#${WEIGHTS:-0}#;s#@BLOCKS@#${BLOCKS:-0}#" "$HERE/clip_tokenizer_metal.kotoba.in" > "$WK/$1.kotoba"
   if [ -n "${2:-}" ]; then
     FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/$1.kotoba"
   fi
@@ -47,11 +47,13 @@ mut() { # label from to [corpus: a|u]
 # prompt weighting (slice 44; needs ComfyUI v0.44.0 and its stubs as arguments 4 and 5): ComfyUI's own SDTokenizer is the oracle for the ids and the
 # weights of every token of prompts_weights.txt; weights are fixed point (65536 = 1.0) and must agree within 8 units (the products of 1.1 are rounded
 # at each level here, in doubles there).
-wcmp() { python3 - "$WK/expect_w.txt" "$WK/$1.out" <<'PY'
+wcmp() { python3 - "${WEXP:-$WK/expect_w.txt}" "$WK/$1.out" <<'PY'
 import sys
 a = open(sys.argv[1]).read().split("\n")[:-1]; b = open(sys.argv[2]).read().split("\n")[:-1]
 bad = 0
-if len(a) != len(b): print("line count", len(a), len(b)); sys.exit(1)
+if len(a) != len(b):
+    if len(sys.argv) < 3: print("line count", len(a), len(b))
+    sys.exit(1)
 for i, (x, y) in enumerate(zip(a, b)):
     try:
         if x.startswith("w "):
@@ -76,12 +78,27 @@ if [ -n "${COMFY:-}" ]; then
   wmut paren-factor '(quot (+ (* w 11) (if (>= w 0) 5 -5)) 10)' '(quot (+ (* w 12) (if (>= w 0) 5 -5)) 10)'
   wmut escape 'esc (if (and (= 1 1) (and (= b0 92)' 'esc (if (and (= 7 1) (and (= b0 92)'
   wmut explicit-weight 'w2 (if (= fp (wsent)) (fp-mul11 tw) fp)' 'w2 (if (= fp (wsent)) (fp-mul11 tw) (fp-mul11 fp))'
-  wmut boundary 'a (vector-assoc! CP k 32) b (vector-assoc! CL k 0) x (vector-assoc! WT k 0)]
-    (+ k 1)))' 'a (vector-assoc! CP k 32) b (vector-assoc! CL k 0) x (vector-assoc! WT k 0)]
+  wmut boundary 'y (vector-assoc! SGI k g)]
+    (+ k 1)))' 'y (vector-assoc! SGI k g)]
     k))'
 fi
+# blocks of 77 (slice 45): ComfyUI's batching of long prompts (more than 75 tokens) into several blocks, ids and weights of every position of every block
+if [ -n "${COMFY:-}" ]; then
+  PYTHONPATH="$STUBS:$COMFY" "$PY" "$HERE/oracle_b.py" "$TOKDIR" "$HERE/prompts_blocks.txt" > "$WK/expect_b.txt" 2>/dev/null
+  WEXP="$WK/expect_b.txt"
+  PROMPTS="$HERE/prompts_blocks.txt" WLINES=1 WEIGHTS=1 BLOCKS=1 build tkb; run tkb
+  if wcmp tkb; then echo "all $(grep -c '^w ' "$WK/expect_b.txt") blocks of 77 equal ComfyUI's SDTokenizer batching (ids exact, weights within 8/65536)"; else echo "BLOCK MISMATCH"; fail=1; fi
+  bmut() { # label from to: the block gate must fail
+    PROMPTS="$HERE/prompts_blocks.txt" WLINES=1 WEIGHTS=1 BLOCKS=1 build "b$1" "$2" "$3"; run "b$1"
+    if wcmp "b$1" quiet; then echo "mutant [$1] NOT detected"; fail=1; else echo "mutant [$1]: block gate fails (detected)"; fi
+  }
+  bmut large-group-threshold 'large (if (>= (- e st) 8) 1 0)' 'large (if (>= (- e st) 9) 1 0)'
+  bmut block-room '(let [rem (- 76 len)]' '(let [rem (- 75 len)]'
+  bmut keep-small-group-whole '(if (> (+ (- e p) len) 76)' '(if (> (+ (- e p) len) 77)'
+  WEXP=
+fi
 # a variable assignment before a shell function call persists in this shell: put the defaults back
-WLINES=0; WEIGHTS=0; PROMPTS=$HERE/prompts.txt
+WLINES=0; WEIGHTS=0; BLOCKS=0; PROMPTS=$HERE/prompts.txt
 mut rank '(if (and (>= r 0) (< r br))' '(if (and (>= r 0) (> r br))'
 mut lowercase '(< c 128) (if (within c 65 90) (+ c 32) c)' '(< c 128) c'
 mut special-token '(if (= (match-lit f p i e "<|startoftext|>") 1) 1' '(if (= (match-lit f p i e "<|startoftext|>") 7) 1'

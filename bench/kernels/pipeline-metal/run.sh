@@ -29,8 +29,9 @@ MC=64; LAT=32; CH=32; STEPS=4
 LAYOUT=${LAYOUT:-hf}
 # the conditional prompt mixes ASCII, Japanese, accented Latin, fullwidth forms and an emoji, so the whole path (tokenizer, towers, render) is exercised on non-ASCII text
 # ComfyUI prompt weighting in both prompts: nested and explicit weights, an escaped parenthesis, a weighted special token
-export PROMPT_C=${PROMPT_C:-"(桜の花:1.3) が咲く夜景、a ((photo)) of a (cat:0.7) \\(x\\) ÀÉ (Straße:1.15) ＡＢＣ１２３ 😀 école が"}
-export PROMPT_U=${PROMPT_U:-"(blurry:1.4), ugly, (bad hands:0.6)"}
+# both prompts run past 75 tokens: ComfyUI cuts them into blocks of 77 (here 2 and 3), each through the towers, joined along the sequence axis; the shorter is repeated to the common length
+export PROMPT_C=${PROMPT_C:-"(桜の花:1.3) が咲く夜景、a ((photo)) of a (cat:0.7) \\(x\\) ÀÉ (Straße:1.15) ＡＢＣ１２３ 😀 école が $(python3 -c "print(' '.join(['sharp', 'detail'] * 32))")"}
+export PROMPT_U=${PROMPT_U:-"(blurry:1.4), ugly, (bad hands:0.6) $(python3 -c "print(' '.join(['blur', 'noise', 'grain'] * 50))")"}
 if [ "$LAYOUT" = single ]; then PRE_L=conditioner.embedders.0.transformer.; PRE_G=conditioner.embedders.1.model.; SCH_G=1; else PRE_L=clip_l.; PRE_G=clip_g.; SCH_G=0; fi
 PYTHONPATH="$STUBS" "$PYC" "$HERE/make_fixture.py" write "$WK/fx" "$COMFY" "$MC" "$LAT" "$CH" "$STEPS" "$TOKDIR" "$LAYOUT" > "$WK/fx.log" 2>&1
 # the pinned digest the program must find in the checkpoint before reading it (here taken from the fixture just written; for a real
@@ -72,12 +73,15 @@ mutant weight-scale 'float w = float(wi) / 65536.0f; Z[i] = (Z[i] - E[i]) * w + 
 kernel void blend_g' 'float w = float(wi) / 32768.0f; Z[i] = (Z[i] - E[i]) * w + E[i];
 }
 kernel void blend_g'
+mutant context-repeat 'uint s = r % src;' 'uint s = (r < src) ? r : 0u;'
+mutant block-ids 'i1 (emit! S (vector-i64 idsL idl) (vector-i64 (* c 308) 0)' 'i1 (emit! S (vector-i64 idsL idl) (vector-i64 0 0)'
+mutant block-output 'o1 (emit! S (vector-i64 penL outL) (vector-i64 0 (* c (* 77 3072)))' 'o1 (emit! S (vector-i64 penL outL) (vector-i64 0 0)'
 mutant guidance 'float den = du + (dc - du) * cfg;' 'float den = dc;'
 mutant timestep-reversed '  Tb[0] = float(bj);' '  Tb[0] = float(999u - bj);'
 mutant uncond-context '(vector-i64 ctxhu ctxh) (vector-i64 0 0) 24' '(vector-i64 ctxhc ctxh) (vector-i64 0 0) 24'
-mutant concat-order '((c < 768u) ? L[r * 768u + c] : G[r * 1280u + (c - 768u)])' '((c < 1280u) ? G[r * 1280u + c] : L[r * 768u + (c - 1280u)])'
+mutant concat-order 'O[i] = (c < 768u) ? L[s * 768u + c] : G[s * 1280u + (c - 768u)];' 'O[i] = (c < 1280u) ? G[s * 1280u + c] : L[s * 768u + (c - 1280u)];'
 mutant size-order 'float arg = Sz[v] *' 'float arg = Sz[5u - v] *'
-mutant g-padding '(> k (+ keep 1))' '(> k (+ keep 2))'
+mutant g-padding 'bos eos (if (= padzero 1) 0 eos))' 'bos eos eos)'
 mutant vae-residual '(vector-i64 cout cout ih iw 3 1 2))
       (let [sc (scl!' '(vector-i64 cout cout ih iw 3 1 1))
       (let [sc (scl!'
