@@ -53,4 +53,8 @@ mutant causal 'Pat (pbuf-u f R dev 77 2 1 ' 'Pat (pbuf-u f R dev 77 2 0 '
 mutant penultimate '(= l (- 3 2))' '(= l (- 3 1))'
 mutant activation-dropped 'Pl1 (pbuf-u f R dev 128 128 512 1 0 1 ' 'Pl1 (pbuf-u f R dev 128 128 512 1 0 0 '
 mutant projection '(vector-i64 lnh wp zb dummy projf dummy Ppr)' '(vector-i64 qh wp zb dummy projf dummy Ppr)';; esac
-[ "$fail" = 0 ] && echo "gate passed, build dir $WK" || { echo "GATE FAILED, build dir $WK"; exit 1; }
+# the fixtures are large (up to 2.8 GB): on success the weight files are removed from the build dir unless KEEP=1
+if [ "$fail" = 0 ]; then
+  [ "${KEEP:-0}" = 1 ] || rm -f "$WK"/*/model.safetensors
+  echo "gate passed, build dir $WK"
+else echo "GATE FAILED, build dir $WK (weights kept)"; exit 1; fi
