@@ -159,6 +159,41 @@ def retire_archive(name, receipt_path):
     path.unlink()
     print(json.dumps({'pass': True, 'redundant_archive_retired': name, 'archive_sha256': destination['archive_sha256']}))
 
+def partial_index(path):
+    with tarfile.open(path, 'r|gz') as t:
+        head=t.next()
+        assert head and head.name=='ARCHIVE-INDEX.json' and head.isfile() and head.size<1024*1024
+        return json.loads(t.extractfile(head).read())
+
+def prepare_retry(name, receipt_path):
+    # Called only after transport children have exited; never during an active stream.
+    path=archive_path(name); p=path.with_suffix(path.suffix+'.partial')
+    expected=json.loads(pathlib.Path(receipt_path).read_text())['proof']
+    assert not path.exists() and p.is_file() and not p.is_symlink()
+    assert partial_index(p)==expected
+    try: r=verify(p)
+    except (EOFError, OSError, tarfile.TarError, AssertionError):
+        dest=pathlib.Path(str(path)+'.interrupted-v1'); assert not dest.exists()
+        p.rename(dest)
+        print(json.dumps({'pass':True,'incomplete_preserved':str(dest.relative_to(ROOT)),'proof':expected}))
+        return
+    assert r['proof']==expected
+    p.rename(path); r['archive_path']=name
+    with open(str(path)+'.verified.json','x') as f:
+        json.dump(r,f,sort_keys=True);f.flush();os.fsync(f.fileno())
+    print(json.dumps({'pass':True,'complete_partial_recovered':True,'receipt':r}))
+
+def retire_partial(name, receipt_path):
+    path=archive_path(name); p=pathlib.Path(str(path)+'.interrupted-v1')
+    r=json.loads(pathlib.Path(receipt_path).read_text())
+    assert r['pass'] and p.is_file() and not p.is_symlink()
+    assert partial_index(p)==r['proof']
+    record={'pass':True,'redundant_partial_sha256':digest(p),'redundant_partial_bytes':p.stat().st_size,
+            'complete_retained_archive':r,'reason':'incomplete derived transport; full checkpoint bytes independently verified in retained archive'}
+    with open(str(path)+'.RETIRED-PARTIAL.json','x') as f:
+        json.dump(record,f,sort_keys=True);f.flush();os.fsync(f.fileno())
+    p.unlink(); print(json.dumps(record))
+
 def restore(archive, destination):
     proof = verify(archive)['proof']
     dest = ROOT / destination
@@ -181,7 +216,7 @@ def restore(archive, destination):
     print(json.dumps({'pass': True, 'restored': destination, 'proof': proof}))
 
 if __name__ == '__main__':
-    a = argparse.ArgumentParser(); a.add_argument('action', choices=['index', 'stream', 'receive', 'verify', 'retire', 'restore', 'retire-archive'])
+    a = argparse.ArgumentParser(); a.add_argument('action', choices=['index', 'stream', 'receive', 'verify', 'retire', 'restore', 'retire-archive', 'prepare-retry', 'retire-partial'])
     a.add_argument('path'); a.add_argument('--receipt'); a.add_argument('--destination'); a.add_argument('--reserve', type=int, default=1024**3)
     x = a.parse_args()
     if x.action == 'index': print(json.dumps(index(x.path)))
@@ -190,4 +225,6 @@ if __name__ == '__main__':
     elif x.action == 'verify': print(json.dumps(verify(x.path)))
     elif x.action == 'restore': restore(x.path, x.destination)
     elif x.action == 'retire-archive': retire_archive(x.path, x.receipt)
+    elif x.action == 'prepare-retry': prepare_retry(x.path, x.receipt)
+    elif x.action == 'retire-partial': retire_partial(x.path, x.receipt)
     else: retire(x.path, x.receipt)

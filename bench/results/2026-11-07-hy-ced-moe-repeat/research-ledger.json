@@ -1,6 +1,6 @@
 {
   "schema": "ced-moe-seed-replay-study/v1",
-  "status": "preregistered-qualification",
+  "status": "qualified-actual-running",
   "registered_utc": "2026-11-06T22:45:59.254797+00:00",
   "source_predecessor": "087603fd",
   "question": "Does the RAM-minus-NVMe loss gap recur across paired seeds and exceed same-placement suffix replay variation?",
@@ -79,9 +79,10 @@
     "replay_updates": 32,
     "replay_start_checkpoint": 32,
     "replay_end_step": 64,
-    "unique_primary_tokens_per_backend_all_seeds": 12288,
     "additional_replayed_compute_tokens_per_backend": 6144,
-    "counting": "globalonce, not multiplied by10; replay repeats suffix, not extra training tostep96"
+    "counting": "globalonce, not multiplied by10; replay repeats suffix, not extra training tostep96",
+    "primary_processed_tokens_per_backend_all_seeds": 12288,
+    "corpus_uniqueness": "processed nonpadding token positions; random windows/corpus may overlap, not unique corpus content"
   },
   "fixed": {
     "preset": "3b",
@@ -127,7 +128,8 @@
     "secondary": "samepaired deltas atstep32 and largerterminaldevsample",
     "within_condition": "main suffix vs replay suffix startingfromexact32state, terminalCE delta and changedfingerprints; comparemode-gap magnitude to replay variation",
     "inference": "descriptive n3, no significance/equivalentconvergence/generalquality claim; fixedorder2:1 not fullybalanced",
-    "old_trial": "previous32update0.302639gap is historical, excluded from primary64update estimates"
+    "old_trial": "previous32update0.302639gap is historical, excluded from primary64update estimates",
+    "replay_boundary": "allfour statehashes/CE/inputtokens exact startstate; numericalterminal variation is measured, not equated with corruptserialization"
   },
   "storage": {
     "new_primary_checkpoints": "32and64fullstate for each of6conditions; allpreserved",
@@ -137,12 +139,19 @@
     "retention": "oldercheckpoints untouched; newcompressed archives may be relocatedwithintrustedfleet after SHAverification; sourcepointer/catalogrecorded",
     "transient_source_disk_reserve_bytes": 1073741824,
     "archive_destination_completed_reserve_bytes": 4294967296,
-    "admission": "measurelive freecapacity beforeeveryphase/move; no unchecked deletion or capincrease; stopifspace cannotbe safelypreserved"
+    "admission": "measurelive freecapacity beforeeveryphase/move; no unchecked deletion or capincrease; stopifspace cannotbe safelypreserved",
+    "transport": "samehost source\u2192receiver pipe onfleet; only crosshostbinary streams through SSH manager pipe, never stored locally",
+    "initial_transport_incident": "seed936RAM archive-only manager relay600s deadline; all3Blearners/readers passed; preserve verifiedarchives and fullunarchivedsources, reconcilepartialgzip and retry archiveonly; no learnerretry or replacement",
+    "recovery_controls": "qualification-localpipe.json, qualification-relocation.json, qualification-partial-recovery.json; completepartialadoption and truncatedderivedcopyretirement onlyafter retainedcompletearchiveverified"
   },
   "limits": [
     "existingjoseph inference retained, sharedhost/swap confound",
     "1Gbps actuallinks, not10Gbps",
     "oneprefix andsameinitial32replayedtwice perseed/backend, n3only",
     "BF16 nondeterminism and cacheorder remain measured, no silentfallback"
-  ]
+  ],
+  "implementation_commit": "02a6ee4b",
+  "qualified_controls": "qualification.json",
+  "qualification_scope": "Allmodel andCPU/Metal controls runonfleet only; developer Mac compile-only/stdlibSSHcoordination",
+  "raw_archive_restore_scope": "Actual3B rawcheckpoint restart and fullmember archiveverification; compressedrestore+modelresume specifically exercised onthe genuine tiny32 checkpoint"
 }

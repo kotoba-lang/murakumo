@@ -18,16 +18,27 @@ def transfer(source,target,path,archive,raw=True):
     # stdout is binary only, stderr is a bounded stream receipt; no model tensor on manager.
     sourcecmd=(PYTHON+' code/repeat_archive.py stream '+shlex.quote(path)) if raw else ('cat '+shlex.quote(path))
     stderrpath=SCRATCH/('archive-stream-'+hashlib.sha256((str(source)+path+str(target)).encode()).hexdigest()[:16]+'.txt')
+    if source==target:
+        assert raw
+        streamlog='repeat-receipts-v1/stream-'+hashlib.sha256(path.encode()).hexdigest()[:16]+'.txt'
+        pipe=sourcecmd+' 2>'+shlex.quote(streamlog)+' | '+PYTHON+' code/repeat_archive.py receive '+shlex.quote(archive)+' --reserve '+str(GIB)
+        out=remote(source,'/bin/bash -o pipefail -c '+shlex.quote(pipe),600)
+        r=json.loads(out); stream=json.loads(remote(source,'cat '+shlex.quote(streamlog)).splitlines()[-1])
+        assert r['pass'] and stream['stream_pass'] and stream['archive_sha256']==r['archive_sha256'] and stream['archive_bytes']==r['archive_bytes']
+        r.update({'source_stream_receipt':stream,'archive_host':target,'source_host':source,'transport':'same-host-pipe; binary never crosses manager'})
+        return r
     with open(stderrpath,'wb') as err:
         producer=subprocess.Popen(SSH[source]+['cd '+ROOT+' && '+sourcecmd],stdout=subprocess.PIPE,stderr=err)
         consumer=subprocess.Popen(SSH[target]+['cd '+ROOT+' && '+PYTHON+' code/repeat_archive.py receive '+shlex.quote(archive)+' --reserve '+str(GIB)],stdin=producer.stdout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         producer.stdout.close()
-        start=time.monotonic()
-        while consumer.poll() is None:
-            if time.monotonic()-start>600:
-                consumer.terminate(); producer.terminate(); raise RuntimeError('archive transfer deadline')
-            time.sleep(.2)
-        out,error=consumer.communicate(); pc=producer.wait(timeout=15)
+        try:
+            # Drain receipts while waiting: a large manifest must not fill stdout.
+            out,error=consumer.communicate(timeout=600)
+            pc=producer.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            consumer.terminate(); producer.terminate()
+            consumer.communicate(timeout=10); producer.wait(timeout=10)
+            raise RuntimeError('archive transfer deadline')
     if consumer.returncode or pc: raise RuntimeError(f'archive transfer {pc}/{consumer.returncode}: '+error.decode()[-2000:]+stderrpath.read_text()[-1000:])
     r=json.loads(out); assert r['pass']
     if raw:
@@ -71,6 +82,7 @@ def move(entry,target):
     write(CATALOG,entries)
 
 def admit(mode):
+    qualify_relocation()
     inputs=json.loads((SCRATCH/'storage-plan-input.json').read_text())
     needed=[2*x+(y if mode=='nvme' else 0)+GIB for x,y in zip(inputs['checkpoint_bytes'],inputs['nvme_working_bytes'])]
     for _ in range(100):
@@ -85,11 +97,31 @@ def admit(mode):
         move(e,max(destinations,key=lambda r:f[r]-needed[r]))
     raise RuntimeError('disk admission relocation bound')
 
+def qualify_relocation():
+    if not (HERE/'qualification-relocation.json').exists():
+        path='repeat-archives-v1/control/rank0/s937/ram/checkpoint-32.tar.gz'
+        r=transfer(0,1,path,path,False)
+        original=json.loads((HERE/'qualification-archives.json').read_text())[0]['receipt']
+        assert r['archive_sha256']==original['archive_sha256'] and r['proof']==original['proof']
+        r['retired_host']=0
+        receipt='repeat-receipts-v1/qual-relocation.json'; receipt_on(0,receipt,r)
+        retired=json.loads(remote(0,PYTHON+' code/repeat_archive.py retire-archive '+path+' --receipt '+receipt))
+        assert retired['pass']
+        write(HERE/'qualification-relocation.json',{'pass':True,'from_host':0,'to_host':1,'receipt':r,'retired_redundant_archive':retired})
+
 def condition(seed,mode):
+    qualify_relocation()
     for step,phase_ in [(32,'prefix'),(64,'suffix')]:
         f=free(); assignments=[]
         for r in range(10):
             path=f'repeat-v1/s{seed}/{mode}/{phase_}/checkpoint-{step}'
+            existing=[e for e in catalog() if e['source']==path and e['source_host']==r]
+            if existing:
+                assert len(existing)==1
+                e=existing[0]
+                checked=json.loads(remote(e['archive_host'],PYTHON+' code/repeat_archive.py verify '+e['archive_path'],180))
+                assert checked['archive_sha256']==e['archive_sha256'] and checked['proof']==e['receipt']['proof']
+                continue
             bound=json.loads((SCRATCH/'storage-plan-input.json').read_text())['checkpoint_bytes'][r]+2*1024*1024
             eligible=[x for x in range(10) if f[x]>bound+4*GIB]
             assert eligible
