@@ -269,6 +269,7 @@
         n1 (if (< (+ i 1) e) (vector-at CP (+ i 1)) 0)
         n2 (if (< (+ i 2) e) (vector-at CP (+ i 2)) 0)]
     (cond
+      (= k 5) 1
       (= c 39)
       (cond
         (or (= n1 115) (or (= n1 116) (or (= n1 109) (= n1 100)))) 2
@@ -302,6 +303,22 @@
     (if (>= a 0) a
       (let [b (nfc-scan (nfc-t1) key)]
         (if (>= b 0) b (nfc-scan (nfc-t2) key))))))
+
+;; the special tokens <|startoftext|> and <|endoftext|> written in a prompt are matched case-insensitively (the Hugging Face tokenizer matches added
+;; tokens on the normalized text) and stand for the ids BOS (1) / EOS (2), splitting the text around them
+(defn- match-lit [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s))
+        n (vector-count v)]
+    (if (> (+ i n) e) 0
+      (loop [k 0]
+        (if (= k n) 1
+          (let [b (byte-at f (+ p (+ i k)))
+                l (if (within b 65 90) (+ b 32) b)]
+            (if (= l (vector-at v k)) (recur (+ k 1)) 0)))))))
+(defn- special-at [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64] :i64
+  (if (= (byte-at f (+ p i)) 60)
+    (if (= (match-lit f p i e "<|startoftext|>") 1) 1 (if (= (match-lit f p i e "<|endoftext|>") 1) 2 0))
+    0))
 
 (defn- bad-utf8 [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64] :i64 (refuse-text f R "refused: invalid UTF-8 in a prompt\n"))
 ;; decode the UTF-8 sequence at p: code point * 8 + length; refuses invalid UTF-8 (overlong forms, surrogates, truncation)
@@ -396,23 +413,26 @@
               ncp (loop [q ls k 0]
                     (if (>= q le) k
                       (let [d (utf8-at f R pbuf q le)
-                            c (lcp (i64-shift-right d 3))
+                            sp (special-at f pbuf q le)
+                            c (if (> sp 0) (+ 2097152 sp) (lcp (i64-shift-right d 3)))
                             u0 (if (>= k 8192) (refuse-text f R "refused: a prompt line longer than 8192 characters\n") 0)
                             m (if (or (within c 768 879) (within c 12441 12442)) 1 0)
                             pc (if (and (= m 1) (> k 0)) (nfc-find (vector-at CP (- k 1)) c) -1)
                             u2 (if (and (= m 1) (< pc 0)) (refuse-text f R "refused: a combining mark that does not compose with the character before it\n") 0)
-                            cl (if (= m 1) 1 (cls c))
+                            cl (if (> sp 0) 5 (if (= m 1) 1 (cls c)))
                             u1 (if (= cl 4) (refuse-text f R "refused: a character outside the supported set (ASCII, Latin-1, Latin Extended-A, CJK, kana, Hangul, fullwidth forms, common symbols and emoji)\n") 0)
                             k2 (if (= m 1) (- k 1) k)
                             a (vector-assoc! CP k2 (if (= m 1) pc c)) b (vector-assoc! CL k2 cl)]
-                        (recur (+ q (bit-and d 7)) (+ k2 1)))))
+                        (recur (+ q (if (> sp 0) (if (= sp 1) 15 13) (bit-and d 7))) (+ k2 1)))))
               walk (loop [i 0]
                      (if (>= i ncp) 0
                        (if (= (vector-at CL i) 0) (recur (+ i 1))
+                   (if (= (vector-at CL i) 5)
+                     (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (if (= (vector-at CP i) 2097153) bos eos)) v (vector-assoc! OUT 0 (+ cc 1))] (recur (+ i 1)))
                          (let [n (token-len CP CL i ncp)
                                r (word-symbols f R CP i n wbuf tmpw OFF)
                                b (bpe-word f R VT arena PT wbuf (vector-at r 0) (vector-at r 1) OFF SS SE SI OUT)]
-                           (recur (+ i n))))))
+                           (recur (+ i n)))))))
               cnt (vector-at OUT 0)
               keep (if (> cnt 75) 75 cnt)
               p0 (wr-num f R bos)
