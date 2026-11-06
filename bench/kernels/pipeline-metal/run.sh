@@ -58,8 +58,8 @@ mutant concat-order '((c < 768u) ? L[r * 768u + c] : G[r * 1280u + (c - 768u)])'
 mutant size-order 'float arg = Sz[v] *' 'float arg = Sz[5u - v] *'
 mutant g-padding '(> k (+ keep 1))' '(> k (+ keep 2))'
 mutant vae-residual '(vector-i64 cout cout ih iw 3 1 2))
-      (let [xh' '(vector-i64 cout cout ih iw 3 1 1))
-      (let [xh'
+      (let [sc (scl!' '(vector-i64 cout cout ih iw 3 1 1))
+      (let [sc (scl!'
 if [ "$LAYOUT" = single ]; then
   mutant inproj-v-offset 'wv (cvle! f R S vwn HID HID (if (= scheme 0) 0 (* 2 (* HID HID))))' 'wv (cvle! f R S vwn HID HID 0)'
   mutant text-projection-transposed '(cv32! f R S (nm pre "text_projection"))' '(cvl! f R S (nm pre "text_projection") HID HID)'

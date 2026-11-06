@@ -30,6 +30,13 @@ def write(d, comfy, ch, L, taps):
                 p.copy_(1.0 + 0.1 * torch.randn_like(p))
             elif p.dim() == 1: p.copy_(0.1 * torch.randn_like(p))
             else: p.copy_(torch.randn_like(p) * (0.7 / (p.shape[1] * p.shape[2] * p.shape[3]) ** 0.5))
+    stress = float(os.environ.get("VAESTRESS", "0"))
+    if stress > 0:
+        # the float16-overflow stress: the output convolution of every residual block is scaled so the residual stream grows past the float16 range (65504)
+        # in the float32 oracle; a program that kept this stream in half would saturate to inf
+        with torch.no_grad():
+            for n, p in dec.named_parameters():
+                if ".conv2." in n: p.mul_(stress)
     sd = {k: v.contiguous() for k, v in dec.state_dict().items()}
     sd.update({"post_quant_conv." + k: v.contiguous() for k, v in pq.state_dict().items()})
     save_file(sd, os.path.join(d, "model.safetensors"))
@@ -48,6 +55,7 @@ def write(d, comfy, ch, L, taps):
         out = dec(pq(z))
     out.numpy().astype(np.float32).tofile(os.path.join(d, "expect_final.f32"))
     for k, v in tp.items(): v.numpy().astype(np.float32).tofile(os.path.join(d, "expect_%s.f32" % k))
+    if tp: print("max|activation| per tap", {k: float(v.abs().max()) for k, v in tp.items()})
     print("params", sum(p.numel() for p in dec.parameters()), "out", tuple(out.shape), "max|out|", float(out.abs().max()), "taps", {k: tuple(v.shape) for k, v in tp.items()})
 
 if __name__ == "__main__":

@@ -496,6 +496,48 @@ kernel void temb_bias2(device const float *Emb [[buffer(0)]], device const float
   O[c] = acc;
 }
 // nearest 2x upsample, float in, half out. P = {IH, IW}
+kernel void amax_part(device const float *X [[buffer(0)]], device float *Part [[buffer(1)]], device const uint *P [[buffer(2)]],
+                      uint g [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                      uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  uint n = P[0];
+  float m = 0.0f;
+  for (uint i = g * 128u + tid; i < n; i += 256u * 128u) m = max(m, fabs(X[i]));
+  m = simd_max(m);
+  if (lane == 0u) part[sgi] = m;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) Part[g] = max(max(part[0], part[1]), max(part[2], part[3]));
+}
+// the power-of-two scale s >= 1 that brings the largest magnitude of a tensor under 8192: Sc = {s, 1 / s}
+kernel void amax_fin(device const float *Part [[buffer(0)]], device float *Sc [[buffer(1)]], uint tid [[thread_position_in_grid]],
+                     uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[8];
+  float m = simd_max(Part[tid]);
+  if (lane == 0u) part[sgi] = m;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) {
+    float mm = 0.0f;
+    for (uint i = 0u; i < 8u; i++) mm = max(mm, part[i]);
+    float s = 1.0f;
+    while (mm > 8192.0f * s) s = s * 2.0f;
+    Sc[0] = s; Sc[1] = 1.0f / s;
+  }
+}
+kernel void cvfh_sc(device const float *F [[buffer(0)]], device half *H [[buffer(1)]], device const float *Sc [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  H[i] = half(F[i] * Sc[1]);
+}
+kernel void upsample_hs(device const float *X [[buffer(0)]], device half *O [[buffer(1)]], device const uint *P [[buffer(2)]], device const float *Sc [[buffer(3)]],
+                        uint i [[thread_position_in_grid]]) {
+  uint IH = P[0]; uint IW = P[1];
+  uint ow = 2u * IW; uint oh = 2u * IH;
+  uint x = i % ow; uint y = (i / ow) % oh; uint c = i / (ow * oh);
+  O[i] = half(X[(c * IH + y / 2u) * IW + x / 2u] * Sc[1]);
+}
+// in place: O = O * s + Bias[channel]; P = {plane size}
+kernel void axpb(device float *O [[buffer(0)]], device const float *Bias [[buffer(1)]], device const float *Sc [[buffer(2)]], device const uint *P [[buffer(3)]],
+                 uint i [[thread_position_in_grid]]) {
+  O[i] = O[i] * Sc[0] + Bias[i / P[0]];
+}
 kernel void upsample_h(device const float *X [[buffer(0)]], device half *O [[buffer(1)]], device const uint *P [[buffer(2)]],
                        uint i [[thread_position_in_grid]]) {
   uint IH = P[0]; uint IW = P[1];
@@ -893,9 +935,9 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
 ;; ---- state vector S: [0] dispatch buffer count, [1] dispatch count, [2] device, [3] data buffer, [4] header address, [5] tensor count,
 ;; [10..23] pipelines, ALL at 16+... see the offsets below
 (defn- oPS [] :i64 10)
-(defn- oALL [] :i64 32)
-(defn- oOFS [] :i64 2080)
-(defn- oT [] :i64 4128)
+(defn- oALL [] :i64 64)
+(defn- oOFS [] :i64 2112)
+(defn- oT [] :i64 4160)
 (defn- oTT [] :i64 7712)
 
 (defn- emit! [S :vector-i64 bufs :vector-i64 offs :vector-i64 pso :i64 bg :i64 gx :i64 gy :i64 tx :i64] :i64
@@ -1072,6 +1114,25 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
 (defn- nm [a :string b :string] :string (string-concat a b))
 
 ;; GroupNorm eps 1e-6 = 897988541 (bits)
+;; float16 range guard (stage M slice 29): a residual stream that is not normalised can exceed 65504, which half cannot hold (SDXL's VAE does this in its
+;; decoder). Before a float tensor is converted to half for a convolution, its largest magnitude is found on the GPU and a power-of-two scale brings it under 8192;
+;; the convolution runs without bias and its output is multiplied by the scale (and given its bias) afterwards.
+(defn- scl! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 src :i64 n :i64] :i64
+  (let [part (fbuf f R S 256)
+        sc (fbuf f R S 2)
+        pn (pu f R S n 0 0 0 0 0 0 0 0 0)
+        a (emit! S (vector-i64 src part pn) (vector-i64 0 0 0) 18 1 256 1 128)
+        b (emit! S (vector-i64 part sc) (vector-i64 0 0) 19 1 1 1 256)]
+    sc))
+(defn- cvfs! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 src :i64 n :i64 sc :i64] :i64
+  (let [hb (hbuf f R S n)
+        u (emit! S (vector-i64 src hb sc) (vector-i64 0 0 0) 20 0 n 1 64)]
+    hb))
+(defn- axpb! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 buf :i64 sc :i64 boff :i64 C :i64 np :i64] :i64
+  (let [p (pu f R S np 0 0 0 0 0 0 0 0 0)]
+    (emit! S (vector-i64 buf (vector-at S 3) sc p) (vector-i64 0 boff 0 0) 22 0 (* C np) 1 64)))
+
+
 (defn- resv! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string xf :i64 cin :i64 cout :i64 ih :i64 iw :i64
               H0 :i64 H1 :i64 F1 :i64 F2 :i64 of :i64] :i64
   (let [hw (* ih iw)
@@ -1085,9 +1146,11 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
         b2 (toff f R S (nm pre "conv2.bias"))]
     (if (= cin cout)
       (conv! f R S H1 w2 d b2 xf 0 of 0 (vector-i64 cout cout ih iw 3 1 2))
-      (let [xh (cvfh! f R S xf 0 (* cin hw))
+      (let [sc (scl! f R S xf (* cin hw))
+            xh (cvfs! f R S xf (* cin hw) sc)
             ws (cv32! f R S (nm pre "nin_shortcut.weight"))
-            cs (conv! f R S xh ws d (toff f R S (nm pre "nin_shortcut.bias")) dummy 0 F2 0 (vector-i64 cin cout ih iw 1 1 1))]
+            cs0 (conv! f R S xh ws d (toff f R S (nm pre "nin_shortcut.bias")) dummy 0 F2 0 (vector-i64 cin cout ih iw 1 1 0))
+            cs (axpb! f R S F2 sc (toff f R S (nm pre "nin_shortcut.bias")) cout hw)]
         (conv! f R S H1 w2 d b2 F2 0 of 0 (vector-i64 cout cout ih iw 3 1 2))))))
 
 ;; mid.attn_1: GroupNorm (no SiLU) -> tokens, q k v 1x1 as linears, single-head attention (head dim C), proj_out, + x
@@ -1125,10 +1188,12 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
     (if (= up 0) c3
       (let [d (vector-at S 3)
             pup (pu f R S res res 0 0 0 0 0 0 0 0)
-            u1 (emit! S (vector-i64 (vector-at FB c3) H0 pup) (vector-i64 0 0 0) 11 0 (* cout (* 4 (* res res))) 1 64)
+            sc (scl! f R S (vector-at FB c3) (* cout (* res res)))
+            u1 (emit! S (vector-i64 (vector-at FB c3) H0 pup sc) (vector-i64 0 0 0 0) 21 0 (* cout (* 4 (* res res))) 1 64)
             wu (cv32! f R S (nm pre "upsample.conv.weight"))
             u2 (conv! f R S H0 wu d (toff f R S (nm pre "upsample.conv.bias")) (vector-at S 7) 0 (vector-at FB (- 1 c3)) 0
-                      (vector-i64 cout cout (* 2 res) (* 2 res) 3 1 1))]
+                      (vector-i64 cout cout (* 2 res) (* 2 res) 3 1 0))
+            u3 (axpb! f R S (vector-at FB (- 1 c3)) sc (toff f R S (nm pre "upsample.conv.bias")) cout (* 4 (* res res)))]
         (- 1 c3)))))
 
 (defn- tap! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 src :i64 n :i64] :i64
@@ -1153,10 +1218,10 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
         S (zeros 9800)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 18) 0
+             (if (= i 23) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
-                          (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec" (if (= i 14) "attn_wide" (if (= i 15) "cpy_f" (if (= i 16) "conv_k3s1" "cvt32h_t")))))))))))))))))
+                          (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec" (if (= i 14) "attn_wide" (if (= i 15) "cpy_f" (if (= i 16) "conv_k3s1" (if (= i 17) "cvt32h_t" (if (= i 18) "amax_part" (if (= i 19) "amax_fin" (if (= i 20) "cvfh_sc" (if (= i 21) "upsample_hs" "axpb"))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
