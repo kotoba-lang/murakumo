@@ -136,7 +136,7 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
         return ids, ids[:e + 1] + [0] * (77 - e - 1)          # L pads with the end token, G with 0 (ComfyUI pad_with_end=False)
     def cond(tag, prompt):
         il, ig = ids_for(prompt)
-        open(os.path.join(d, "prompt_" + tag + ".txt"), "w").write(prompt + "\n")
+        open(os.path.join(d, "prompt_" + tag + ".txt"), "w", encoding="utf-8").write(prompt + "\n")
         np.array(il + [0], dtype=np.int32).tofile(os.path.join(d, "ids_l_" + tag + ".i32")); np.array(ig + [0], dtype=np.int32).tofile(os.path.join(d, "ids_g_" + tag + ".i32"))
         with torch.no_grad():
             ol = clip_l(input_ids=torch.tensor([il]), output_hidden_states=True); og = clip_g(input_ids=torch.tensor([ig]), output_hidden_states=True)
@@ -145,7 +145,7 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
         y = ns2["encode_adm_fn"](fs, pooled_output=gpool, **sizes)
         for n, v in (("ctx_" + tag, ctx[0]), ("y_" + tag, y[0])): v.numpy().astype(np.float32).tofile(os.path.join(d, n + ".f32"))
         return ctx, y
-    ctx_c, y_c = cond("c", "a photo of a cat sitting on a red sofa"); ctx_u, y_u = cond("u", "")
+    ctx_c, y_c = cond("c", os.environ.get("PROMPT_C", "a photo of a cat sitting on a red sofa")); ctx_u, y_u = cond("u", "")
     torch.tensor([sizes[k] for k in ("height", "width", "crop_h", "crop_w", "target_height", "target_width")], dtype=torch.float32).numpy().tofile(os.path.join(d, "sz.f32"))
     x0 = torch.randn(1, 4, lat, lat) * sigmas[0]; x0.numpy().astype(np.float32).tofile(os.path.join(d, "x.f32"))
     cfg_scale = 4.0

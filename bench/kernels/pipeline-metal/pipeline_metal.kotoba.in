@@ -1649,7 +1649,6 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
             (= d 92) (let [u (poke8 f (+ tmp k) 92)] (recur (+ j 2) (+ k 1) bad))
             (= d 117) (recur (+ j 6) k 1)
             :else (recur (+ j 2) k 1)))
-        (>= c 128) (recur (+ j 1) k 1)
         :else (let [u (poke8 f (+ tmp k) c)] (recur (+ j 1) (+ k 1) bad))))))
 
 (defn- load-vocab [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 st :vector-i64 tmp :i64] :i64
@@ -1693,9 +1692,8 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
       (if (>= j n) stored
         (let [le (loop [q j] (if (or (= (byte-at f (+ p q)) 10) (>= q n)) q (recur (+ q 1))))
               sp (loop [q j] (if (or (= (byte-at f (+ p q)) 32) (>= q le)) q (recur (+ q 1))))
-              ascii (loop [q j] (if (>= q le) 1 (if (>= (byte-at f (+ p q)) 128) 0 (recur (+ q 1)))))
-              ia (if (= ascii 1) (vt-find f VT arena (+ p j) (- sp j)) -1)
-              ib (if (= ascii 1) (vt-find f VT arena (+ p (+ sp 1)) (- le (+ sp 1))) -1)
+              ia (vt-find f VT arena (+ p j) (- sp j))
+              ib (vt-find f VT arena (+ p (+ sp 1)) (- le (+ sp 1)))
               ok (if (and (>= ia 0) (>= ib 0)) 1 0)
               u (if (= ok 1) (pt-insert PT (+ (* ia 65536) ib) rank) 0)]
           (recur (+ le 1) (+ rank 1) (+ stored ok)))))))
@@ -1708,14 +1706,14 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
 
 ;; BPE of the word at w (n bytes, lowercase), with "</w>" appended to the buffer; appends its ids to OUT (count in OUT[0])
 
-(defn- bpe-word [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 arena :i64 PT :vector-i64 w :i64 n :i64
-                 SS :vector-i64 SE :vector-i64 SI :vector-i64 OUT :vector-i64] :i64
-  (let [u0 (if (> n 400) (refuse-text f R "refused: a word longer than 400 bytes\n") 0)
-        s0 (poke8 f (+ w n) 60) s1 (poke8 f (+ w (+ n 1)) 47) s2 (poke8 f (+ w (+ n 2)) 119) s3 (poke8 f (+ w (+ n 3)) 62)
+(defn- bpe-word [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 arena :i64 PT :vector-i64 w :i64 nb :i64 n :i64
+                 OFF :vector-i64 SS :vector-i64 SE :vector-i64 SI :vector-i64 OUT :vector-i64] :i64
+  (let [u0 (if (> nb 400) (refuse-text f R "refused: a word longer than 400 bytes\n") 0)
+        s0 (poke8 f (+ w nb) 60) s1 (poke8 f (+ w (+ nb 1)) 47) s2 (poke8 f (+ w (+ nb 2)) 119) s3 (poke8 f (+ w (+ nb 3)) 62)
         init (loop [i 0]
                (if (= i n) 0
-                 (let [st i
-                       en (if (= i (- n 1)) (+ n 4) (+ i 1))
+                 (let [st (vector-at OFF i)
+                       en (if (= i (- n 1)) (+ nb 4) (vector-at OFF (+ i 1)))
                        id (vt-find f VT arena (+ w st) (- en st))
                        u (if (< id 0) (refuse-text f R "refused: a symbol missing from the vocabulary\n") 0)
                        a (vector-assoc! SS i st) b (vector-assoc! SE i en) c (vector-assoc! SI i id)]
@@ -1745,36 +1743,128 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
                 (let [u (vector-assoc! OUT (+ 1 c) (vector-at SI i))] (recur (+ i 1) (+ c 1)))))]
     0))
 
-(defn- lc [b :i64] :i64 (if (and (>= b 65) (<= b 90)) (+ b 32) b))
+(defn- within [c :i64 a :i64 b :i64] :bool (and (>= c a) (<= c b)))
+;; Unicode class of a code point, for the supported set only: 0 whitespace (str.isspace), 1 letter (\p{L}), 2 number (\p{N}),
+;; 3 other, 4 not supported (the program refuses it rather than tokenizing it differently from the Hugging Face tokenizer). The Hugging Face
+;; tokenizer NFC-normalizes first, which this program does not implement, so everything NFC could change is refused: combining marks that can
+;; compose with a base letter (U+0300-036F, U+3099-309A), and the singleton / exclusion characters U+2329, U+232A, U+2ADC. Whitespace is the
+;; White_Space property (not str.isspace: U+001C-001F are not whitespace). Latin-1 and the other supported letters are NFC-stable.
+(defn- cls [c :i64] :i64
+  (cond
+    (< c 128) (cond (or (= c 32) (within c 9 13)) 0 (or (within c 97 122) (within c 65 90)) 1 (within c 48 57) 2 :else 3)
+    (or (= c 133) (or (= c 160) (or (= c 5760) (or (within c 8192 8202) (or (= c 8232) (or (= c 8233) (or (= c 8239) (or (= c 8287) (= c 12288))))))))) 0
+    (< c 256) (cond (or (= c 170) (or (= c 181) (or (= c 186) (or (within c 192 214) (or (within c 216 246) (within c 248 255)))))) 1
+                    (or (within c 178 179) (or (= c 185) (within c 188 190))) 2
+                    :else 3)
+    (within c 256 383) (if (= c 304) 4 1)
+    (within c 8203 8303) 3
+    (within c 8400 8447) 3
+    (or (= c 9001) (or (= c 9002) (= c 10972))) 4
+    (or (within c 8592 9311) (or (within c 9472 10101) (within c 10132 11263))) 3
+    (within c 11776 11903) (if (= c 11823) 1 3)
+    (within c 12288 12351) (cond (or (= c 12293) (or (= c 12294) (or (= c 12347) (or (= c 12348) (within c 12337 12341))))) 1
+                             (or (= c 12295) (or (within c 12321 12329) (within c 12344 12346))) 2
+                             :else 3)
+    (within c 12352 12447) (cond (= c 12352) 3 (within c 12439 12440) 3 (within c 12441 12442) 4 (within c 12443 12444) 3 :else 1)
+    (within c 12448 12543) (cond (or (= c 12448) (= c 12539)) 3 :else 1)
+    (within c 12593 12686) 1
+    (within c 13312 19903) 1
+    (within c 19968 40959) 1
+    (within c 44032 55203) 1
+    (within c 65024 65039) 3
+    (within c 65281 65295) 3
+    (within c 65296 65305) 2
+    (within c 65306 65312) 3
+    (within c 65313 65338) 1
+    (within c 65339 65344) 3
+    (within c 65345 65370) 1
+    (within c 65371 65381) 3
+    (within c 65382 65439) 1
+    (within c 65504 65518) 3
+    (or (within c 127744 128591) (or (within c 128640 128767) (within c 129280 129535))) 3
+    :else 4))
+;; str.lower for the supported letters: ASCII, Latin-1, Latin Extended-A, fullwidth Latin
+(defn- lcp [c :i64] :i64
+  (cond
+    (< c 128) (if (within c 65 90) (+ c 32) c)
+    (or (within c 192 214) (within c 216 222)) (+ c 32)
+    (< c 256) c
+    (or (within c 256 303) (or (within c 306 311) (within c 330 375))) (if (= (bit-and c 1) 0) (+ c 1) c)
+    (or (within c 313 328) (within c 377 382)) (if (= (bit-and c 1) 1) (+ c 1) c)
+    (= c 376) 255
+    (within c 65313 65338) (+ c 32)
+    :else c))
+;; mapped character of a byte (GPT-2/CLIP bytes_to_unicode)
+(defn- bmap [b :i64] :i64
+  (cond (or (within b 33 126) (or (within b 161 172) (within b 174 255))) b
+        (<= b 32) (+ 256 b)
+        (<= b 160) (+ 256 (+ 33 (- b 127)))
+        :else 323))
+(defn- sym-bytes [c :i64] :i64 (if (< c 128) 1 2))
 
-(defn- is-ws [b :i64] :i64 (if (or (= b 32) (and (>= b 9) (<= b 13))) 1 0))
-
-(defn- is-letter [b :i64] :i64 (let [c (lc b)] (if (and (>= c 97) (<= c 122)) 1 0)))
-
-(defn- is-digit [b :i64] :i64 (if (and (>= b 48) (<= b 57)) 1 0))
-
-;; the length of the token starting at p+i within [0, e)
-
-(defn- token-len [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64] :i64
-  (let [c (lc (byte-at f (+ p i)))
-        n1 (if (< (+ i 1) e) (lc (byte-at f (+ p (+ i 1)))) 0)
-        n2 (if (< (+ i 2) e) (lc (byte-at f (+ p (+ i 2)))) 0)]
+;; the length, in code points, of the token starting at cp index i within [0, e): CL holds the classes, CP the lowered code points
+(defn- token-len [CP :vector-i64 CL :vector-i64 i :i64 e :i64] :i64
+  (let [c (vector-at CP i)
+        k (vector-at CL i)
+        n1 (if (< (+ i 1) e) (vector-at CP (+ i 1)) 0)
+        n2 (if (< (+ i 2) e) (vector-at CP (+ i 2)) 0)]
     (cond
       (= c 39)
       (cond
         (or (= n1 115) (or (= n1 116) (or (= n1 109) (= n1 100)))) 2
         (or (and (= n1 114) (= n2 101)) (or (and (= n1 118) (= n2 101)) (and (= n1 108) (= n2 108)))) 3
         :else (loop [j (+ i 1)]
-                (if (and (< j e) (and (= (is-ws (byte-at f (+ p j))) 0) (and (= (is-letter (byte-at f (+ p j))) 0) (= (is-digit (byte-at f (+ p j))) 0))))
-                  (recur (+ j 1)) (- j i))))
-      (= (is-letter c) 1)
-      (loop [j (+ i 1)] (if (and (< j e) (= (is-letter (byte-at f (+ p j))) 1)) (recur (+ j 1)) (- j i)))
-      (= (is-digit c) 1) 1
+                (if (and (< j e) (= (vector-at CL j) 3)) (recur (+ j 1)) (- j i))))
+      (= k 1)
+      (loop [j (+ i 1)] (if (and (< j e) (= (vector-at CL j) 1)) (recur (+ j 1)) (- j i)))
+      (= k 2) 1
       :else
       (loop [j (+ i 1)]
-        (if (and (< j e) (and (= (is-ws (byte-at f (+ p j))) 0) (and (= (is-letter (byte-at f (+ p j))) 0) (= (is-digit (byte-at f (+ p j))) 0))))
-          (recur (+ j 1)) (- j i))))))
+        (if (and (< j e) (= (vector-at CL j) 3)) (recur (+ j 1)) (- j i))))))
 
+(defn- bad-utf8 [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64] :i64 (refuse-text f R "refused: invalid UTF-8 in a prompt\n"))
+;; decode the UTF-8 sequence at p: code point * 8 + length; refuses invalid UTF-8 (overlong forms, surrogates, truncation)
+(defn- utf8-at [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 i :i64 e :i64] :i64
+  (let [b0 (byte-at f (+ p i))
+        b1 (if (< (+ i 1) e) (byte-at f (+ p (+ i 1))) 0)
+        b2 (if (< (+ i 2) e) (byte-at f (+ p (+ i 2))) 0)
+        b3 (if (< (+ i 3) e) (byte-at f (+ p (+ i 3))) 0)
+        d0 0]
+    (cond
+      (< b0 128) (+ (* b0 8) 1)
+      (and (within b0 194 223) (= (bit-and b1 192) 128)) (+ (* (+ (* (bit-and b0 31) 64) (bit-and b1 63)) 8) 2)
+      (and (within b0 224 239) (and (= (bit-and b1 192) 128) (= (bit-and b2 192) 128)))
+      (let [c (+ (* (+ (* (bit-and b0 15) 64) (bit-and b1 63)) 64) (bit-and b2 63))]
+        (if (or (< c 2048) (within c 55296 57343)) (bad-utf8 f R) (+ (* c 8) 3)))
+      (and (within b0 240 244) (and (= (bit-and b1 192) 128) (and (= (bit-and b2 192) 128) (= (bit-and b3 192) 128))))
+      (let [c (+ (* (+ (* (+ (* (bit-and b0 7) 64) (bit-and b1 63)) 64) (bit-and b2 63)) 64) (bit-and b3 63))]
+        (if (or (< c 65536) (> c 1114111)) (bad-utf8 f R) (+ (* c 8) 4)))
+      :else (bad-utf8 f R))))
+
+;; UTF-8 of code point c at q; returns its length
+(defn- utf8-put [f [:fn [[:i64 :i64 :i64] :i64]] q :i64 c :i64] :i64
+  (cond
+    (< c 128) (let [u (poke8 f q c)] 1)
+    (< c 2048) (let [u (poke8 f q (+ 192 (i64-shift-right c 6))) v (poke8 f (+ q 1) (+ 128 (bit-and c 63)))] 2)
+    (< c 65536) (let [u (poke8 f q (+ 224 (i64-shift-right c 12))) v (poke8 f (+ q 1) (+ 128 (bit-and (i64-shift-right c 6) 63))) w (poke8 f (+ q 2) (+ 128 (bit-and c 63)))] 3)
+    :else (let [u (poke8 f q (+ 240 (i64-shift-right c 18))) v (poke8 f (+ q 1) (+ 128 (bit-and (i64-shift-right c 12) 63)))
+                w (poke8 f (+ q 2) (+ 128 (bit-and (i64-shift-right c 6) 63))) x (poke8 f (+ q 3) (+ 128 (bit-and c 63)))] 4)))
+
+;; the byte-level symbols of cps [a, a+len) of CP into wbuf (each byte of the UTF-8 text as its mapped character, UTF-8 encoded),
+;; OFF[k] the start of symbol k; returns the byte length of wbuf's content, the symbol count goes to OFF[ns] slot via the caller
+(defn- word-symbols [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 CP :vector-i64 a :i64 len :i64 wbuf :i64 tmp :i64 OFF :vector-i64] :vector-i64
+  (let [nsb (loop [k 0 q 0]
+              (if (= k len) q
+                (recur (+ k 1) (+ q (utf8-put f (+ tmp q) (vector-at CP (+ a k)))))))
+        r (loop [m 0 q 0]
+            (if (= m nsb) (vector-i64 q nsb)
+              (let [c (bmap (byte-at f (+ tmp m)))
+                    u (vector-assoc! OFF m q)
+                    nbytes (if (< c 128) 1 2)
+                    w1 (if (< c 128) (poke8 f (+ wbuf q) c) (let [x (poke8 f (+ wbuf q) (+ 192 (i64-shift-right c 6)))] (poke8 f (+ wbuf (+ q 1)) (+ 128 (bit-and c 63)))))]
+                (recur (+ m 1) (+ q nbytes)))))
+        e (vector-assoc! OFF nsb (vector-at r 0))]
+    r))
 
 (defn- tok-init! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 vpath :string mpath :string VT :vector-i64 PT :vector-i64 arena :i64 st :vector-i64] :i64
   (let [sz (vector-alloc 1)
@@ -1787,7 +1877,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         nmg (load-merges f mbuf mlen VT arena PT)]
     0))
 
-;; the CLIP tokenizer (BPE, ASCII prompts) on the prompt file at path -> 77 ids (BOS, tokens, EOS, then padding: the end token, or 0 after the first end
+;; the CLIP tokenizer (byte-level BPE; UTF-8 prompts within the supported set, see cls) on the prompt file at path -> 77 ids (BOS, tokens, EOS, then padding: the end token, or 0 after the first end
 ;; token when padzero = 1, ComfyUI's rule for the bigG tower) written as uint32 into the buffer ids
 (defn- tokenize! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 PT :vector-i64 arena :i64 path :string ids :i64 padzero :i64] :i64
   (let [sz (vector-alloc 1)
@@ -1799,14 +1889,23 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         SS (zeros 512) SE (zeros 512) SI (zeros 512)
         OUT (zeros 4096)
         le (loop [q 0] (if (or (>= q plen) (= (byte-at f (+ pbuf q)) 10)) q (recur (+ q 1))))
-        bad (loop [q 0] (if (>= q le) 0 (if (>= (byte-at f (+ pbuf q)) 128) 1 (recur (+ q 1)))))
-        r0 (if (= bad 1) (refuse-text f R "refused: a non-ASCII byte in the prompt\n") 0)
+        CP (zeros 8192) CL (zeros 8192) OFF (zeros 520)
+        tmpw (cc f (vector-at R 3) 1024 0 0 0 0)
+        ncp (loop [q 0 k 0]
+              (if (>= q le) k
+                (let [d (utf8-at f R pbuf q le)
+                      c (lcp (i64-shift-right d 3))
+                      u0 (if (>= k 8192) (refuse-text f R "refused: a prompt line longer than 8192 characters\n") 0)
+                      cl (cls c)
+                      u1 (if (= cl 4) (refuse-text f R "refused: a character outside the supported set (ASCII, Latin-1, Latin Extended-A, CJK, kana, Hangul, fullwidth forms, common symbols and emoji)\n") 0)
+                      a (vector-assoc! CP k c) b (vector-assoc! CL k cl)]
+                  (recur (+ q (bit-and d 7)) (+ k 1)))))
         walk (loop [i 0]
-               (if (>= i le) 0
-                 (if (= (is-ws (byte-at f (+ pbuf i))) 1) (recur (+ i 1))
-                   (let [n (token-len f pbuf i le)
-                         cp (loop [k 0] (if (= k n) 0 (let [x (poke8 f (+ wbuf k) (lc (byte-at f (+ pbuf (+ i k)))))] (recur (+ k 1)))))
-                         b2 (bpe-word f R VT arena PT wbuf n SS SE SI OUT)]
+               (if (>= i ncp) 0
+                 (if (= (vector-at CL i) 0) (recur (+ i 1))
+                   (let [n (token-len CP CL i ncp)
+                         r (word-symbols f R CP i n wbuf tmpw OFF)
+                         b2 (bpe-word f R VT arena PT wbuf (vector-at r 0) (vector-at r 1) OFF SS SE SI OUT)]
                      (recur (+ i n))))))
         cnt (vector-at OUT 0)
         keep (if (> cnt 75) 75 cnt)]

@@ -27,6 +27,8 @@ WK=$(mktemp -d "${TMPDIR:-/tmp}/pipeline-metal.XXXXXX")
 fail=0
 MC=64; LAT=32; CH=32; STEPS=4
 LAYOUT=${LAYOUT:-hf}
+# the conditional prompt mixes ASCII, Japanese, accented Latin, fullwidth forms and an emoji, so the whole path (tokenizer, towers, render) is exercised on non-ASCII text
+export PROMPT_C=${PROMPT_C:-"桜の花が咲く夜景、a photo of a cat ÀÉ Straße ＡＢＣ１２３ 😀"}
 if [ "$LAYOUT" = single ]; then PRE_L=conditioner.embedders.0.transformer.; PRE_G=conditioner.embedders.1.model.; SCH_G=1; else PRE_L=clip_l.; PRE_G=clip_g.; SCH_G=0; fi
 PYTHONPATH="$STUBS" "$PYC" "$HERE/make_fixture.py" write "$WK/fx" "$COMFY" "$MC" "$LAT" "$CH" "$STEPS" "$TOKDIR" "$LAYOUT" > "$WK/fx.log" 2>&1
 # the pinned digest the program must find in the checkpoint before reading it (here taken from the fixture just written; for a real
