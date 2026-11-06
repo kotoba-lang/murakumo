@@ -196,6 +196,11 @@ command buffer, within 2.3e-3 of PyTorch's float32 `CLIPTextModel` on random wei
 Hugging Face's `CLIPTokenizer` and hidden states within 2.4e-3 of PyTorch's `CLIPTextModel`, two mutants detected
 ([record](../bench/results/2026-11-06-text-encode-metal/README.md)). First end-to-end path from text to model output in Kotoba; still the small random-weight tower.
 
+**Stage M, slice 10: a ComfyUI UNet on the GPU (2026-11-06).** ComfyUI's own `UNetModel` in a mini configuration (981 k parameters; ResBlocks, a Downsample, SpatialTransformers, skip concatenation,
+an Upsample, the time-embedding MLP) run end to end from one Kotoba program, weights read from a safetensors file under ComfyUI's parameter names, **219 kernels in one command buffer**: final output
+within 1.4e-3 of ComfyUI's float32 forward pass, every block within 4.3e-3, three mutants detected, ~7.9 ms (`bench/kernels/unet-metal/`,
+[record](../bench/results/2026-11-06-unet-metal/README.md)). The whole-UNet wiring named in the I3 ADR exists at mini scale; SDXL sizes, trained weights and the sampler do not.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
