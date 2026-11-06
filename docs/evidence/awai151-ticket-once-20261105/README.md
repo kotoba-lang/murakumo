@@ -1,0 +1,350 @@
+# RGQ5 permanent ticket claims: native diagnostic
+
+The candidate uses a new `RGQ5` queue format and a durable `queue.used.<ticket>`
+marker published and synced before enqueue can publish a ticket. A marker is
+never removed by the FIFO. A caller must reconcile an ambiguous claim before
+retry. A marker already present refuses reuse even after
+later reservations. The FIFO remains a host-owned primitive: it does not
+authenticate a caller or establish that a workload or its descendants ended.
+
+The host must exclusively own the queue, lock and entire marker namespace,
+prevent marker deletion, replacement or rollback across restart and backup
+restore, and ensure FS2 D distinguishes a missing file from errors. No
+automatic migration is safe. An RGQ5 deployment needs a fresh empty queue and
+a distinct ticket namespace, exclusion of old writers and all outstanding old
+release requests, and reconciliation of older workloads. Failure or unknown
+storage state must halt admission. Marker storage grows with ticket count;
+safe compaction and disaster recovery are not implemented.
+
+On one Darwin ARM64 host, `scripts/native/check-fifo-ticket-once.py` compiled
+the current source with pinned diagnostic compiler and packager. It completed
+two full enqueue/reserve/release/dequeue/settle sequences and refused reuse of
+the older ticket. A source-injected failure after marker and directory sync
+returned unknown and the unmodified image refused retry of that ticket. A
+separately compiled mutation bypassing the marker check admitted the old
+ticket. The prior RGQ4 native image refused RGQ5 and the candidate refused
+RGQ4. Each native process had a three-second CPU cap; no hard memory cap was
+applied. These tests use isolated temporary files.
+
+The initial diagnostic source SHA-256 was `6c3e9c48fc4337116b805f9ce4c6571baacaf34da84d58a66d5c7fdd1e89b762`;
+its signed candidate image SHA-256 was
+`eefea18ec593be484b9c417e80ad3701820f860f09b376b756df86118b55af32`;
+compiler SHA-256 `920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6`;
+diagnostic packager SHA-256 `f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`;
+previous signed FIFO SHA-256 `e0686d9f82fc3eb5f218a0e716d373ef3a0a9565b0e09f39bef4ce48e0ae9da7`.
+
+The failure is injected, not a power-loss or actual I/O failure. Other RGQ4
+integration diagnostics, production provider,
+authenticated supervisor, whole-workload termination, resource limits and
+deployment remain unqualified. This is not a complete replay or resource
+governor solution and does not authorize Flint deployment.
+
+## Existing bounded FIFO regression, adapted for RGQ5
+
+The source-bound `check-fifo-bounded-fixture.py` and its boundary cases were
+adapted to the new header and run with the pins above. Normal operations,
+old-format refusal, synthetic old/new journal reconciliation, injected short
+reads and sync failures, one eight-caller enqueue sample, and owned-process
+kills at five queue-journal boundaries passed. The bounds-removal mutant was
+detected. A real-file same-size replacement still caused the old bytes to be
+accepted, confirming the host must exclude competing writers and aliases.
+The synthetic recovery setup directly seeds and resets queue files, sometimes
+with tickets lacking RGQ5 claim markers; it exercises legacy recovery logic,
+not a valid migration or a proof of the new claim invariant. Other historical
+RGQ4 integration scripts remain pinned to their own format and images.
+
+This regression used per-process three-second CPU limits and no hard memory
+cap. It did not simulate power loss, actual sync failures, claim-marker loss
+or rollback, or establish authenticated release or whole-workload lifetime.
+
+## Refuse reservations without an intact claim
+
+The reserve operation now requires a complete bounded read of its ticket's
+exact `RGU1` marker before consuming history or creating a hold. A native test
+removed the marker and then replaced it with malformed contents; both were
+refused and the missing-marker case created no reservation. A separately
+compiled mutant without that guard admitted the missing-marker reservation.
+The ticket-reuse and bounded-FIFO diagnostics were rerun successfully. One
+eight-caller sample admitted four requests and reported four busy; this is not
+a fairness measurement. The synthetic recovery fixture now seeds markers for
+its directly injected tickets; it is still not a valid migration procedure.
+
+The current source SHA-256 is
+`0142b7864d6ff5bd91cfd6455569049d09fcc39c08f5729f70f78a175b55e750`
+and the signed FIFO image SHA-256 is
+`d2aaa21b5a6d130dae28e34413b9759f9070fe2cf588a4be694950f19d21ac15`.
+The same compiler and packager pins and per-process CPU limit were used.
+This guard detects an absent or corrupt marker for the ticket being reserved;
+it cannot detect historical markers silently removed after their ticket left
+the queue, restore rollback, unauthenticated release, power loss or a malicious
+writer. The host must still preserve the complete marker namespace.
+
+## Claim interruption on three Mac minis
+
+The source-bound observer was extended with two instrumented claim variants.
+Each pauses its own child after writing the marker or after syncing the marker
+and directory, before enqueue publishes the ticket. The observer confirmed the
+marker was visible and the queue empty, killed and reaped that child, then
+verified the unmodified image refused a retry of the same ticket. These are
+process-kill observations; visibility before sync does not establish durable
+storage after power loss.
+
+The observer passed locally and on naphtali, benjamin and judah using strict
+Tailscale SSH host keys. All three reported Darwin ARM64 macOS 26.7.2 build
+25G332. The transport checked hashes of the compiler, packager, previous FIFO,
+source and observer and each host reported its task directory removed. Each
+host built the same signed candidate image with SHA-256
+`d2aaa21b5a6d130dae28e34413b9759f9070fe2cf588a4be694950f19d21ac15`.
+Observer SHA-256 was
+`ee07b1d0b69b7dfc5371725ca2d3f6ef3988c2216b05e0469a55d70d91bcdf0f`.
+Processes had three-second CPU limits, without an independently enforced
+whole-host memory cap. No model or persistent service was started. This does
+not test machine crash, power loss, storage rollback, descendant termination,
+production provider, authenticated release or a qualified governor.
+
+## No-replace claim publication
+
+The initial implementation checked existence, then wrote the claim directly.
+A provider returning `0` for a read-permission error could misclassify an
+existing write-only marker as missing and allow that direct write to overwrite
+it. The revised candidate writes and syncs `queue.claim.<ticket>`, publishes it
+as `queue.used.<ticket>` with FS2 T (no-replace rename), then syncs the marker
+and directory before enqueue proceeds. A T error or ambiguous outcome is
+unknown; a qualified provider must implement true no-replace with no fallback.
+
+In the local native diagnostic, a source-injected false missing response and
+an actual write-only existing marker both produced `fifo/ticket-unknown`
+without changing the marker. A mutant bypassing the lookup and replacing T
+with replacing rename L admitted reuse. After an owned child was killed before
+the staging file was published, a test retry succeeded; after directory sync,
+retry was refused as used. The caller must not infer which outcome occurred
+from a lost response. The bounded FIFO and ticket diagnostics passed with the
+same compiler and packager pins and three-second per-process CPU limit; there
+was no hard memory cap. This does not prove power-loss durability, recovery
+from rollback, production provider behavior or authenticated release.
+
+The no-replace revision source SHA-256 is
+`dfacce206668b331ebf233b9f20b926c9d9e6d7ea2276aa1681ee75710428ac4`;
+its signed diagnostic image SHA-256 is
+`d9314a5e9c6f1dce76adf0da2d5a63efbf0741e0e856bcda916f776b20eabbf1`.
+The same source-bound diagnostic then passed on naphtali, benjamin and judah
+(Darwin ARM64 macOS 26.7.2 build 25G332) using the pinned test compiler,
+packager and old FIFO. Each built the image above, observed the false-missing
+and write-only-marker refusals, and reported its temporary directory removed.
+Observer SHA-256 was
+`0271969f692f71b99acca78f3c850657f93ced96e96beb61a8d7d0a687e29db7`.
+These are diagnostic provider observations, not qualification of the target
+production provider. FS2 T support and refusal when unavailable require an
+independent production-host test.
+
+On the same three Macs and locally, two additional source-injected controls
+made FS2 T return failure (`"0"`) or an empty response after staging. Both
+returned `fifo/ticket-unknown` without a queue entry or published claim. The
+same run rechecked the actual write-only existing marker and both interruption
+points. The test observer SHA-256 was
+`2121522ca71a2877a20e80883320bf6f303aec454eebfb67917aff6221ba0143`;
+each host reported the same source/image hashes and temporary-directory
+removal. These simulate provider responses inside the source; they do not
+exercise a real unsupported or malicious production provider.
+
+The observer was subsequently extended to stop an owned process immediately
+after T publication and after marker fsync, as well as the existing before-
+publication and after-directory-sync pauses. On the same three Macs and
+locally, a retry after either new pause returned `fifo/ticket-used`; a retry
+before publication enqueued successfully. Each host also ran one sample of
+eight processes enqueueing the same ticket: one succeeded, seven observed
+`fifo/already-queued`, and the resulting queue and claim contained one ticket.
+The observer SHA-256 was
+`913a9cc8cfc214f6f0b5284ab3e5d53685c7ca94b9bf6955a67c56b13525cb3e`.
+The source and signed FIFO hashes were unchanged from the no-replace revision;
+each host reported its temporary directory removed. These are process-kill
+and single concurrency samples, not power-loss durability, fairness or
+production-provider qualification.
+
+## Composition with the #1796 FS2 candidate
+
+The same current RGQ5 source and ticket-once observer were built with the
+separately signed #1796 merged-source diagnostic packager SHA-256
+`28aa2445711083523adef3cfed0d5b9031b85e2ad258ff760af8680a340d9378`.
+Locally and on naphtali, benjamin and judah, the observer passed the marker,
+no-replace, source-injected failure, four process-kill and same-ticket race
+cases. Each target built signed FIFO SHA-256
+`d324bf33d84223068c4aaa565f0f149df01fe1ace7c4ff9ae0ee7130b15efa97`,
+reported Darwin ARM64 macOS 26.7.2 build 25G332, and removed its temporary
+directory. The compiler and observer pins were `92095476...` and
+`913a9cc8...` as above. Each race was one sample, not a fairness guarantee.
+
+The #1796 packager here was produced with a prior diagnostic compiler and is
+not the rebuilt or released Amu runtime. This composition does not qualify
+the production FS2 provider, machine-crash recovery, supervisor, process tree,
+memory limits or a live model.
+
+## Re-read claims before and after publication
+
+The current candidate checks the exact bounded claim contents after the staged
+file is synced and again after no-replace publication and file sync, before
+syncing the directory and reporting the ticket claimed. A read failure or
+mismatch returns `fifo/ticket-unknown` without enqueueing. A source-injected
+empty read before publication left the claim unpublished and a known test retry
+enqueued; the same injected failure after publication left the claim present
+and the test retry refused reuse. A caller receiving an unknown outcome must
+reconcile it rather than assume either result.
+
+The updated source-bound ticket tests passed locally and on naphtali, benjamin
+and judah using the #1796 diagnostic packager `28aa2445...`; the adapted
+bounded FIFO regression passed locally. The source SHA-256 was
+`e475139cec522d65ce3f187916745323a98f261596e6616c7b2a6ad57b09febf`, the
+signed FIFO SHA-256 was
+`aec6f14b5ab802b53c38374133a5c80de8c8f68335f986f1587e09315bacd0d9`, and
+the test observer SHA-256 was
+`508799e0f52e54b4847b7e79ff227d272144726fb0114f3914d54025e15c9a59`.
+All hosts reported their task directories removed. Read failures were injected
+into the source rather than caused by kernel I/O errors; the known same-size
+concurrent-write limitation and the host ownership requirement remain. These
+tests do not qualify a production provider, power-loss behavior or governor.
+
+## Ticket inspection
+
+`inspect <ticket>` is a bounded, lock-protected observation for a future
+trusted host. With a valid claim and a valid stable queue, it reports
+`fifo/claim-queued` if that ticket is present, or `fifo/claim-recorded` if it
+is not. A missing or malformed claim, malformed hold/release marker, pending
+queue update or invalid queue refuses. A nonzero exit, trap, truncated output
+or lost response must be treated as unknown. Inspection never releases a
+reservation or changes queue contents. The current revision does issue
+filesystem sync operations as described below.
+
+`fifo/claim-recorded` does not distinguish a failed pre-enqueue claim, a
+cancelled ticket or a completed one. Neither result proves whether a workload
+started, finished or has descendants. The host must use its own authenticated
+launch records, complete process-lifetime evidence and durable reconciliation;
+it must not launch, retry or release solely on an inspection result.
+
+The current native source and diagnostic tests covered queued/recorded,
+missing claim, pending journal, corrupt hold and release markers, and the
+publication interruption cases. They passed locally and on naphtali,
+benjamin and judah using the #1796 diagnostic packager `28aa2445...`; the
+adapted bounded FIFO regression also passed locally. Source SHA-256 was
+`b5075148bf29d925a8af6a4e8339bb676c869e89a5fa3efcc6834a96f1e59908`,
+signed FIFO SHA-256
+`bdb1d68966535efc951b053ba0d7604c5a9d46df1c792671b1a2d114c509b4f6`, and
+observer SHA-256
+`9a6496c56bf058672e83b54f49ee9fc71ea9a8d3b435484c1af2aa99479c537a`.
+The hosts reported task directory removal. These are synthetic observations,
+not production-host, power-loss, authenticated-supervisor or governor proof.
+
+## Sync before a successful inspection
+
+A process may die after a claim is visible but before its sync completes.
+Before `inspect` reports queued or recorded, it syncs the queue file, the
+ticket claim, any active barrier and their parent directory. A failed or unknown
+sync returns `fifo/claim-unknown`; it is not a durable observation. This does
+not change queue contents or release a reservation. It relies on the trusted
+provider, filesystem sync semantics and exclusive host ownership; it is not
+proof against power loss, rollback or a provider that falsely reports success.
+
+The local bounded FIFO regression and ticket-once tests passed, as did the
+ticket test on naphtali, benjamin and judah using the #1796 diagnostic
+packager `28aa2445...`. Injecting an unexpected response at each of the three
+sync checks refused inspection, and a separately compiled guard-bypass mutant
+reported the queued ticket. These are source-injected response tests, not
+actual kernel fsync failures. All three hosts reported task directory removal.
+Source SHA-256:
+`80f6d4930984aebaa0baa72c1a20f62d6a93ae60e0ee0d5805f068481a4920e7`;
+signed FIFO SHA-256:
+`36a1d9fd434707a36dedd5687e956803c053438011eaa46e5ddd780aa04a2101`;
+observer SHA-256:
+`2ef026960eb5661c0042cdadf827b1f1ce7832cb43eb2b7490bcbf864b58e204`.
+
+## Refuse inconsistent barriers and incomplete settlement
+
+The latest inspection also checks that an active hold has a valid claim and
+matches the queue front, that a pending release has a valid claim and is
+either the front or absent from the queue, and that an idle queue has cleared
+settlement history. It syncs the active hold or release marker before
+returning a successful observation. An unresolved settlement therefore stays
+unknown even if the ticket's claim and queue bytes can be read.
+
+Local and three-Mac native diagnostics passed using the #1796 diagnostic
+packager `28aa2445...`. Synthetic tests refused a validly formatted hold for
+the wrong ticket and a settlement interrupted between marker rename and
+receipt; a barrier-check bypass mutant reported the latter as recorded.
+Injected failed hold/release syncs also refused. The adapted bounded FIFO
+regression passed locally. Source SHA-256:
+`9d874edf1a2b1ec9967f9b57ee8688d20eea47d4d2a0f68b2121295809165f65`;
+signed FIFO SHA-256:
+`c5382649d28d3f3b06985e26a35e28ca821a69cdf556d3ba4aaa9c6b432fdf8e`;
+observer SHA-256:
+`cfa6f911054b9718dafd40e9e30274296549cde8608e14a86f411a68f3148510`.
+The three hosts reported task directory removal. These are simulated states
+and response faults, not actual fsync failure, power-loss recovery, process
+tree or production governor validation.
+
+## Existing Mac bootstrap provider observation
+
+On one local Darwin ARM64 host, the Mac bootstrap packager from Amu #1824's
+`ff630cb3` worktree, SHA-256
+`c2badb1aac7911f430e398f1b3695a55b3b0ced8bb3681c48c00e9340606812a`,
+and the diagnostic packager `f726f9dd...` above each packaged the same small
+FS2 probe with compiler SHA-256 `703709f8...`. Strict signatures were
+verified. Both returned the expected D existence response. Against a private
+existing destination, stock T trapped with SIGTRAP and no output; diagnostic
+T returned the framed refusal `0`. Both test files stayed unchanged. The
+task-owned directory was removed and native children had a three-second CPU
+limit. `scripts/native/check-fifo-stock-provider.py` records this observation;
+its SHA-256 was
+`86e10d914362fd976e5532ae560e6752dd81e289130d6ecadc01261c1ff44cf9`.
+
+A separate RGQ5 fixture packaged by that stock image trapped before enqueue
+and left the queue empty without a published marker. That observation alone
+does not identify the first unsupported operation. These are observations of
+specific pinned artifacts on one host; they do not prove all stock providers
+or hosts behave the same. A trapping child is an unknown outcome that a host
+must handle, not a successful FIFO refusal. Production FS2 T and host error
+handling remain unqualified.
+
+An instrumented RGQ5 fixture subsequently wrote each synthetic FS2 operation
+name before invoking it. With the same stock provider, its trace was
+`DDDDDDO` followed by SIGTRAP; the queue remained empty. The instrumented
+source SHA-256 was
+`68084a84104e5f2a981ba638bcf9e1692bd3276c3d1522f88ad9ecef3164dfea`.
+An independent small probe confirmed stock O and T both trap, whereas the
+diagnostic provider returned framed regular-file metadata for O and a framed
+no-replace refusal for T. D succeeded with both; test files remained intact.
+The updated observer SHA-256 was
+`58a05e611c248d02803e7f6aed8c961c4082f2bb0764f931eff7e34f0698b63c`.
+This isolates the first observed unsupported request in the instrumented
+run; it does not make the diagnostic provider a production host.
+
+## Preserve the barrier when a claim is lost
+
+The current candidate also validates the exact claim before release, dequeue,
+settle and settle recovery. In a local source-bound diagnostic, removing a
+claim after reserve refused release and retained the hold; corrupting it
+after release refused dequeue and retained the release barrier. Removing it
+after dequeue refused both settle and a synthetic settle-recovery state;
+restoring it allowed the matching recovery to finish. The adapted bounded
+FIFO regression and ticket-once diagnostics passed locally with the same
+compiler and packager pins. The prior three-Mac observation above used the
+earlier image, not this source revision.
+
+Current source SHA-256:
+`7d48c9bccab640d20791f452650260aefb6b6d885f36803014e3c359ec680f50`.
+Signed diagnostic FIFO SHA-256:
+`6557d0f1bc716c1ddfacd6cc96857e4d0229fd788cb025297204254f727f0085`.
+The recovery state was manually constructed in a task-owned temporary
+directory; this is not a power-loss or production recovery test. Preserving
+all historic claims and authenticating the host remain necessary.
+
+The updated source-bound ticket-once diagnostic also passed on naphtali,
+benjamin and judah using `scripts/native/check-fifo-ticket-once-fleet.py` and
+the pinned compiler, packager and old FIFO above. The three hosts reported
+Darwin ARM64 macOS 26.7.2 build 25G332, built the current diagnostic image
+with the hash above, and reported their task-owned transfer directories
+removed. The observer exercises missing/corrupt markers, retained barriers,
+synthetic settle recovery, claim process kills and the guard-bypass controls.
+It is not a machine-crash, storage rollback, production provider or governor
+qualification. The fleet wrapper SHA-256 was
+`5934c846658039fff6966e5f1e3dc690cbdfa280061bc5b6e1bdf45bdcb8aa7b`;
+the updated observer SHA-256 was
+`f58e3d72fae1cb6dd155510ee7416ba6be0cef51b11a3a5f1add6fb52f2a8738`.

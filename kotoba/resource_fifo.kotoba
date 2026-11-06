@@ -3,11 +3,17 @@
 ;; trusted host may release a reservation and invoke dequeue after separately
 ;; verifying the whole workload's termination. Root, files and all callers
 ;; must be host-owned. The hold is not an authorization or process monitor.
-;; RGQ4 is intentionally incompatible with RGQ1, RGQ2 and RGQ3: the host must
+;; RGQ5 is intentionally incompatible with RGQ1 through RGQ4: the host must
 ;; reconcile and migrate offline, exclude older writers and existing workloads,
 ;; and never dispatch without a successful durable reservation. A release
 ;; requires independent proof that the entire workload stopped; ambiguous
 ;; release outcomes require host reconciliation before any further dispatch.
+;; Begin RGQ5 only with a fresh empty host-owned queue and a permanently
+;; separate ticket namespace; never migrate active RGQ4 tickets or outstanding
+;; release commands into it. Retain every queue.used.* marker across restarts,
+;; backups and recovery. A caller must reconcile an unknown claim before retry.
+;; Markers do
+;; not authenticate callers or stop a trusted caller releasing a live workload.
 (ns murakumo.resource-fifo (:export [resource-fifo-main]))
 
 (defn- rq-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
@@ -91,6 +97,35 @@
            (let [c (string-code-point-at s i)]
              (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
                (recur (+ i 1)) false))))))
+;; Called under queue.lock before enqueue. Publish a synced staging file using
+;; FS2 T's no-replace rename: even a false "missing" lookup must never allow
+;; an existing claim to be overwritten. T errors or ambiguous outcomes refuse.
+;; The host must exclude all other writers and preserve the marker namespace.
+;; Successful file and directory sync must precede publication of the ticket.
+(defn- rq-claim-ticket [root :string ticket :string] :string
+  (let [path (str root "/queue.used." ticket) pending (str root "/queue.claim." ticket)
+        status (rq-fs "D" path "")]
+    (cond (= status "1") "fifo/ticket-used"
+          (not (= status "0")) "fifo/ticket-unknown"
+          (and (rq-write? pending (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "M" pending "") "1")
+               (= (rq-read-bounded pending 70) (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "T" pending path) "1")
+               (= (rq-fs "M" path "") "1")
+               (= (rq-read-bounded path 70) (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"
+          :else "fifo/ticket-unknown")))
+(defn- rq-claimed? [root :string ticket :string] :bool
+  (= (rq-read-bounded (str root "/queue.used." ticket) 70) (str "RGU1\n" ticket "\n")))
+;; A visible post-crash state may not yet have a completed sync. A successful
+;; observation re-syncs the queue, claim and directory; an unknown sync never
+;; authorizes the caller to treat the result as durable.
+(defn- rq-inspect-sync? [root :string ticket :string hold-status :string release-status :string] :bool
+  (and (= (rq-fs "M" (str root "/queue") "") "1")
+       (= (rq-fs "M" (str root "/queue.used." ticket) "") "1")
+       (or (= hold-status "0") (= (rq-fs "M" (str root "/queue.reservation") "") "1"))
+       (or (= release-status "0") (= (rq-fs "M" (str root "/queue.release.pending") "") "1"))
+       (= (rq-fs "M" root "") "1")))
 (defn- rq-hold-valid? [s :string] :bool
   (and (= (string-length s) 70) (= (string-substring s 0 5) "RGH1\n")
        (= (string-substring s 69 70) "\n") (rq-ticket? (string-substring s 5 69))))
@@ -108,6 +143,17 @@
                    (and (rq-hold-valid? a) (= a b) (= (rq-fs "M" last "") "1")
                         (= (rq-fs "M" receipt "") "1") (= (rq-fs "M" root "") "1")))
                :else false))))
+;; An inspect must not hide an interrupted settle or an inconsistent active
+;; barrier. A release may refer to the current front or a removed ticket.
+(defn- rq-inspect-barrier-valid? [root :string state :string hold-status :string release-status :string] :bool
+  (if (and (= hold-status "0") (= release-status "0")) (rq-history-clear? root)
+    (let [holding (= hold-status "1") path (str root (if holding "/queue.reservation" "/queue.release.pending"))
+          marker (rq-read-bounded path 70)]
+      (if (not (rq-hold-valid? marker)) false
+        (let [barrier-ticket (string-substring marker 5 69)
+              at (string-index-of state (str barrier-ticket "\n"))]
+          (and (rq-claimed? root barrier-ticket)
+               (if holding (= at 5) (or (< at 0) (= at 5)))))))))
 (defn- rq-consume-history? [root :string] :bool
   (let [receipt (str root "/queue.reservation.settled") status (rq-fs "D" receipt "")]
     (and (rq-history-clear? root)
@@ -117,7 +163,7 @@
                :else false))))
 (defn- rq-valid? [s :string] :bool
   (let [n (string-length s)]
-    (and (>= n 5) (<= n 4165) (= (string-substring s 0 5) "RGQ4\n")
+    (and (>= n 5) (<= n 4165) (= (string-substring s 0 5) "RGQ5\n")
          (= (mod (- n 5) 65) 0)
          (loop [i 5]
            (if (= i n) true
@@ -179,9 +225,9 @@
   (let [last (str root "/queue.reservation.last") receipt (str root "/queue.reservation.settled")
         journal (str root "/queue.last") rs (rq-fs "D" receipt "")
         expected-hold (str "RGH1\n" ticket "\n")
-        old (str "RGQ4\n" ticket "\n" (string-substring state 5 (string-length state)))
+        old (str "RGQ5\n" ticket "\n" (string-substring state 5 (string-length state)))
         expected-journal (str "RGI1\n" old "NEXT\n" state)]
-    (if (and (rq-ticket? ticket) (= pending "0") (= intent "0")
+    (if (and (rq-ticket? ticket) (rq-claimed? root ticket) (= pending "0") (= intent "0")
              (= (rq-fs "D" last "") "1") (= (rq-read-bounded last 70) expected-hold)
              (< (string-index-of state (str ticket "\n")) 0)
              (= (rq-read-bounded journal 8340) expected-journal)
@@ -202,6 +248,17 @@
           (not (or (= hold-status "0") (= hold-status "1"))) "fifo/reservation-unknown"
           (not (or (= release-status "0") (= release-status "1"))) "fifo/reservation-unknown"
           (and (= hold-status "1") (= release-status "1")) "fifo/reservation-unknown"
+          ;; Read-only reconciliation observation. A recorded but nonqueued
+          ;; ticket may have completed, been cancelled, or never been queued;
+          ;; it is not proof that any workload stopped or never started.
+          (= op "inspect")
+            (cond (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+                  (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
+                  (not (rq-inspect-barrier-valid? root state hold-status release-status)) "fifo/reservation-unknown"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
+                  (not (rq-inspect-sync? root ticket hold-status release-status)) "fifo/claim-unknown"
+                  (< (string-index-of state (str ticket "\n")) 0) "fifo/claim-recorded"
+                  :else "fifo/claim-queued")
           (= op "settle-recover")
             (if (and (= hold-status "0") (= release-status "0"))
               (rq-settle-recover root state ticket pending-status intent-status) "fifo/reservation-unknown")
@@ -210,15 +267,16 @@
                   (= op "release") "fifo/reservation-unknown"
                   (not (or (= op "dequeue") (= op "settle"))) "fifo/release-pending"
                   (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
                   (not (= (rq-read-bounded release 70) (str "RGH1\n" ticket "\n"))) "fifo/reservation-unknown"
                   (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
                   (= op "dequeue")
-                    (cond (= state "RGQ4\n") "fifo/empty"
+                    (cond (= state "RGQ5\n") "fifo/empty"
                           (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
-                          (rq-commit root state (str "RGQ4\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
+                          (rq-commit root state (str "RGQ5\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
                           :else "fifo/write-unknown")
                   :else
-                    (let [old (str "RGQ4\n" ticket "\n" (string-substring state 5 (string-length state)))
+                    (let [old (str "RGQ5\n" ticket "\n" (string-substring state 5 (string-length state)))
                           expected (str "RGI1\n" old "NEXT\n" state) journal (str root "/queue.last")]
                       (if (and (< (string-index-of state (str ticket "\n")) 0)
                                (= (rq-read-bounded journal 8340) expected)
@@ -231,8 +289,9 @@
           (= op "release")
             (cond (not (rq-ticket? ticket)) "fifo/ticket-invalid"
                   (not (= hold-status "1")) "fifo/reservation-unknown"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
                   (not (= (rq-read-bounded hold 70) (str "RGH1\n" ticket "\n"))) "fifo/reservation-unknown"
-                  (or (= state "RGQ4\n") (not (= (string-substring state 5 69) ticket))) "fifo/reservation-unknown"
+                  (or (= state "RGQ5\n") (not (= (string-substring state 5 69) ticket))) "fifo/reservation-unknown"
                   (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
                   (and (= (rq-fs "M" hold "") "1")
                        (= (rq-fs "L" hold release) "1")
@@ -242,21 +301,24 @@
           (not (rq-history-clear? root)) "fifo/reservation-unknown"
           (= op "recover") (rq-recover root state pending-status intent-status)
           (or (not (= pending-status "0")) (not (= intent-status "0"))) "fifo/pending-unknown"
-          (= op "front") (if (= state "RGQ4\n") "fifo/empty" (str "fifo/front " (string-substring state 5 69)))
+          (= op "front") (if (= state "RGQ5\n") "fifo/empty" (str "fifo/front " (string-substring state 5 69)))
           (not (rq-ticket? ticket)) "fifo/ticket-invalid"
           (= op "reserve")
-            (cond (= state "RGQ4\n") "fifo/empty"
+            (cond (= state "RGQ5\n") "fifo/empty"
                   (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
                   (and (rq-consume-history? root) (rq-write? hold (str "RGH1\n" ticket "\n"))
                        (= (rq-fs "M" hold "") "1") (= (rq-fs "M" root "") "1")) "fifo/reserved"
                   :else "fifo/reservation-unknown")
           (= op "enqueue")
             (cond (not (< (string-index-of state (str ticket "\n")) 0)) "fifo/already-queued"
                   (>= (string-length state) 4165) "fifo/full"
-                  (rq-commit root state (str state ticket "\n")) "fifo/enqueued"
-                  :else "fifo/write-unknown")
+                  :else (let [claim (rq-claim-ticket root ticket)]
+                          (cond (not (= claim "fifo/ticket-claimed")) claim
+                                (rq-commit root state (str state ticket "\n")) "fifo/enqueued"
+                                :else "fifo/write-unknown")))
           (= op "dequeue")
-            (cond (= state "RGQ4\n") "fifo/empty"
+            (cond (= state "RGQ5\n") "fifo/empty"
                   (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
                   :else "fifo/release-required")
           (= op "cancel")
@@ -271,7 +333,7 @@
   (let [root (rq-arg 0) op (rq-arg 1) ticket (rq-arg 2) lock (str root "/queue.lock")]
     (if (or (not (rq-root? root)) (not (= (rq-arg 3) ""))
             (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "cancel") (= op "recover")
-                     (= op "reserve") (= op "release") (= op "settle") (= op "settle-recover")))
+                     (= op "reserve") (= op "release") (= op "settle") (= op "settle-recover") (= op "inspect")))
             (and (or (= op "front") (= op "recover")) (not (= ticket ""))))
       (let [z (rq-out "fifo/input-invalid")] 2)
       (if (not (= (rq-fs "D" lock "") "1")) (let [z (rq-out "fifo/lock-unavailable")] 2)
@@ -282,5 +344,6 @@
                 z (rq-out (if released result "fifo/unlock-unknown"))]
             (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued") (= result "fifo/cancelled")
                                   (= result "fifo/reserved") (and (= op "release") (= result "fifo/release-pending")) (= result "fifo/settled")
+                                  (= result "fifo/claim-queued") (= result "fifo/claim-recorded")
                                   (= result "fifo/empty") (= result "fifo/recovered") (= result "fifo/aborted")
                                   (= (string-index-of result "fifo/front ") 0))) 0 1)))))))
