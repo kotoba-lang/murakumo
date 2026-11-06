@@ -174,6 +174,10 @@ buffer and one encoder, within 4.9e-3 of the double-precision block on the same 
 ([record](../bench/results/2026-11-06-resblock-metal/README.md)). The first composed block on the GPU; the gap to the CPU twin is the half-precision
 convolution inputs.
 
+**Stage M, slice 9 (2026-11-06).** A whole SpatialTransformer block on the GPU from one Kotoba program (`bench/kernels/spatial-metal/`): 21 kernels in one command
+buffer, within 5.6e-2 (normalised; ~5e-4 of the largest output) of the double-precision block on the CPU twin's parameters (the f32 CPU twin: 3.7e-5), four mutants detected
+([record](../bench/results/2026-11-06-spatial-metal/README.md)). With slice 8, both block types of the UNet now run on the GPU in single command buffers.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
