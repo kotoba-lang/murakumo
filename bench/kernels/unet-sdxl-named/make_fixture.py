@@ -14,7 +14,7 @@ logging.disable(logging.CRITICAL)
 
 def write(d, comfy, mc, lat, BOOST=1.0):
     sys.path.insert(0, comfy)
-    import numpy as np, torch, comfy.ops
+    import numpy as np, torch, comfy.ops, warnings; warnings.filterwarnings("ignore")
     from comfy.ldm.modules.diffusionmodules.openaimodel import UNetModel
     from safetensors.torch import save_file
     os.makedirs(d, exist_ok=True)
@@ -24,15 +24,43 @@ def write(d, comfy, mc, lat, BOOST=1.0):
                use_scale_shift_norm=False, resblock_updown=False, use_spatial_transformer=True, transformer_depth=[0, 0, 2, 2, 10, 10],
                transformer_depth_output=[0, 0, 0, 2, 2, 2, 10, 10, 10], transformer_depth_middle=10, context_dim=2048,
                use_linear_in_transformer=True, disable_self_attentions=None, legacy=False)
-    m = UNetModel(**cfg, operations=comfy.ops.disable_weight_init, device=torch.device("cpu"), dtype=torch.float32).eval()
-    with torch.no_grad():
-        for n, p in m.named_parameters():
-            if n.endswith("norm.weight") or "in_layers.0.weight" in n or "out_layers.0.weight" in n or "norm1.weight" in n or "norm2.weight" in n or "norm3.weight" in n or n == "out.0.weight":
-                p.copy_(1.0 + 0.1 * torch.randn_like(p))
-            elif p.dim() == 1: p.copy_(0.1 * torch.randn_like(p))
-            elif p.dim() == 4: p.copy_(torch.randn_like(p) * (0.5 / (p.shape[1] * p.shape[2] * p.shape[3]) ** 0.5))
-            else: p.copy_(torch.randn_like(p) * (0.7 / p.shape[1] ** 0.5) * (BOOST if ("to_out" in n or "ff.net.2" in n) else 1.0))   # BOOST 3 ("strong"): transformer branches matter more, so a wrong layer count or wrong keys shows
-    save_file({k: v.contiguous() for k, v in m.state_dict().items()}, os.path.join(d, "model.safetensors"))
+    if mc >= 256:
+        # LOW-RAM path for the widest sizes (MC 320 is a 10.3 GB float32 file): the weights are generated tensor by tensor straight into the safetensors file,
+        # and the oracle then uses the file memory-mapped (clean page-cache pages the OS can drop, not 10 GB of anonymous memory). Same init rules.
+        import json, struct, math
+        meta = torch.device("meta")
+        mm_ = UNetModel(**cfg, operations=comfy.ops.disable_weight_init, device=meta, dtype=torch.float32)
+        names = [(n, tuple(p.shape)) for n, p in mm_.named_parameters()]
+        assert set(mm_.state_dict().keys()) == set(n for n, _ in names)
+        hdr = {}; off = 0
+        for n, sh in names:
+            nb = 4 * math.prod(sh); hdr[n] = {"dtype": "F32", "shape": list(sh), "data_offsets": [off, off + nb]}; off += nb
+        hj = json.dumps(hdr, separators=(",", ":")).encode(); hj += b" " * ((8 - len(hj) % 8) % 8)
+        g = torch.Generator().manual_seed(91)
+        path = os.path.join(d, "model.safetensors")
+        with open(path, "wb") as fh:
+            fh.write(struct.pack("<Q", len(hj))); fh.write(hj)
+            for n, sh in names:
+                r = torch.randn(sh, generator=g)
+                if n.endswith("norm.weight") or "in_layers.0.weight" in n or "out_layers.0.weight" in n or "norm1.weight" in n or "norm2.weight" in n or "norm3.weight" in n or n == "out.0.weight": t = 1.0 + 0.1 * r
+                elif len(sh) == 1: t = 0.1 * r
+                elif len(sh) == 4: t = r * (0.5 / (sh[1] * sh[2] * sh[3]) ** 0.5)
+                else: t = r * (0.7 / sh[1] ** 0.5) * (BOOST if ("to_out" in n or "ff.net.2" in n) else 1.0)
+                fh.write(t.numpy().tobytes())
+        mm = np.memmap(path, dtype=np.uint8, mode="r", offset=8 + len(hj))
+        sdm = {n: torch.from_numpy(np.frombuffer(mm, dtype=np.float32, count=math.prod(sh), offset=hdr[n]["data_offsets"][0]).reshape(sh)) for n, sh in names}
+        m = UNetModel(**cfg, operations=comfy.ops.disable_weight_init, device=meta, dtype=torch.float32)
+        m.load_state_dict(sdm, assign=True); m.eval()
+    else:
+        m = UNetModel(**cfg, operations=comfy.ops.disable_weight_init, device=torch.device("cpu"), dtype=torch.float32).eval()
+        with torch.no_grad():
+            for n, p in m.named_parameters():
+                if n.endswith("norm.weight") or "in_layers.0.weight" in n or "out_layers.0.weight" in n or "norm1.weight" in n or "norm2.weight" in n or "norm3.weight" in n or n == "out.0.weight":
+                    p.copy_(1.0 + 0.1 * torch.randn_like(p))
+                elif p.dim() == 1: p.copy_(0.1 * torch.randn_like(p))
+                elif p.dim() == 4: p.copy_(torch.randn_like(p) * (0.5 / (p.shape[1] * p.shape[2] * p.shape[3]) ** 0.5))
+                else: p.copy_(torch.randn_like(p) * (0.7 / p.shape[1] ** 0.5) * (BOOST if ("to_out" in n or "ff.net.2" in n) else 1.0))   # BOOST 3 ("strong"): transformer branches matter more, so a wrong layer count or wrong keys shows
+        save_file({k: v.contiguous() for k, v in m.state_dict().items()}, os.path.join(d, "model.safetensors"))
     x = torch.randn(1, 4, lat, lat); ctx = torch.randn(1, 77, 2048) * 0.5; y = torch.randn(1, 2816) * 0.5; t = torch.tensor([500.0])
     for n, v in (("x", x), ("ctx", ctx[0]), ("y", y[0])): v.numpy().astype(np.float32).tofile(os.path.join(d, n + ".f32"))
     taps = {}
@@ -49,7 +77,7 @@ def write(d, comfy, mc, lat, BOOST=1.0):
     out.numpy().astype(np.float32).tofile(os.path.join(d, "expect_final.f32"))
     taps["emb"] = taps.pop("te") + taps.pop("le")
     for k, v in taps.items(): v.numpy().astype(np.float32).tofile(os.path.join(d, "expect_%s.f32" % k))
-    print("params", sum(p.numel() for p in m.parameters()), "out", tuple(out.shape), "max|out|", float(out.abs().max()), "tensors", len(m.state_dict()))
+    print("params", sum(p.numel() for p in m.parameters()), "lean" if mc >= 256 else "", "out", tuple(out.shape), "max|out|", float(out.abs().max()), "tensors", len(m.state_dict()))
     print("shapes", {k: tuple(v.shape) for k, v in taps.items()})
 
 if __name__ == "__main__":
