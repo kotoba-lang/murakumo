@@ -107,4 +107,97 @@ NVMe I/O, loss/norm/input hashes, source identity, checkpoint files/global seals
 and actual resumed step/sampler/boundary CE. Transfer and peer-compute/barrier
 wait are separate. Global byte counts and per-rank collective estimates must not
 be summed as exclusive wire traffic. Short runs do not establish convergence or
-sustained scaling.3B results are pending at this checkpoint implementation unit.
+sustained scaling.3B results were pending at that implementation unit.
+
+## Actual3B results and separate-process full readback
+
+The complete planned2+2 processes finish for both physical layouts. Executing
+training sourcec6fd4fa0 is unchanged across every3B process and all hosts. The
+original seven sources are unchanged. Global keys cover304 parameters tensors
+exactly once, with3,003,341,824 coefficients; no rank holds the full model.
+
+| Metric | Two owners | Three owners |
+| --- | ---: | ---: |
+| Parameters per owner (B, decimal) | 1.518564 /1.484777 | 1.023462 /0.990204 /0.989676 |
+| BF16 model bytes/owner (GB) | 3.0371 /2.9696 | 2.0469 /1.9804 /1.9794 |
+| FP32 master bytes/owner, NVMe (GB) | 6.0743 /5.9391 | 4.0938 /3.9608 /3.9587 |
+| Updates /global tokens | 4 /256 | 4 /256 |
+| Summed maximum-rank phase wall | 51.7020s | 38.6057s |
+| Global phase tokens/s | 4.9514 | 6.6312 |
+| Summed maximum supervisor wall | 120.5957s | 79.2644s |
+| Init/load/eval/save-inclusive global tokens/s | 2.1228 | 3.2297 |
+| Maximum process footprint /requested /fatal | 8.4759 /10 /9GiB | 6.5804 /10 /9GiB |
+| Common initial128-token CE | 10.599606 | 10.599606 |
+| Final CE after4 updates | 10.615460 | 10.604201 |
+| Actual checkpoint2 load (max rank) | 7.6529s | 4.1036s |
+| Saves2/4 (max rank per save) | 27.1046 /26.5575s | 11.7634 /17.4549s |
+| Total global checkpoint file bytes/generation | 18.0201GB | 18.0201GB |
+
+Rates count256 processed training tokens once per layout, not per rank. Sum the
+maximum rank durations separately for prefix and suffix; reporting/Git pauses
+and the later independent readback are excluded. Evaluations and saves are
+excluded only from phase rates, and included in supervisor rates. No cold-cache
+reset/repeat trials; first-step compilation and storage variation are retained.
+This single short observation does not qualify steady-state scaling efficiency.
+
+**Neither final held-out CE improves over initialization.** Training objective
+steps1–4: two-owner11.205250,11.446786,11.440002,11.182490; three-owner11.205250,
+11.463551,11.473864,11.137591. Do not call objective changes convergence or rank
+the configurations by quality. Floating execution/VJP boundaries differ with
+layout; cross-layout BF16 bitwise equivalence was not asserted or qualified.
+
+### Communication and storage accounting
+
+Global owner boundary-array payload is8,983,472bytes (two owners) and13,557,808
+bytes (three), counted globally once across both complete processes, including
+their evaluation passes. Per-rank ring TX estimate across all collectives/control
+is9,565,384 /19,502,944bytes. Actual whole-en0 TX per rank is12.5692/10.3585MB
+(2owners) or22.5227/20.8117/22.5227MB(3owners); RX is15.0545/13.2958MB or
+23.9866/22.7812/24.0165MB. These include background/control; exclusive wire bytes
+remain null. Broadcast is owner-data-plus-zeros all-sum, so ring estimates are
+not useful point-to-point lower bounds. No full model/master tensor is sent
+through the training transport. Both actual links stay1Gb/s.
+
+`mesh` channels separate boundary tensor transfer, metadata and barrier wait.
+Barrier wait includes other owners' compute/IO. The per-step optimizer+finish
+wait already includes its finishing barrier: do not sum those overlapping
+accounting fields twice. NIC and `mesh` totals include init/evaluation/save;
+backward channels correspond to training only. Raw per-channel records are kept.
+
+OS per-process disk reads/writes (GB), summed prefix+suffix: two-owner rank0
+40.7761/54.6748,rank1 41.8762/53.4583; three-owner rank0 24.0207/36.8489,
+rank1 21.8588/35.6517,rank2 24.6093/35.6343. Logical master IO and restore-file
+bytes are separately recorded in every result. Physical counters include
+init/load/eval/save/hash and are not exclusive SSD/device measurements.
+Swap is unchanged in every before/after snapshot: naphtali1801.88MiB,
+issachar0,benjamin0. Transient/other-workload effects are not measured.
+
+### Save, actual restart and full-file verification
+
+The2/3-rank prefix creates checkpoint2; new process IDs load that agreed global
+generation and restore step2, optimizer masters and sampler, then train tostep4.
+Loaded initial CE is exactly the preceding final CE in both layouts. All global
+manifest/certificate hashes agree across their ranks. A later separate process
+re-reads and verifies both generations' every local file hash/header/shape/dtype,
+ownership/config/options/source/runtime/data/global seal, then checks agreement
+across all ranks. Each global generation has608tensor files (304weight+304master),
+18,020,111,288 file bytes. Both layouts change249weight and304master shard hashes
+between steps2/4. Sampler states independently reconstruct all4 input hashes
+from corpus/seed; the two layouts' complete training input streams match.
+
+Full readback supervisors exit0/reaped; all608files in each of both generations
+pass for each layout. This is a separate-process readback using the same format
+validator, not an independent implementation or whole-BF16-trajectory parity
+claim. Small F32 continuous/resumed parity and boundary checks remain the numeric
+control. All actual3B training children exit0/reaped without timeout; final readback
+finds no owned model/checker/supervisor processes or task-port listeners. Verifier
+source SHA7e412e7b… matches all three deployed receipts. GB checkpoints stay on
+fleet, and the earlier1B checkpoints/services/keys/unrelated WIP remain intact.
+
+`summarize_3b.hy` imports only stdlib and checks actual settings, full ownership,
+source identities, limits, exits, sampler, global checkpoint generations and
+readback before deriving `3b-summary.json`. It does not execute a local model.
+The original goal's bounded3B2/3-node capacity/update/speed/loss/communication/
+same-layout save-restart verification is met. Sufficient pretraining/quality,
+AdamW state, EP, overlapped pipeline, elastic recovery/resharding and30B duration
+remain open. No developer-Mac model work or production deployment occurred.

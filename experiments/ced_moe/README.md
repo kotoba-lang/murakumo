@@ -304,10 +304,51 @@ remains observational, with no newly chosen tolerance or bitwise qualification.
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 
-Only single-host and replicated DDP are implemented. DDP explicitly refuses
-a singleton group when multiple hosts were requested. It neither pools memory
-nor implements PP/EP/DiLoCo. Logical gradient bytes and a ring TX estimate are
-labeled separately from physical wire counters, which remain unmeasured.
+Single-host, replicated DDP and a serial model-parallel learner are implemented.
+DDP explicitly refuses a singleton group when multiple hosts were requested;
+DDP does not pool memory. EP, DiLoCo and overlapping pipeline schedules remain
+unimplemented. Logical payload/ring estimates and whole-interface counters are
+separate; exclusive physical wire counters remain unmeasured.
+
+## Model/optimizer ownership and global checkpoint
+
+`sharded_train.hy` uses `sharded_model.hy`, `sharded_pipeline.hy` and
+`sharded_mesh.hy` for2/3 physical owners. Contiguous layer parameters and their
+FP32 SGD/NVMe masters have one owner each. Rank0 alone owns tied embedding/head
+and final norm; both embedding gradient uses are summed. Full weights are never
+all-gathered. Boundary activation/sharedKV/index/CED source and cotangents travel
+through materialized collectives; explicit local VJPs recompute owned stages.
+Global clipping precedes owner-local SGD. This is a serial model-parallel
+schedule with no pipeline overlap. Per-key random initialization is layout
+independent. The unmodified `model.hy` architecture and original7 sources remain
+compatible with the earlier single-rank checkpoint format.
+
+`sharded_checkpoint.hy` is a separate global format: local tensor shards,
+hash/header/source/runtime/data/config/optimizer/layout/RNG identity, fsync and
+atomic local publication, followed by matching all-rank manifest/certificate.
+Load refuses a partial, corrupt or mixed-generation group before tensor loads.
+It supports same-layout SGD restart; changing world size requires resharding
+and is unqualified. Global agreement does not imply elastic fault recovery.
+
+Actual3.003B,24layers,seq64/globalbatch1,random seed936,BF16+FP32-SGD-NVMe,
+2updates→save→new processes2updates is measured on2 and3 M4s, respectively:
+4.951/6.631 global phase tok/s,2.123/3.230 setup/load/eval/save-inclusive tok/s,
+peak8.476/6.580GiB under requested10/fatal9GiB. All source stays frozen at
+c6fd4fa0. Each layout processes256global tokens once. CE10.599606→10.615460
+(2nodes) /10.604201(3nodes): **held-out improvement is not established**.
+Both layouts restore step2 and its exact boundary CE/sampler, then reach step4.
+Separate-process full hash/header/global-seal checks pass for608tensor files per
+global generation;249weight and304master files change between steps2/4.
+The model is partitioned1.519/1.485B or1.023/0.990/0.990B parameters, and each
+master shard stays on its owner's NVMe. All children exit0/reap; swap before/after
+is unchanged, owned jobs/listeners absent. See
+[sharding evidence and commands](../../bench/results/2026-11-06-hy-ced-moe-sharded/README.md).
+
+F32 tiny full-model-vs-boundary and physical2/3-owner gradient/update controls
+pass, as do exact3-rank2+restart+2 vscontinuous4 weight/master/RNG controls and
+six cooperative integrity/compatibility refusals. BF16 bitwise continuation
+across layouts, sufficient3B training, AdamW shard state, EP, adaptive placement
+and30B extrapolation are not qualified by this short capacity/restart trial.
 
 Local M1 Max 32GiB initial BF16 control: 2,807,616 parameters, 60 steps,
 3,840 tokens, validation CE 10.41197 -> 8.65543, 8.9495s in the training phase
