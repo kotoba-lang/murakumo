@@ -227,6 +227,14 @@ are exact, but continued runs differ (weight1.2207e-4/master6.1020e-6 in the sma
 control); BF16 bitwise end-to-end reproduction is not qualified. See
 [checkpoint evidence](../../bench/results/2026-11-06-hy-ced-moe-checkpoint/README.md).
 
+The longer1B pilot completes64 updates/16,384 tokens across an actual32+32
+process restart:25.931 tokens/s using summed supervisors including save/load,
+peak kernel footprint6.9100GiB under the9GiB threshold, and unchanged before/after
+swap. Process disk counters total161.212GB reads/300.634GB writes. Checkpoints
+16/32/48/64 are retained on fleet; the final406 shards pass independent integrity
+readback. Training-objective8-update means fall11.0256 ->10.9839, while fixed
+held-out CE rises10.5399 ->10.5452. Language-quality improvement is not established.
+
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 
