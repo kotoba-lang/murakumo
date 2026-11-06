@@ -26,11 +26,13 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 WK=$(mktemp -d "${TMPDIR:-/tmp}/pipeline-metal.XXXXXX")
 fail=0
 MC=64; LAT=32; CH=32; STEPS=4
-PYTHONPATH="$STUBS" "$PYC" "$HERE/make_fixture.py" write "$WK/fx" "$COMFY" "$MC" "$LAT" "$CH" "$STEPS" "$TOKDIR" > "$WK/fx.log" 2>&1
+LAYOUT=${LAYOUT:-hf}
+if [ "$LAYOUT" = single ]; then PRE_L=conditioner.embedders.0.transformer.; PRE_G=conditioner.embedders.1.model.; SCH_G=1; else PRE_L=clip_l.; PRE_G=clip_g.; SCH_G=0; fi
+PYTHONPATH="$STUBS" "$PYC" "$HERE/make_fixture.py" write "$WK/fx" "$COMFY" "$MC" "$LAT" "$CH" "$STEPS" "$TOKDIR" "$LAYOUT" > "$WK/fx.log" 2>&1
 SB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',($CH*4)**-0.5))[0])")
 CFGB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',4.0))[0])")
 build() { # name [from to]
-  sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@X@#$WK/fx/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/fx/prompt_c.txt#;s#@PROMPTU@#$WK/fx/prompt_u.txt#;s#@SZ@#$WK/fx/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/$1.kotoba"
+  sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@PRE_L@#$PRE_L#;s#@PRE_G@#$PRE_G#;s#@SCHEME_L@#0#;s#@SCHEME_G@#$SCH_G#;s#@X@#$WK/fx/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/fx/prompt_c.txt#;s#@PROMPTU@#$WK/fx/prompt_u.txt#;s#@SZ@#$WK/fx/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/$1.kotoba"
   if [ -n "${2:-}" ]; then
     FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/$1.kotoba"
   fi
@@ -58,6 +60,11 @@ mutant g-padding '(> k (+ keep 1))' '(> k (+ keep 2))'
 mutant vae-residual '(vector-i64 cout cout ih iw 3 1 2))
       (let [xh' '(vector-i64 cout cout ih iw 3 1 1))
       (let [xh'
+if [ "$LAYOUT" = single ]; then
+  mutant inproj-v-offset 'wv (cvle! f R S vwn HID HID (if (= scheme 0) 0 (* 2 (* HID HID))))' 'wv (cvle! f R S vwn HID HID 0)'
+  mutant text-projection-transposed '(cv32! f R S (nm pre "text_projection"))' '(cvl! f R S (nm pre "text_projection") HID HID)'
+  mutant f16-params-scaled 'D[i] = float(S[i]);' 'D[i] = float(S[i]) * 1.5f;'
+fi
 # the fixtures are large (up to 2.8 GB): on success the weight files are removed from the build dir unless KEEP=1
 if [ "$fail" = 0 ]; then
   [ "${KEEP:-0}" = 1 ] || rm -f "$WK"/fx/model.safetensors
