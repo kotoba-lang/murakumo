@@ -2030,8 +2030,22 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         u6 (if (= nb 128) (sha-block f (+ tail 64) H K W) 0)]
     (sha-hex-digest H)))
 
-(defn- sha-verify! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 expect :string] :i64
-  (let [want (cc f (sym f "open") (cstr f (vector-at R 3) expect) 0 0 0 0)
+
+;; fstat (macOS arm64 struct stat: st_mtimespec at 48, st_size at 96): size, mtime seconds and nanoseconds of an open file
+(defn- fd-stamp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64] :vector-i64
+  (let [sb (cc f (vector-at R 3) 160 0 0 0 0)
+        r (cc f (sym f "fstat") fd sb 0 0 0)
+        u (if (= r 0) 0 (vector-at [0] 1))]
+    (vector-i64 (peek f (+ sb 96)) (peek f (+ sb 48)) (peek f (+ sb 56)))))
+;; traps if the open file's size or modification time differs from the stamp taken before it was hashed
+(defn- stamp-same! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 st0 :vector-i64] :i64
+  (let [st1 (fd-stamp f R fd)]
+    (if (= (+ (+ (bit-xor (vector-at st0 0) (vector-at st1 0)) (bit-xor (vector-at st0 1) (vector-at st1 1))) (bit-xor (vector-at st0 2) (vector-at st1 2))) 0)
+      0 (vector-at [0] 1))))
+
+(defn- sha-verify! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 expect :string] :vector-i64
+  (let [st0 (fd-stamp f R fd)
+        want (cc f (sym f "open") (cstr f (vector-at R 3) expect) 0 0 0 0)
         u0 (if (< want 0) (vector-at [0] 1) 0)
         eb (cc f (vector-at R 3) 80 0 0 0 0)
         z (loop [i 0] (if (= i 80) 0 (let [u (poke8 f (+ eb i) 0)] (recur (+ i 1)))))
@@ -2040,8 +2054,9 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         have (vector-i64-from-bytes (string-to-utf8 (sha-file f R fd)))
         bad (loop [i 0 acc 0]
               (if (= i 64) acc
-                (recur (+ i 1) (+ acc (if (= (bit-and (peek f (+ eb i)) 255) (vector-at have i)) 0 1)))))]
-    (if (= bad 0) 0 (vector-at [0] 1))))
+                (recur (+ i 1) (+ acc (if (= (bit-and (peek f (+ eb i)) 255) (vector-at have i)) 0 1)))))
+        trap (if (= bad 0) 0 (vector-at [0] 1))]
+    st0))
 
 (defn main [] :i64
   (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
@@ -2093,7 +2108,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         m16 (loop [i 0] (if (= i nt) 0 (if (= (i64-shift-right (vector-at TD i) 4) 2) 1 (recur (+ i 1)))))
         pbuf (if (= m16 1) (new-buffer f R dev 805306368) dbuf)
         got (read-all f fd (msg f R dbuf "contents" 0 0 0) dlen (+ 8 hlen))
-        u6 (if (= got dlen) 0 (vector-at [0] 1))
+        u6 (if (= got dlen) (stamp-same! f R fd shv) (vector-at [0] 1))
         s3 (vector-assoc! S 3 pbuf) s8 (vector-assoc! S 8 dbuf) s4 (vector-assoc! S 4 hdr) s5 (vector-assoc! S 5 nt)
         cp (loop [i 0] (if (= i (* nt 4)) 0 (let [u (vector-assoc! S (+ (oTT) i) (vector-at TT i))] (recur (+ i 1)))))
         cpd (loop [i 0] (if (= i nt) 0 (let [u (vector-assoc! S (+ (oTD) i) (vector-at TD i))] (recur (+ i 1)))))

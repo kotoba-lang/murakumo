@@ -75,6 +75,11 @@ if [ "$LAYOUT" = single ]; then
   mutant f16-params-scaled 'D[i] = float(S[i]);' 'D[i] = float(S[i]) * 1.5f;'
   mutant f32-in-f16-file '(if (= dsz 4) 18 35)' '35'
 fi
+# in-place write after the hash: a mutant opens the checkpoint for writing right after the digest check and rewrites its first byte with
+# the same value (contents unchanged, only the modification time moves). The program must notice (size/mtime stamp taken before the hash,
+# compared after the last read) and trap before any render output. Run before the swap test, which replaces the file.
+build mwrite 'u3 (cc f (sym f "pread") fd lenb 8 0 0)' "u3 (cc f (sym f \"pread\") fd lenb 8 0 0) wwr (cc f (sym f \"pwrite\") (cc f (sym f \"open\") (cstr f (vector-at R 3) \"$WK/fx/model.safetensors\") 1 0 0 0) lenb 1 0 0)"
+if grep -a -q 'dispatches' "$WK/mwrite.err"; then echo "in-place write after hash: render still ran (NOT detected)"; fail=1; else echo "in-place write after hash: modification detected, no render output (detected)"; fi
 # swap after the hash: the program renames a 4 KiB file over the checkpoint path right after the digest check. It reads through the
 # descriptor it hashed, so the render must be unchanged (the clean criteria) while the path now holds the other file. This is run last
 # because it replaces the fixture's checkpoint.
