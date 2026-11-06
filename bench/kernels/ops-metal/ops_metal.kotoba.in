@@ -1,0 +1,200 @@
+(ns murakumo.ops-metal (:export [main]))
+
+;; Stage M, slice 5 (JUN-927, ADR-261106): the normalisation, activation and data-movement
+;; kernels of an SDXL block on the Apple GPU, one program per operation, reached from Amu
+;; selfhost through dyld (amu ADR 0405, profile amu-program-metal). Operation @OP@.
+;; Inputs are three float32 arrays made on the GPU from small integers (the LCG draw & @VMASK@,
+;; minus @VOFF@): A = s / 16, B = 1 + s / 256, C = s / 64 (counts @N0@, @N1@, @N2@, each rounded up
+;; to 4 for the fill). The kernel `op` reads them and writes @NOUT@ float32 values, which go to
+;; stderr raw, then the timing line. The MSL text of the operation is inserted below.
+
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- kernel-source [] :string
+  "#include <metal_stdlib>
+using namespace metal;
+kernel void to_f0(device const short *S [[buffer(0)]], device float *F [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  F[i] = float(S[i]) / 16.0f;
+}
+kernel void to_f1(device const short *S [[buffer(0)]], device float *F [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  F[i] = 1.0f + float(S[i]) / 256.0f;
+}
+kernel void to_f2(device const short *S [[buffer(0)]], device float *F [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  F[i] = float(S[i]) / 64.0f;
+}
+@OPSRC@
+")
+
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+(defn- peek [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (f 0 p 0))
+(defn- poke [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 1 p v))
+(defn- poke8 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 2 p v))
+(defn- scratch [f [:fn [[:i64 :i64 :i64] :i64]]] :i64 (f 4 0 0))
+
+(defn- cc [f [:fn [[:i64 :i64 :i64] :i64]] fn :i64 a :i64 b :i64 c :i64 d :i64 e :i64] :i64
+  (let [s (+ (scratch f) 64)
+        u0 (poke f s a) u1 (poke f (+ s 8) b) u2 (poke f (+ s 16) c)
+        u3 (poke f (+ s 24) d) u4 (poke f (+ s 32) e)]
+    (f 3 fn s)))
+
+(defn- put-text [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s)) n (vector-count v)]
+    (loop [i 0]
+      (if (= i n) (poke8 f (+ p n) 0)
+        (let [u (poke8 f (+ p i) (vector-at v i))] (recur (+ i 1)))))))
+
+(defn- sym [f [:fn [[:i64 :i64 :i64] :i64]] name :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) name)
+        p (cc f (peek f base) -2 (+ base 256) 0 0 0)]
+    (if (= p 0) (vector-at [0] 1) p)))
+
+(defn- cstr [f [:fn [[:i64 :i64 :i64] :i64]] malloc :i64 s :string] :i64
+  (let [p (cc f malloc (+ (string-length s) 1) 0 0 0 0)
+        u (put-text f p s)]
+    p))
+
+(defn- open-framework [f [:fn [[:i64 :i64 :i64] :i64]] dlopen :i64 path :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) path)
+        h (cc f dlopen (+ base 256) 2 0 0 0)]
+    (if (= h 0) (vector-at [0] 1) h)))
+
+;; R: 0 objc_msgSend, 1 sel_registerName, 2 objc_getClass, 3 malloc
+(defn- sel [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 name :string] :i64
+  (cc f (vector-at R 1) (cstr f (vector-at R 3) name) 0 0 0 0))
+(defn- msg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 self :i64 name :string a :i64 b :i64 c :i64] :i64
+  (cc f (vector-at R 0) self (sel f R name) a b c))
+(defn- nsstring [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (msg f R (cc f (vector-at R 2) (cstr f (vector-at R 3) "NSString") 0 0 0 0)
+       "stringWithUTF8String:" (cstr f (vector-at R 3) s) 0 0))
+
+(defn- refuse [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 err :i64] :i64
+  (let [d (msg f R err "localizedDescription" 0 0 0)
+        t (msg f R d "UTF8String" 0 0 0)
+        strlen (sym f "strlen")
+        n (cc f strlen t 0 0 0 0)
+        w (cc f (sym f "write") 2 t n 0 0)]
+    (vector-at [0] 1)))
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+;; n signed 16-bit values (LCG draw & @VMASK@, minus @VOFF@), four per word, as shorts.
+(defn- fill-shorts [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 seed :i64] :i64
+  (loop [i 0 s seed]
+    (if (>= i n) s
+      (let [s0 (lcg s) s1 (lcg s0) s2 (lcg s1) s3 (lcg s2)
+            v0 (bit-and (- (bit-and (i64-shift-right s0 8) @VMASK@) @VOFF@) 65535)
+            v1 (bit-and (- (bit-and (i64-shift-right s1 8) @VMASK@) @VOFF@) 65535)
+            v2 (bit-and (- (bit-and (i64-shift-right s2 8) @VMASK@) @VOFF@) 65535)
+            v3 (bit-and (- (bit-and (i64-shift-right s3 8) @VMASK@) @VOFF@) 65535)
+            w (bit-or (bit-or v0 (i64-shift-left v1 16)) (bit-or (i64-shift-left v2 32) (i64-shift-left v3 48)))
+            u (poke f (+ p (* i 2)) w)]
+        (recur (+ i 4) s3)))))
+
+(defn- new-buffer [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 device :i64 n :i64] :i64
+  (let [b (msg f R device "newBufferWithLength:options:" n 0 0)]
+    (if (= b 0) (vector-at [0] 1) b)))
+(defn- contents [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 b :i64] :i64
+  (msg f R b "contents" 0 0 0))
+
+;; one dispatch. by-groups = 1: (gx,gy,1) threadgroups of tx threads;
+;; by-groups = 0: gx threads in total, tx per threadgroup.
+(defn- run-once [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 queue :i64 pso :i64 B :vector-i64 by-groups :i64 gx :i64 gy :i64 tx :i64] :i64
+  (let [base (scratch f)
+        grid (+ base 128)
+        group (+ base 152)
+        u0 (poke f grid gx) u1 (poke f (+ grid 8) gy) u2 (poke f (+ grid 16) 1)
+        u3 (poke f group tx) u4 (poke f (+ group 8) 1) u5 (poke f (+ group 16) 1)
+        cb (msg f R queue "commandBuffer" 0 0 0)
+        en (msg f R cb "computeCommandEncoder" 0 0 0)
+        u6 (msg f R en "setComputePipelineState:" pso 0 0)
+        u7 (loop [i 0]
+             (if (= i (vector-count B)) 0
+               (let [u (msg f R en "setBuffer:offset:atIndex:" (vector-at B i) 0 i)] (recur (+ i 1)))))
+        u8 (if (= by-groups 1)
+             (msg f R en "dispatchThreadgroups:threadsPerThreadgroup:" grid group 0)
+             (msg f R en "dispatchThreads:threadsPerThreadgroup:" grid group 0))
+        u9 (msg f R en "endEncoding" 0 0 0)
+        u10 (msg f R cb "commit" 0 0 0)
+        u11 (msg f R cb "waitUntilCompleted" 0 0 0)
+        st (msg f R cb "status" 0 0 0)]
+    (if (= st 4) 0 (refuse f R (msg f R cb "error" 0 0 0)))))
+
+(defn- report [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 best :i64 total :i64] :i64
+  (let [base (scratch f)
+        tb (+ base 192)
+        u (cc f (sym f "mach_timebase_info") tb 0 0 0 0)
+        w (peek f tb)
+        numer (bit-and w 4294967295)
+        denom (u64-shift-right w 32)
+        text (string-concat "metal-dispatch-ns best " (string-concat (string-from-i64 (quot (* best numer) denom))
+             (string-concat " total " (string-concat (string-from-i64 (quot (* total numer) denom)) "\n"))))
+        p (cstr f (vector-at R 3) text)]
+    (cc f (sym f "write") 2 p (string-length text) 0 0)))
+
+;; the raw bytes at p, n of them, to stderr
+(defn- dump [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64] :i64
+  (let [w (sym f "write")]
+    (loop [off 0]
+      (if (>= off n) 0
+        (let [r (cc f w 2 (+ p off) (- n off) 0 0)]
+          (if (<= r 0) (vector-at [0] 1) (recur (+ off r))))))))
+
+(defn main [] :i64
+  (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
+        dlopen (sym f "dlopen")
+        h1 (open-framework f dlopen "/System/Library/Frameworks/Foundation.framework/Foundation")
+        h2 (open-framework f dlopen "/System/Library/Frameworks/Metal.framework/Metal")
+        now (sym f "mach_absolute_time")
+        R (vector-i64 (sym f "objc_msgSend") (sym f "sel_registerName") (sym f "objc_getClass") (sym f "malloc"))
+        device (cc f (sym f "MTLCreateSystemDefaultDevice") 0 0 0 0 0)
+        dev (if (= device 0) (vector-at [0] 1) device)
+        queue (msg f R dev "newCommandQueue" 0 0 0)
+        base (scratch f)
+        errp (+ base 184)
+        u0 (poke f errp 0)
+        lib (msg f R dev "newLibraryWithSource:options:error:" (nsstring f R (kernel-source)) 0 errp)
+        u1 (if (= lib 0) (refuse f R (peek f errp)) 0)
+        k0 (msg f R lib "newFunctionWithName:" (nsstring f R "to_f0") 0 0)
+        k1 (msg f R lib "newFunctionWithName:" (nsstring f R "to_f1") 0 0)
+        k2 (msg f R lib "newFunctionWithName:" (nsstring f R "to_f2") 0 0)
+        ko (msg f R lib "newFunctionWithName:" (nsstring f R "op") 0 0)
+        u2 (if (or (or (= k0 0) (= k1 0)) (or (= k2 0) (= ko 0))) (vector-at [0] 1) 0)
+        p0 (msg f R dev "newComputePipelineStateWithFunction:error:" k0 errp 0)
+        u3 (if (= p0 0) (refuse f R (peek f errp)) 0)
+        p1 (msg f R dev "newComputePipelineStateWithFunction:error:" k1 errp 0)
+        u4 (if (= p1 0) (refuse f R (peek f errp)) 0)
+        p2 (msg f R dev "newComputePipelineStateWithFunction:error:" k2 errp 0)
+        u5 (if (= p2 0) (refuse f R (peek f errp)) 0)
+        po (msg f R dev "newComputePipelineStateWithFunction:error:" ko errp 0)
+        u6 (if (= po 0) (refuse f R (peek f errp)) 0)
+        n0 (* (quot (+ @N0@ 3) 4) 4)
+        n1 (* (quot (+ @N1@ 3) 4) 4)
+        n2 (* (quot (+ @N2@ 3) 4) 4)
+        sa (new-buffer f R dev (* n0 2))
+        sb (new-buffer f R dev (* n1 2))
+        sc (new-buffer f R dev (* n2 2))
+        fa (new-buffer f R dev (* n0 4))
+        fb (new-buffer f R dev (* n1 4))
+        fc (new-buffer f R dev (* n2 4))
+        bo (new-buffer f R dev (* @NOUT@ 4))
+        s1 (fill-shorts f (contents f R sa) n0 12345)
+        s2 (fill-shorts f (contents f R sb) n1 s1)
+        s3 (fill-shorts f (contents f R sc) n2 s2)
+        v1 (run-once f R queue p0 (vector-i64 sa fa) 0 n0 1 64)
+        v2 (run-once f R queue p1 (vector-i64 sb fb) 0 n1 1 64)
+        v3 (run-once f R queue p2 (vector-i64 sc fc) 0 n2 1 64)
+        G (vector-i64 fa fb fc bo)
+        v4 (run-once f R queue po G @BYG@ @GX@ 1 @TX@)
+        w5 (dump f (contents f R bo) (* @NOUT@ 4))]
+    (loop [i 0 best 9223372036854775807 total 0]
+      (if (= i (reps))
+        (let [u (report f R best total)] 0)
+        (let [t0 (cc f now 0 0 0 0 0)
+              u (run-once f R queue po G @BYG@ @GX@ 1 @TX@)
+              t1 (cc f now 0 0 0 0 0)
+              d (- t1 t0)]
+          (recur (+ i 1) (if (< d best) d best) (+ total d)))))))

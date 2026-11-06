@@ -156,6 +156,10 @@ windows, stride 1 and 2, any channel counts (so SDXL's 4-channel first and last 
 before the store. Exact against an integer reference for the non-SiLU modes (error 0), 7.9e-8 for SiLU, three mutants detected, 0.66 to 0.85 TMAC/s
 on an M1 Max under load, slower than slice 2's plain kernel ([record](../bench/results/2026-11-06-conv-epilogue-metal/README.md)).
 
+**Stage M, slice 5 (2026-11-06).** GroupNorm+SiLU, LayerNorm, GEGLU, nearest 2x upsample, the timestep embedding and the residual add on the GPU
+(`bench/kernels/ops-metal/`): 2.2e-7 to 6.9e-5 against a double-precision reference (upsample and add exact), six mutants detected
+([record](../bench/results/2026-11-06-ops-metal/README.md)). Their timings are the command-buffer floor; batching dispatches is the next gap.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
