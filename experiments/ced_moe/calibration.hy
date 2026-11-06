@@ -32,7 +32,7 @@
    "model_to_fit"
      "step = compute critical path + non-overlapped PP/EP/shared-source/sync communication + optimizer + data/checkpoint/failure overhead"
    "duration_formula"
-     "target unique non-padding tokens / validated target training tok/s / sustained availability; add costs excluded from that tok/s exactly once"
+     "target processed non-padding training tokens / validated target training tok/s / sustained availability; record unique corpus tokens and repeated epochs separately; add costs excluded from tok/s exactly once"
    "prohibited_shortcuts"
      ["inference tok/s as training tok/s" "total parameter ratio as compute ratio"
       "10x nodes implies 10x throughput" "CSA2 inference KV bytes as training activation bytes"
