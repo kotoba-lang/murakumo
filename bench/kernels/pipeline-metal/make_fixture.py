@@ -86,6 +86,14 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
         for t in ("weight", "bias"): sd[P + "ln_final." + t] = g["text_model.final_layer_norm." + t].half().contiguous()
         sd[P + "text_projection"] = g["text_projection.weight"].t().contiguous().half()
         sd[P + "logit_scale"] = torch.tensor(4.6052).half()      # a scalar a real checkpoint carries (shape [])
+        # things a real checkpoint also holds that this loader must index and leave alone, or read in another dtype: the VAE encoder, EMA / schedule buffers,
+        # and a few float32 tensors inside the float16 file (here the UNet output norm and the bigG final LayerNorm)
+        gen = torch.Generator().manual_seed(7)
+        for k_, shp in (("first_stage_model.encoder.conv_in.weight", (128, 3, 3, 3)), ("first_stage_model.encoder.mid.attn_1.q.weight", (512, 512, 1, 1)),
+                        ("first_stage_model.quant_conv.weight", (8, 8, 1, 1)), ("model_ema.decay", ()), ("model_ema.num_updates", ())):
+            sd[k_] = (torch.randn(shp, generator=gen) * 0.05).half()
+        sd["alphas_cumprod"] = torch.linspace(0.99, 0.01, 1000).float()
+        for k_ in ("model.diffusion_model.out.0.weight", "model.diffusion_model.out.0.bias", P + "ln_final.weight", P + "ln_final.bias"): sd[k_] = sd[k_].float()
         save_file(sd, os.path.join(d, "model.safetensors"))
     else:
         sd = {k: v.contiguous() for k, v in unet.state_dict().items()}

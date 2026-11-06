@@ -1097,12 +1097,12 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
   (let [k (tfind f R S name)
         raw (vector-at S (+ (oTT) (+ (* k 4) 2)))
         dsz (i64-shift-right (vector-at S (+ (oTD) k)) 4)]
-    (if (= dsz 4) raw
+    (if (and (= dsz 4) (= (vector-at S 3) (vector-at S 8))) raw
       (let [memo (vector-at S (+ (oTP) k))]
         (if (> memo 0) (- memo 1)
-          (let [n (quot (- (vector-at S (+ (oTT) (+ (* k 4) 3))) raw) 2)
+          (let [n (quot (- (vector-at S (+ (oTT) (+ (* k 4) 3))) raw) dsz)
                 poff (vector-at S 9)
-                u (emit! S (vector-i64 (vector-at S 8) (vector-at S 3)) (vector-i64 raw poff) 35 0 n 1 64)
+                u (emit! S (vector-i64 (vector-at S 8) (vector-at S 3)) (vector-i64 raw poff) (if (= dsz 4) 18 35) 0 n 1 64)
                 u2 (vector-assoc! S 9 (+ poff (* (quot (+ (* n 4) 15) 16) 16)))
                 u3 (vector-assoc! S (+ (oTP) k) (+ poff 1))]
             poff))))))
@@ -1742,7 +1742,8 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         r2 (if (= (vector-at chk 0) dlen) 0 (let [w (wr-text f R "refused: data_offsets do not match the data region size\n")] (vector-at [0] 1)))
         r3 (if (= (vector-at chk 2) 0) 0 (let [w (wr-text f R "refused: BF16 tensors are not supported (F16 or F32 checkpoints only)\n")] (vector-at [0] 1)))
         dbuf (msg f R dev "newBufferWithLength:options:" dlen 0 0)
-        m16 (if (= (i64-shift-right (vector-at TD 0) 4) 2) 1 0)
+        ;; F16 mode if ANY tensor is float16 (safetensors orders the header by dtype, so the first entry says nothing)
+        m16 (loop [i 0] (if (= i nt) 0 (if (= (i64-shift-right (vector-at TD i) 4) 2) 1 (recur (+ i 1)))))
         pbuf (if (= m16 1) (new-buffer f R dev 805306368) dbuf)
         got (read-all f fd (msg f R dbuf "contents" 0 0 0) dlen (+ 8 hlen))
         u6 (if (= got dlen) 0 (vector-at [0] 1))
