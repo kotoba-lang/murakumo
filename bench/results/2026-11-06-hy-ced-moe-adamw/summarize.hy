@@ -1,5 +1,5 @@
 """Stdlib-only checks/arithmetic on dated raw fleet receipts; no model work."""
-(import hashlib json math pathlib)
+(import datetime hashlib json math pathlib re)
 (setv root (. (pathlib.Path __file__) parent) source-root (/ root "../../../experiments/ced_moe"))
 (defn read [path] (json.loads (.read_text (/ root path))))
 (defn checked [name]
@@ -102,5 +102,39 @@
            "confirmation_ce_improvement" delta "improving_paired_batches" improved
            "confirmation_pass" (and (>= delta 0.02) (>= improved 12))
            "checkpoint_manifest_sha256" [(get (get p "checkpoint") "global_manifest_sha256") (get (get f "checkpoint") "global_manifest_sha256")]})))
+(when (.exists (/ root "rank0/adam-artifact-readback.json"))
+  (setv reads (lfor rank (range 3) (read (+ "rank" (str rank) "/adam-artifact-readback.json"))))
+  (for [[rank receipt] (enumerate reads)]
+    (setv sup (read (+ "rank" (str rank) "/adam-readback-supervisor.json")))
+    (assert (and (get receipt "pass") (get receipt "sampler_states_exact")
+                 (get receipt "optimizer_step_schedule_exact") (get receipt "boundary_ce_exact")
+                 (get receipt "training_inputs_exact")))
+    (assert (= (get receipt "manifest_sha256") (get (get result "long_run") "checkpoint_manifest_sha256")))
+    (assert (and (= (get sup "exit_status") 0) (get sup "child_reaped") (not (get sup "timed_out")))))
+  (setv total (sum (lfor r reads (get r "owned_tensor_shards_per_generation"))))
+  (assert (= total 1216))
+  (setv (get result "readback") {"tensor_files_per_global_generation" total
+        "global_file_bytes_per_generation" (lfor i (range 2) (sum (lfor r reads (get (get r "file_bytes_per_generation") i))))
+        "changed_shards_32_to_64" (dfor kind ["weights" "master" "m" "v"] kind
+              (sum (lfor r reads (get (get r "changed_shards_32_to_64") kind))))
+        "sampler_schedule_inputs_boundary_qualified" True}))
+(defn device-counter [path]
+  (setv lines (.splitlines (.read_text (/ root path)))
+        stamp (datetime.datetime.strptime (get lines 0) "%a %b %d %H:%M:%S UTC %Y")
+        line (next (gfor value lines :if (re.fullmatch r"\s*[0-9.]+\s+[0-9]+\s+[0-9.]+\s*" value) value))
+        row (.split line))
+  #(stamp (int (get row 1)) (float (get row 2))))
+(when (.exists (/ root "rank0/long-suffix-after.txt"))
+  (setv device [])
+  (for [rank (range 3) [phase start end] [["prefix-partial-after-observed-step2" "prefix-io-window-start.txt" "long-prefix-after.txt"]
+                                          ["suffix-full-window" "long-suffix-before.txt" "long-suffix-after.txt"]]]
+    (setv base (+ "rank" (str rank) "/")
+          [a ac am] (device-counter (+ base start)) [b bc bm] (device-counter (+ base end))
+          seconds (.total_seconds (- b a)))
+    (assert (and (> seconds 0) (>= bc ac) (>= bm am)))
+    (.append device {"rank" rank "phase" phase "seconds" seconds
+                    "iostat_transfer_count_delta" (- bc ac) "iostat_reported_MB_delta" (- bm am)
+                    "iostat_reported_MB_per_second" (/ (- bm am) seconds)}))
+  (setv (get result "device_io") device))
 (.write_text (/ root "summary.json") (+ (json.dumps result :indent 2) "\n"))
 (print (json.dumps result :indent 2))

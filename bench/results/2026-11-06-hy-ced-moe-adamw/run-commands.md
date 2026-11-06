@@ -27,3 +27,15 @@ All MB/GB-sized checkpoints remain on their owner nodes.
 
 Raw JSON records actual args/options, output paths, supervisor deadlines,
 exit/reap state and source hashes; this template alone is not execution proof.
+
+Full artifact readback (after both training processes exit) uses
+`code/verify_adamw_artifacts.hy --world-size 3 --prefix adam-long-prefix/checkpoint-32
+--final adam-long-suffix/checkpoint-64 --data data --output adam-artifact-readback.json`
+under the same per-rank hostfile and bounded_trial (900s,10GiB requested/fatal9GiB).
+It verifies both generations without constructing/running the model.
+
+SSD accounting uses `date -u; iostat -Id disk0` snapshots. Prefix device window
+starts after step2 and is partial; suffix snapshots bracket the complete resumed
+process. Disk0 is an internal APPLE SSD (Apple Fabric). Device-wide OS transfer
+counters include other activity; they are not exclusive training I/O or NAND
+write-amplification/endurance counters. Raw iostat units remain explicitly labeled.

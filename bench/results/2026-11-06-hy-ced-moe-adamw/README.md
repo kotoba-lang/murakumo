@@ -104,3 +104,51 @@ show gradient/trajectory differences. No bitwise cross-run parity or repeated
 trial confidence is claimed. Final confirmation uses its own fresh initialCE.
 `prefix-io-window-start.txt` samples SSD disk0 after step2; it is a partial-phase
 device-wide window, not full-phase or exclusivelearner/NAND I/O.
+
+## Accepted pilot: full64updates, new-process restart, independent test
+
+All3 owners restore checkpoint32 (actual maxrankload19.953s), continue to64,
+and savecheckpoint64 (28.216s). BoundarydevCE8.894307494163513 is exact.
+Globalstep/warmup and all64sampled input hashes match independently reconstructed
+RNG history; confirmation baseline is preserved, not resampled.
+
+| Final observation | Measured result |
+| -- | --: |
+| Global training tokens /updates | 4096 /64 |
+| Fixed devCE initial→final | 10.625805→8.500804 |
+| Independent testCE initial→final | 10.617967→8.084790 |
+| Paired test blocks improving | 16/16 |
+| Preregistered confirmation gate | PASS(drop2.533177>=.02,16>=12) |
+| Max trainingprocess footprint | 6.63135GiB |
+| Update-only /periodicdev-inclusive tok/s | 2.57574 /2.55018 |
+| Init/eval/save/load-inclusive tok/s | 2.41236 |
+| Sum of maxrank supervisor seconds | 1697.92045 |
+| Logicalboundary payload globally once | 203.3175MB |
+| Whole-en0 TX perrank | 311.50/311.95/339.05MB |
+| Process diskread perrank | 832.107/806.827/806.340GB |
+| Process diskwrite perrank | 839.324/812.054/811.614GB |
+| Each global checkpoint | 42,046,905,998bytes /1216tensorfiles |
+
+Rates count globaltokens once and sum the maximum rank duration for each phase;
+Linear/Git reporting gaps and separate artifact readback are excluded. No cache
+reset/repeat trial. Optimizer+finish wait includes its barrier; do not add waits
+twice. Device-wide suffix windows report889.3–915.6iostatMB/s, including other
+activity and management gaps; preserve originalreported units and rawsnapshots.
+These counters are neither exclusive learner transfers nor NAND writes.
+
+After training, separate processes re-read both42.047GB global generations in
+12.195s(maxrank), checking allfile hashes/headers/shapes/dtypes/ownership/source/
+runtime/data/options/seals/allrank generation agreement.32→64 changedshards:
+weights303/304,master304/304,m303/304,v303/304. All guards, exit0/reaped/no timeout
+receipts and sampler/schedule/boundary checks pass. Observed swap remains0;
+final-node-audit confirms no ownedlearner/supervisor/readback process or25701listener.
+Normal optimizer temporary directories close; both complete snapshots and all
+legacy data remain onfleet. `.agent-output/` scratch is retained in the openPR
+worktree and is not automatically ignored or deleted.
+
+The pilot qualifies this small-corpus experiment; it does not qualify convergence,
+Bonsai intelligence,10node execution, single16GB inference or30B duration.
+Next proposals in the ledger compare10owner inRAM vsNVMe on identical settings
+and amortize optimizerIO via accumulation. Illustrative30B/10node BF16 weights+
+gradients alone average12GB/node before activations, beyondfatal9GiB; additional
+parameter/gradient/expert streaming must qualify before calibrated extrapolation.

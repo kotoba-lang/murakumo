@@ -1,6 +1,6 @@
 {
   "schema": "ced-moe-coscientist-study/v1",
-  "status": "actual3b-checkpoint32-saved-resume-pending",
+  "status": "pilot-accepted-broader-goal-open",
   "method": "local adaptation of generate/critique/rank/evolve/meta-review; not execution of Google Co-Scientist service; no invented Elo",
   "sources": [
     "https://research.google/blog/accelerating-scientific-breakthroughs-with-an-ai-co-scientist/",
@@ -26,7 +26,8 @@
         "memory/numerical/restart gate fails",
         "fixed-development CE does not improve"
       ],
-      "status": "supported-for-fixed-screen-only"
+      "status": "supported-fixed-screen-bundle-only",
+      "final_evidence": "summary.json; rank*/adam-long-{prefix,suffix}/result.json; rank*/adam-artifact-readback.json"
     },
     {
       "id": "H2",
@@ -36,8 +37,9 @@
         "full-state materialization",
         "unsupported state dtype"
       ],
-      "status": "actual3b8updates-capacity-qualified",
-      "evidence": "optimizer-oracle.json"
+      "status": "qualified-actual3b64updates-bounded",
+      "evidence": "optimizer-oracle.json",
+      "final_evidence": "summary.json; rank*/adam-long-{prefix,suffix}/result.json; rank*/adam-artifact-readback.json"
     },
     {
       "id": "H3",
@@ -47,8 +49,9 @@
         "boundary mismatch",
         "continuation exceeds predetermined control tolerance"
       ],
-      "status": "tiny-f32-physical-restart-qualified-actual3b-pending",
-      "evidence": "rank*/adam-checkpoint-control/result.json"
+      "status": "qualified-same3owner-state-restart-and-full-readback",
+      "evidence": "rank*/adam-checkpoint-control/result.json",
+      "final_evidence": "summary.json; rank*/adam-long-{prefix,suffix}/result.json; rank*/adam-artifact-readback.json"
     },
     {
       "id": "H4",
@@ -57,7 +60,8 @@
         "CE reduction <0.02",
         "fewer than12/16 paired evaluation batches improve"
       ],
-      "status": "proposed"
+      "status": "passed-preregistered-small-corpus-confirmation",
+      "final_evidence": "summary.json; rank*/adam-long-{prefix,suffix}/result.json; rank*/adam-artifact-readback.json"
     }
   ],
   "critique": [
@@ -121,7 +125,96 @@
     },
     "initialization": "fresh per-key seed936; confirmation only after screen winner preregistered",
     "phase32_evidence": "rank*/adam-long-prefix/result.json",
-    "checkpoint32_global_manifest": "4ad49037d52fa22e73b79fb2b98b0ea73bdaacf33c3aae5801f3d3d308da881e"
+    "checkpoint32_global_manifest": "4ad49037d52fa22e73b79fb2b98b0ea73bdaacf33c3aae5801f3d3d308da881e",
+    "observed": {
+      "tokens_counted_globally_once": 4096,
+      "phase_with_periodic_dev_seconds": 1606.1623385420535,
+      "phase_with_periodic_dev_tok_s": 2.5501780870531574,
+      "update_seconds": 1590.2212918771547,
+      "update_only_tok_s": 2.575742144142048,
+      "supervisor_seconds": 1697.9204545409884,
+      "all_in_tok_s": 2.4123627164308488,
+      "initial_dev_ce": 10.625804543495178,
+      "final_dev_ce": 8.500803828239441,
+      "peak_footprint_gib": 6.631348438560963,
+      "global_logical_boundary_payload_bytes": 203317504,
+      "per_rank": [
+        {
+          "rank": 0,
+          "whole_nic_tx_bytes": 311498801,
+          "whole_nic_rx_bytes": 355560757,
+          "process_disk_read_bytes": 832106598400,
+          "process_disk_write_bytes": 839324418048,
+          "logical_state_reads": {
+            "master": 262006374400,
+            "m": 262006374400,
+            "v": 262006374400
+          },
+          "logical_state_writes": {
+            "master": 266100224000,
+            "m": 266100224000,
+            "v": 266100224000
+          }
+        },
+        {
+          "rank": 1,
+          "whole_nic_tx_bytes": 311948386,
+          "whole_nic_rx_bytes": 354552325,
+          "process_disk_read_bytes": 806827118592,
+          "process_disk_write_bytes": 812054155264,
+          "logical_state_reads": {
+            "master": 253492199424,
+            "m": 253492199424,
+            "v": 253492199424
+          },
+          "logical_state_writes": {
+            "master": 257453015040,
+            "m": 257453015040,
+            "v": 257453015040
+          }
+        },
+        {
+          "rank": 2,
+          "whole_nic_tx_bytes": 339051093,
+          "whole_nic_rx_bytes": 361888172,
+          "process_disk_read_bytes": 806340001792,
+          "process_disk_write_bytes": 811613696000,
+          "logical_state_reads": {
+            "master": 253356933120,
+            "m": 253356933120,
+            "v": 253356933120
+          },
+          "logical_state_writes": {
+            "master": 257315635200,
+            "m": 257315635200,
+            "v": 257315635200
+          }
+        }
+      ],
+      "confirmation_initial_ce": 10.617966830730438,
+      "confirmation_final_ce": 8.084789991378784,
+      "confirmation_ce_improvement": 2.533176839351654,
+      "improving_paired_batches": 16,
+      "confirmation_pass": true,
+      "checkpoint_manifest_sha256": [
+        "4ad49037d52fa22e73b79fb2b98b0ea73bdaacf33c3aae5801f3d3d308da881e",
+        "1268977ffebe3127be228ce8dc549a934fc270a8683181f5f5c0c34761ac1da0"
+      ]
+    },
+    "readback": {
+      "tensor_files_per_global_generation": 1216,
+      "global_file_bytes_per_generation": [
+        42046905998,
+        42046905998
+      ],
+      "changed_shards_32_to_64": {
+        "weights": 303,
+        "master": 304,
+        "m": 303,
+        "v": 303
+      },
+      "sampler_schedule_inputs_boundary_qualified": true
+    }
   },
   "target_model": {
     "repo": "prism-ml/Ternary-Bonsai-2-27B-gguf",
@@ -138,5 +231,45 @@
     "initial_dev_ce": 10.625804543495178,
     "selected_final_dev_ce": 10.50547969341278,
     "evidence": "summary.json"
+  },
+  "evolution_proposals": [
+    {
+      "id": "E1",
+      "status": "proposed-not-implemented",
+      "candidate": "3B on10owners with owner-local FP32 states inRAM vs same10owner NVMe baseline",
+      "reason": "pilot AdamW optimizer IO dominates; theoretical16bytes/P across10 gives4.805GB average p+g+master+m+v before activation/runtime/imbalance",
+      "gates": "first qualify world10 VJPs/globalclip/checkpoints and10GiB cap; same token/update/LR budget; do not call3vs10 comparison storage-only causality"
+    },
+    {
+      "id": "E2",
+      "status": "proposed-not-implemented",
+      "candidate": "accumulate8 microbatches before AdamW update",
+      "reason": "amortizes master/m/v IO per globaltoken; gradients must stay bounded and clipping occur after accumulation",
+      "gates": "same effectivebatch/tokens/updates control, F32 reference, memory/finite/state/restart; buffers/IO measured"
+    },
+    {
+      "id": "E3",
+      "status": "capacity-blocker-not-timing-forecast",
+      "candidate": "30B-class BF16 weights/gradients with FP32 master/m/v on10owners",
+      "arithmetic": {
+        "parameters_example": 30000000000,
+        "average_weight_plus_gradient_bytes_per_owner": 12000000000,
+        "average_optimizer_bytes_per_owner": 36000000000,
+        "global_checkpoint_tensor_bytes": 420000000000,
+        "two_checkpoints_plus_work_state_average_bytes_per_owner": 120000000000
+      },
+      "reason": "weights+gradients alone exceed fatal9GiB average before activations; streaming optimizer states alone is insufficient",
+      "gates": "parameter/expert/gradient streaming or further sharding must qualify before a calibrated30B duration; duration remains null"
+    }
+  ],
+  "meta_review": {
+    "accepted_scope": "3physicalM4/16GiB actual3.003B,64updates/4096tokens,ownerFP32master/m/v,10GiBrequested/9fatal,global32+32restart,smallWikiText2confirmation",
+    "quality_limit": "1024testtokens/16pairedblocks on one publiccorpus, not Bonsai/general intelligence convergence",
+    "repeatability_limit": "BF16 cross-run gradients/trajectories vary; no repeated-trial CI or continuous64 bitwise comparison",
+    "io_limit": "logicalstate vs procphysicalIO vs devicewideOStransfers separate, no exclusivewire/NAND attribution",
+    "ten_node_status": "not implemented/qualified in current world2/3 Mesh",
+    "inference_status": "single16GB/Bonsai native baseline remains JUN-187; model artifacts not downloaded or run in this unit",
+    "30b_duration": null,
+    "30b_reason": "10node weights+gradients capacity and scaling/IO calibration not qualified"
   }
 }
