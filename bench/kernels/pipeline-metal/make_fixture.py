@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Local test fixture and oracle for pipeline_metal.kotoba.in (not a gate, not a route).
-  python3 make_fixture.py write DIR COMFY_SRC MC LAT CH STEPS
+  python3 make_fixture.py write DIR COMFY_SRC MC LAT CH STEPS TOKDIR
 Builds, with ComfyUI v0.44.0's own classes and RANDOM weights (float32, CPU): the SDXL-topology UNetModel of ../unet-sdxl-named (model_channels MC),
 the VAE Decoder of ../vae-metal (ch CH) with the 1x1 post_quant_conv, runs the whole render the way ComfyUI does it for an eps-prediction
 model: ModelSamplingDiscrete sigmas + the `simple` scheduler, the real sample_euler, a model function that scales the input (x / sqrt(sigma^2 + 1)),
@@ -13,7 +13,7 @@ taken from the files by ast and executed (as in ../sampler-metal). Needs torch, 
 import sys, os, ast, types, logging
 logging.disable(logging.CRITICAL)
 
-def write(d, comfy_src, mc, lat, ch, steps):
+def write(d, comfy_src, mc, lat, ch, steps, tokdir):
     sys.path.insert(0, comfy_src)
     sys.modules.setdefault('torchsde', types.ModuleType('torchsde'))
     import numpy as np, torch, comfy.ops
@@ -44,10 +44,25 @@ def write(d, comfy_src, mc, lat, ch, steps):
                 p.copy_(1.0 + 0.1 * torch.randn_like(p))
             elif p.dim() == 1: p.copy_(0.1 * torch.randn_like(p))
             else: p.copy_(torch.randn_like(p) * (0.7 / (p.shape[1] * p.shape[2] * p.shape[3]) ** 0.5))
+    # the two SDXL text towers at full size (slice 15): OpenAI CLIP-L (12 x 768, quick_gelu) and OpenCLIP bigG (32 x 1280, gelu, with text_projection), random weights
+    from transformers import CLIPTextConfig, CLIPTextModelWithProjection, CLIPTokenizer
+    def tower(nl, h, nh, inter, act):
+        m = CLIPTextModelWithProjection(CLIPTextConfig(vocab_size=49408, hidden_size=h, intermediate_size=inter, num_hidden_layers=nl, num_attention_heads=nh,
+                                                       max_position_embeddings=77, hidden_act=act, layer_norm_eps=1e-5, projection_dim=h)).eval().float()
+        with torch.no_grad():
+            for n, p in m.named_parameters():
+                if "layer_norm" in n and n.endswith("weight"): p.copy_(1.0 + 0.1 * torch.randn_like(p))
+                elif p.dim() == 1: p.copy_(0.1 * torch.randn_like(p))
+                elif "embedding" in n: p.copy_(0.1 * torch.randn_like(p))
+                else: p.copy_((0.7 / p.shape[1] ** 0.5) * torch.randn_like(p))
+        return m
+    clip_l = tower(12, 768, 12, 3072, "quick_gelu"); clip_g = tower(32, 1280, 20, 5120, "gelu")
     sd = {k: v.contiguous() for k, v in unet.state_dict().items()}
+    for pre, m in (("clip_l.", clip_l), ("clip_g.", clip_g)):
+        sd.update({pre + k: v.contiguous() for k, v in m.state_dict().items() if "position_ids" not in k})
+    nclip = sum(1 for k in sd if k.startswith("clip_"))
     sd.update({k: v.contiguous() for k, v in dec.state_dict().items()})
     sd.update({"post_quant_conv." + k: v.contiguous() for k, v in pq.state_dict().items()})
-    assert len(sd) == len(unet.state_dict()) + len(dec.state_dict()) + 2
     save_file(sd, os.path.join(d, "model.safetensors"))
     class Cfg: sampling_settings = {"beta_schedule": "linear", "linear_start": 0.00085, "linear_end": 0.012, "timesteps": 1000}
     msd = ms.ModelSamplingDiscrete(Cfg)
@@ -74,13 +89,22 @@ def write(d, comfy_src, mc, lat, ch, steps):
     class FakeSDXL: pass
     fs = FakeSDXL(); fs.embedder = Timestep(256); fs.noise_augmentor = None
     sizes = dict(height=256, width=384, crop_h=16, crop_w=32, target_height=512, target_width=640)
-    def cond(tag):
-        lpen = torch.randn(1, 77, 768) * 0.8; gpen = torch.randn(1, 77, 1280) * 0.8; gpool = torch.randn(1, 1280) * 0.5
+    tok = CLIPTokenizer.from_pretrained(tokdir)
+    def ids_for(prompt):
+        ids = tok(prompt, padding="max_length", max_length=77, truncation=True)["input_ids"]
+        e = ids.index(49407)
+        return ids, ids[:e + 1] + [0] * (77 - e - 1)          # L pads with the end token, G with 0 (ComfyUI pad_with_end=False)
+    def cond(tag, prompt):
+        il, ig = ids_for(prompt)
+        np.array(il + [0], dtype=np.int32).tofile(os.path.join(d, "ids_l_" + tag + ".i32")); np.array(ig + [0], dtype=np.int32).tofile(os.path.join(d, "ids_g_" + tag + ".i32"))
+        with torch.no_grad():
+            ol = clip_l(input_ids=torch.tensor([il]), output_hidden_states=True); og = clip_g(input_ids=torch.tensor([ig]), output_hidden_states=True)
+        lpen = ol.hidden_states[-2]; gpen = og.hidden_states[-2]; gpool = og.text_embeds
         ctx = torch.cat([lpen, gpen], dim=-1)
         y = ns2["encode_adm_fn"](fs, pooled_output=gpool, **sizes)
-        for n, v in (("l" + tag, lpen[0]), ("g" + tag, gpen[0]), ("p" + tag, gpool[0]), ("ctx_" + tag, ctx[0]), ("y_" + tag, y[0])): v.numpy().astype(np.float32).tofile(os.path.join(d, n + ".f32"))
+        for n, v in (("ctx_" + tag, ctx[0]), ("y_" + tag, y[0])): v.numpy().astype(np.float32).tofile(os.path.join(d, n + ".f32"))
         return ctx, y
-    ctx_c, y_c = cond("c"); ctx_u, y_u = cond("u")
+    ctx_c, y_c = cond("c", "a photo of a cat sitting on a red sofa"); ctx_u, y_u = cond("u", "")
     torch.tensor([sizes[k] for k in ("height", "width", "crop_h", "crop_w", "target_height", "target_width")], dtype=torch.float32).numpy().tofile(os.path.join(d, "sz.f32"))
     x0 = torch.randn(1, 4, lat, lat) * sigmas[0]; x0.numpy().astype(np.float32).tofile(os.path.join(d, "x.f32"))
     cfg_scale = 4.0
@@ -105,4 +129,4 @@ def write(d, comfy_src, mc, lat, ch, steps):
     print("sigmas", [round(float(s), 3) for s in sigmas], "timesteps", calls[::1], "latent max|x|", float(xr.abs().max()), "image", tuple(img.shape), "max|img|", float(img.abs().max()))
 
 if __name__ == "__main__":
-    write(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[7]))
+    write(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[7]), sys.argv[8])
