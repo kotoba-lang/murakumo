@@ -111,11 +111,17 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
         for n in ast.parse(src).body:
             if isinstance(n, ast.FunctionDef) and n.name in names: out[n.name] = ast.get_source_segment(src, n)
         return out
-    sdr = grab("/comfy/samplers.py", {"simple_scheduler"}); kd = grab("/comfy/k_diffusion/sampling.py", {"to_d", "sample_euler"}); ut = grab("/comfy/k_diffusion/utils.py", {"append_dims"})
-    ns = {"torch": torch}; exec(sdr["simple_scheduler"], ns); sigmas = ns["simple_scheduler"](msd, steps)
+    sdr = grab("/comfy/samplers.py", {"simple_scheduler", "normal_scheduler"}); kd = grab("/comfy/k_diffusion/sampling.py", {"to_d", "sample_euler", "sample_dpmpp_2m", "get_sigmas_karras", "append_zero"}); ut = grab("/comfy/k_diffusion/utils.py", {"append_dims"})
+    import math; ns = {"torch": torch, "math": math}; exec(sdr["simple_scheduler"], ns); exec(sdr["normal_scheduler"], ns)
     class U: pass
     u = U(); uns = {"torch": torch}; exec(ut["append_dims"], uns); u.append_dims = uns["append_dims"]
-    kns = {"torch": torch, "trange": trange, "utils": u}; exec(kd["to_d"], kns); exec(kd["sample_euler"], kns)
+    kns = {"torch": torch, "trange": trange, "utils": u}; exec(kd["to_d"], kns); exec(kd["sample_euler"], kns); exec(kd["sample_dpmpp_2m"], kns); exec(kd["append_zero"], kns); exec(kd["get_sigmas_karras"], kns)
+    # the scheduler and sampler under test (ComfyUI's own source text): simple / normal / karras, euler / dpmpp_2m
+    sched = os.environ.get("SCHED", "simple"); sampler = os.environ.get("SAMPLER", "euler")
+    if sched == "simple": sigmas = ns["simple_scheduler"](msd, steps)
+    elif sched == "normal": sigmas = ns["normal_scheduler"](msd, steps)
+    elif sched == "karras": sigmas = kns["get_sigmas_karras"](n=steps, sigma_min=float(msd.sigma_min), sigma_max=float(msd.sigma_max))
+    else: raise SystemExit("unknown scheduler " + sched)
     # the conditioning, as ComfyUI builds it for SDXL: the two towers' penultimate states concatenated L then G (SDXLClipModel.encode_token_weights),
     # the pooled vector of the G tower, and SDXL.encode_adm (pooled, then Timestep(256) embeddings of height, width, crop_h, crop_w, target_height,
     # target_width); the real encode_adm / sdxl_pooled source text is taken from model_base.py by ast
@@ -192,7 +198,7 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
         return du + (dc - du) * cfg_scale
     taps = []
     def callback(info): taps.append(info["x"].clone())
-    xr = kns["sample_euler"](model, x0.clone(), sigmas, disable=True, callback=callback)
+    xr = kns["sample_" + sampler](model, x0.clone(), sigmas, disable=True, callback=callback)
     # the callback sees x BEFORE each step; the latent after step i is the next one (the last one is the sampler's return value)
     after = taps[1:] + [xr]
     for i, v in enumerate(after): v.numpy().astype(np.float32).tofile(os.path.join(d, "expect_step%d.f32" % i))

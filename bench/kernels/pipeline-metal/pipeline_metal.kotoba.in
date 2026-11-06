@@ -837,6 +837,60 @@ kernel void gather(device const float *ST [[buffer(0)]], device float *SG [[buff
   uint idx = (i * 1000u) / steps;
   SG[i] = ST[999u - idx];
 }
+// ComfyUI's normal scheduler: the timesteps linspace(999, 0, steps) (torch.linspace: the second half counted back from the end), sigma(t) interpolated in log-sigma
+kernel void sched_normal(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  float step = (steps > 1u) ? (0.0f - 999.0f) / float(steps - 1u) : 0.0f;
+  float ts = (i < steps / 2u) ? 999.0f + float(i) * step : 0.0f - float(steps - 1u - i) * step;
+  ts = clamp(ts, 0.0f, 999.0f);
+  uint lo = uint(floor(ts)); uint hi = uint(ceil(ts)); float w = ts - floor(ts);
+  float ls = (1.0f - w) * precise::log(ST[lo]) + w * precise::log(ST[hi]);
+  SG[i] = precise::exp(ls);
+}
+// Karras et al.: sigma_min and sigma_max the first and last discrete sigmas, rho 7, ramp linspace(0, 1, steps)
+kernel void sched_karras(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  float step = (steps > 1u) ? 1.0f / float(steps - 1u) : 0.0f;
+  float ramp = (i < steps / 2u) ? float(i) * step : 1.0f - float(steps - 1u - i) * step;
+  float mn = precise::pow(ST[0], 0.14285714285714285f);
+  float mx = precise::pow(ST[999], 0.14285714285714285f);
+  SG[i] = precise::pow(mx + ramp * (mn - mx), 7.0f);
+}
+// DPM-Solver++(2M) on the guided denoised values: OLD holds the previous step's denoised
+kernel void cfg_dpmpp2m(device float *X [[buffer(0)]], device const float *EU [[buffer(1)]], device const float *EC [[buffer(2)]], device const float *SG [[buffer(3)]],
+                        device const uint *P [[buffer(4)]], device float *OLD [[buffer(5)]], uint i [[thread_position_in_grid]]) {
+  uint k = P[0];
+  float s = SG[k];
+  float sn = SG[k + 1u];
+  float cfg = as_type<float>(P[2]);
+  float x = X[i];
+  float du = x - s * EU[i];
+  float dc = x - s * EC[i];
+  float den = du + (dc - du) * cfg;
+  float res;
+  if (sn == 0.0f) {
+    res = den;
+  } else {
+    float t = -precise::log(s);
+    float tn = -precise::log(sn);
+    float h = tn - t;
+    float em = precise::exp(-h) - 1.0f;
+    if (k == 0u) {
+      res = (sn / s) * x - em * den;
+    } else {
+      float hl = t + precise::log(SG[k - 1u]);
+      float r = hl / h;
+      float dd = (1.0f + 1.0f / (2.0f * r)) * den - (1.0f / (2.0f * r)) * OLD[i];
+      res = (sn / s) * x - em * dd;
+    }
+  }
+  OLD[i] = den;
+  X[i] = res;
+}
 kernel void scale_in(device const float *X [[buffer(0)]], device float *XIN [[buffer(1)]], device const float *SG [[buffer(2)]], device const uint *P [[buffer(3)]], uint i [[thread_position_in_grid]]) {
   float s = SG[P[0]];
   XIN[i] = X[i] / precise::sqrt(s * s + 1.0f);
@@ -2706,7 +2760,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
 
 (defn- alloc-w! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 VT :vector-i64 arena :i64 EM :vector-i64] :vector-i64
   (let [wb (vector-i64 (fbuf f R S 320) (fbuf f R S 320) (fbuf f R S 128) (fbuf f R S 128) (fbuf f R S (* 128 768)) (fbuf f R S (* 128 1280))
-                       (fbuf f R S 320) (fbuf f R S 320) (fbuf f R S 128) (fbuf f R S (* 32 768)) (fbuf f R S (* 32 1280)) (fbuf f R S 128))
+                       (fbuf f R S 320) (fbuf f R S 320) (fbuf f R S 128) (fbuf f R S (* 32 768)) (fbuf f R S (* 32 1280)) (fbuf f R S 128) (fbuf f R S 65536))
         x1 (vector-assoc! EM 65 (cc f (vector-at R 3) 65536 0 0 0 0))
         x2 (vector-assoc! EM 67 (contents f R (vector-at wb 9))) x3 (vector-assoc! EM 68 (contents f R (vector-at wb 10)))
         e1 (empty-ids! f R VT arena (vector-at wb 2) 0)
@@ -2797,11 +2851,11 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         S (zeros 152000)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 47) 0
+             (if (= i 50) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
                           (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
-                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" (if (= i 32) "cvt32h_t" (if (= i 33) "cph" (if (= i 34) "cph_t" (if (= i 35) "h2f" (if (= i 36) "amax_part" (if (= i 37) "amax_fin" (if (= i 38) "cvfh_sc" (if (= i 39) "upsample_hs" (if (= i 40) "axpb" (if (= i 41) "gn_psum" (if (= i 42) "gn_fin" (if (= i 43) "gn_apply" (if (= i 44) "blend_l" (if (= i 45) "blend_g" "embov"))))))))))))))))))))))))))))))))))))))))))))))
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" (if (= i 32) "cvt32h_t" (if (= i 33) "cph" (if (= i 34) "cph_t" (if (= i 35) "h2f" (if (= i 36) "amax_part" (if (= i 37) "amax_fin" (if (= i 38) "cvfh_sc" (if (= i 39) "upsample_hs" (if (= i 40) "axpb" (if (= i 41) "gn_psum" (if (= i 42) "gn_fin" (if (= i 43) "gn_apply" (if (= i 44) "blend_l" (if (= i 45) "blend_g" (if (= i 46) "embov" (if (= i 47) "sched_normal" (if (= i 48) "sched_karras" "cfg_dpmpp2m")))))))))))))))))))))))))))))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
@@ -2876,7 +2930,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ;; prep segment: sigma table, schedule, half copies of the two contexts
         iP (vector-at S 1)
         g1 (emit! S (vector-i64 ST) (vector-i64 0) 19 0 1 1 1)
-        g2 (emit! S (vector-i64 ST SG PB) (vector-i64 0 0 0) 20 0 32 1 32)
+        g2 (emit! S (vector-i64 ST SG PB) (vector-i64 0 0 0) (if (= @SCHED@ 1) 47 (if (= @SCHED@ 2) 48 20)) 0 32 1 32)
         mA (vector-at S 1)
         mT0 (vector-at S 1)
         tl (tower! f R S "@PRE_L@" idl 12 768 12 3072 1 penL dummy 0 @SCHEME_L@ (vector-at WB 11) (vector-at WB 9))
@@ -2990,7 +3044,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ee2 (emit! S (vector-i64 yu yv) (vector-i64 0 0) 18 0 2816 1 64)
         iE2 (vector-at S 1)
         ;; F: guidance on the denoised values and the Euler update
-        ff1 (emit! S (vector-i64 X outb ec SG PB) (vector-i64 0 0 0 0 0) 22 0 (* 4 hw0) 1 64)
+        ff1 (emit! S (vector-i64 X outb ec SG PB (vector-at WB 12)) (vector-i64 0 0 0 0 0 0) (if (= @SAMPLER@ 1) 49 22) 0 (* 4 hw0) 1 64)
         iF2 (vector-at S 1)
         ;; G: the VAE decoder on the final latent
         imgb (vae-rec! f R S X lat CH @SCALEBITS@)
