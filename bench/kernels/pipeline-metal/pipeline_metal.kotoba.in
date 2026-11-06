@@ -704,6 +704,17 @@ kernel void ln_f(device const float *X [[buffer(0)]], device const float *Ga [[b
   for (uint i = tid; i < NN; i += 128u)
     O[r * NN + i] = ((X[r * NN + i] - mean) * inv) * Ga[i] + Be[i];
 }
+kernel void cph(device const half *S [[buffer(0)]], device half *H [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  H[i] = S[i];
+}
+kernel void cph_t(device const half *S [[buffer(0)]], device half *H [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint N = P[0]; uint K = P[1];
+  uint n = i / K; uint k = i % K;
+  H[k * N + n] = S[i];
+}
+kernel void h2f(device const half *S [[buffer(0)]], device float *D [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  D[i] = float(S[i]);
+}
 kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[buffer(1)]], device const uint *P [[buffer(2)]], uint j [[thread_position_in_grid]]) {
   uint DIM = P[0]; uint half_ = DIM / 2u;
   float t = Tb[0];
@@ -943,7 +954,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
 
 
 ;; index the header: TT[4k..4k+3] = name begin, name length, begin, end of tensor k; chk[0] = largest end, chk[1] = bad sizes
-(defn- index-header [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 TT :vector-i64 chk :vector-i64] :i64
+(defn- index-header [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 TT :vector-i64 chk :vector-i64 TD :vector-i64] :i64
   (let [rec (vector-alloc 16)
         tmp (vector-alloc 2)]
     (loop [j (+ (find-byte f p 0 123) 1) count 0]
@@ -965,7 +976,9 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
                     ds (dsize f p (vector-at rec 0) (vector-at rec 1))
                     ok (if (= ds 0) 0 (if (= (* (dims-product rec) ds) (- (vector-at rec 3) (vector-at rec 2))) 1 0))
                     u10 (if (= ok 1) 0 (let [w (vector-assoc! chk 1 (+ (vector-at chk 1) 1))] 0))
-                    u11 (if (> (vector-at rec 3) (vector-at chk 0)) (let [w (vector-assoc! chk 0 (vector-at rec 3))] 0) 0)]
+                    u11 (if (> (vector-at rec 3) (vector-at chk 0)) (let [w (vector-assoc! chk 0 (vector-at rec 3))] 0) 0)
+                    td (vector-assoc! TD count (+ (* ds 16) (vector-at rec 4)))
+                    u12 (if (and (= ds 2) (= (- (vector-at rec 1) (vector-at rec 0)) 4)) (let [w (vector-assoc! chk 2 (+ (vector-at chk 2) 1))] 0) 0)]
                 (recur nx (+ count 1)))))
           :else (recur (+ j 1) count))))))
 
@@ -1001,6 +1014,8 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
 (defn- oOFS [] :i64 40064)
 (defn- oT [] :i64 80064)
 (defn- oTT [] :i64 115100)
+(defn- oTD [] :i64 139200)
+(defn- oTP [] :i64 145300)
 
 (defn- emit! [S :vector-i64 bufs :vector-i64 offs :vector-i64 pso :i64 bg :i64 gx :i64 gy :i64 tx :i64] :i64
   (let [na (vector-at S 0)
@@ -1044,46 +1059,77 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         st (msg f R cb "status" 0 0 0)]
     (if (= st 4) 0 (refuse f R (msg f R cb "error" 0 0 0)))))
 
-(defn- tfind [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+(defn- tfind0 [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
   (let [q (cstr f (vector-at R 3) name)
         len (string-length name)
         hdr (vector-at S 4)
-        nt (vector-at S 5)
-        hit (loop [k 0]
-              (if (= k nt) -1
-                (if (and (= (vector-at S (+ (oTT) (+ (* k 4) 1))) len) (= (bytes-eq f (+ hdr (vector-at S (+ (oTT) (* k 4)))) q len) 1))
-                  k (recur (+ k 1)))))]
-    (if (< hit 0)
+        nt (vector-at S 5)]
+    (loop [k 0]
+      (if (= k nt) -1
+        (if (and (= (vector-at S (+ (oTT) (+ (* k 4) 1))) len) (= (bytes-eq f (+ hdr (vector-at S (+ (oTT) (* k 4)))) q len) 1))
+          k (recur (+ k 1)))))))
+;; a tensor by name; a name that is not in the file as written is also tried under the prefixes of a single-file SDXL checkpoint
+;; (model.diffusion_model. for the UNet, first_stage_model.decoder. and first_stage_model. for the VAE)
+(defn- tfind [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (let [h0 (tfind0 f R S name)
+        h1 (if (>= h0 0) h0 (tfind0 f R S (string-concat "model.diffusion_model." name)))
+        h2 (if (>= h1 0) h1 (tfind0 f R S (string-concat "first_stage_model.decoder." name)))
+        h3 (if (>= h2 0) h2 (tfind0 f R S (string-concat "first_stage_model." name)))]
+    (if (< h3 0)
       (let [w (wr-text f R "refused: tensor missing from the file: ")
             w2 (wr-text f R name)
             w3 (wr-text f R "\n")]
         (vector-at [0] 1))
-      hit)))
-(defn- toff [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+      h3)))
+;; byte offset of the tensor in the raw file buffer (S[8])
+(defn- toffr [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
   (vector-at S (+ (oTT) (+ (* (tfind f R S name) 4) 2))))
 (defn- tbytes [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
   (let [k (tfind f R S name)]
     (- (vector-at S (+ (oTT) (+ (* k 4) 3))) (vector-at S (+ (oTT) (+ (* k 4) 2))))))
+;; bytes per element of the tensor in the file (4 = F32, 2 = F16)
+(defn- tdsz [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (i64-shift-right (vector-at S (+ (oTD) (tfind f R S name))) 4))
+;; byte offset of the tensor in the buffer the kernels read as FLOAT (S[3]): biases, norm parameters, embedding tables, the time/label embedding and
+;; emb_layers weights. For an F32 file that is the file buffer itself; for an F16 file the tensor is converted to float32 once, on the GPU, into the parameter
+;; buffer, at its first use (the conversion dispatch is recorded there), and the offset in that buffer is returned.
+(defn- toff [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (let [k (tfind f R S name)
+        raw (vector-at S (+ (oTT) (+ (* k 4) 2)))
+        dsz (i64-shift-right (vector-at S (+ (oTD) k)) 4)]
+    (if (= dsz 4) raw
+      (let [memo (vector-at S (+ (oTP) k))]
+        (if (> memo 0) (- memo 1)
+          (let [n (quot (- (vector-at S (+ (oTT) (+ (* k 4) 3))) raw) 2)
+                poff (vector-at S 9)
+                u (emit! S (vector-i64 (vector-at S 8) (vector-at S 3)) (vector-i64 raw poff) 35 0 n 1 64)
+                u2 (vector-assoc! S 9 (+ poff (* (quot (+ (* n 4) 15) 16) 16)))
+                u3 (vector-assoc! S (+ (oTP) k) (+ poff 1))]
+            poff))))))
 
 (defn- fbuf [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 n :i64] :i64 (new-buffer f R (vector-at S 2) (* n 4)))
 (defn- hbuf [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 n :i64] :i64 (new-buffer f R (vector-at S 2) (* n 2)))
 (defn- pu [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 a :i64 b :i64 c :i64 d :i64 e :i64 g :i64 h :i64 i :i64 j :i64 k :i64] :i64
   (pbuf-u f R (vector-at S 2) a b c d e g h i j k))
 
-;; weight (float32 in the data buffer) -> a fresh half buffer, converted on the GPU
+;; a weight tensor (F32 or F16 in the file) -> a fresh half buffer, converted on the GPU
 (defn- cv32! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
-  (let [n (quot (tbytes f R S name) 4)
+  (let [dsz (tdsz f R S name)
+        n (quot (tbytes f R S name) dsz)
         hb (hbuf f R S n)
-        u (emit! S (vector-i64 (vector-at S 3) hb) (vector-i64 (toff f R S name) 0) 0 0 n 1 64)]
+        u (emit! S (vector-i64 (vector-at S 8) hb) (vector-i64 (toffr f R S name) 0) (if (= dsz 4) 0 33) 0 n 1 64)]
     hb))
-;; float -> half (a slice of a float buffer at byte offset off)
 
-;; a Linear weight stored [N, K] (out, in) in the file -> half, TRANSPOSED to [K, N] on the GPU: linear_t reads its weight as [K, N] (an untransposed 8x8 load is faster)
-(defn- cvl! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string N :i64 K :i64] :i64
-  (let [hb (hbuf f R S (* N K))
+;; a Linear weight stored [N, K] (out, in) in the file -> half, TRANSPOSED to [K, N] on the GPU (linear_t reads its weight as [K, N]: an untransposed
+;; 8x8 load is faster). eoff = element offset into the tensor: a fused in_proj of OpenCLIP is three [C, C] weights one after the other.
+(defn- cvle! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string N :i64 K :i64 eoff :i64] :i64
+  (let [dsz (tdsz f R S name)
+        hb (hbuf f R S (* N K))
         p (pu f R S N K 0 0 0 0 0 0 0 0)
-        u (emit! S (vector-i64 (vector-at S 3) hb p) (vector-i64 (toff f R S name) 0 0) 32 0 (* N K) 1 64)]
+        u (emit! S (vector-i64 (vector-at S 8) hb p) (vector-i64 (+ (toffr f R S name) (* eoff dsz)) 0 0) (if (= dsz 4) 32 34) 0 (* N K) 1 64)]
     hb))
+(defn- cvl! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string N :i64 K :i64] :i64
+  (cvle! f R S name N K 0))
 
 (defn- cvfh! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 src :i64 off :i64 n :i64] :i64
   (let [hb (hbuf f R S n)
@@ -1543,39 +1589,64 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
 ;; a CLIP text tower (slice 15) recorded with the shared recorder helpers: ids (77 token ids as uint, in a float-sized buffer) -> pen (float, 128 x HID: the
 ;; output of layer NL-2, before the final LayerNorm: what SDXL conditions on); with proj = 1 also the pooled vector (final LayerNorm, text_projection at the
 ;; end-token row) into pooled (HID floats)
+;; scheme 0: Hugging Face names (text_model.encoder.layers.N.self_attn.q_proj ...); scheme 1: OpenCLIP names as in an SDXL single-file checkpoint under
+;; conditioner.embedders.1.model. (transformer.resblocks.N.attn.in_proj_weight = q, k, v stacked, ln_1, ln_2, mlp.c_fc, mlp.c_proj, ln_final,
+;; positional_embedding, token_embedding.weight, text_projection stored [in, out])
+(defn- lname3 [pre :string i :i64 suffix :string] :string
+  (nm pre (nm "transformer.resblocks." (nm (string-from-i64 i) (nm "." suffix)))))
+
 (defn- tower! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string ids :i64 NL :i64 HID :i64 HEADS :i64 INTER :i64 ACT :i64
-              pen :i64 pooled :i64 proj :i64] :i64
+              pen :i64 pooled :i64 proj :i64 scheme :i64] :i64
   (let [d (vector-at S 3)
         dummy (vector-at S 7)
         A (* 128 HID)
         xa (fbuf f R S A) xb (fbuf f R S A)
         lnh (hbuf f R S A) qh (hbuf f R S A) kh (hbuf f R S A) vh (hbuf f R S A) ath (hbuf f R S A) f1h (hbuf f R S (* 128 INTER))
         pemb (pu f R S HID 77 0 0 0 0 0 0 0 0)
-        e0 (emit! S (vector-i64 ids d d xa pemb)
-                  (vector-i64 0 (toff f R S (nm pre "text_model.embeddings.token_embedding.weight")) (toff f R S (nm pre "text_model.embeddings.position_embedding.weight")) 0 0)
-                  28 0 A 1 64)
+        tokn (if (= scheme 0) (nm pre "text_model.embeddings.token_embedding.weight") (nm pre "token_embedding.weight"))
+        posn (if (= scheme 0) (nm pre "text_model.embeddings.position_embedding.weight") (nm pre "positional_embedding"))
+        e0 (emit! S (vector-i64 ids d d xa pemb) (vector-i64 0 (toff f R S tokn) (toff f R S posn) 0 0) 28 0 A 1 64)
         pat (pu f R S 77 HEADS 1 0 0 0 0 0 0 0)
         pl1 (pu f R S 128 HID INTER 1 0 ACT 0 0 0 0)
         w (loop [l 0]
             (if (= l NL) 0
-              (let [n1 (ln! f R S xa 0 (lname2 pre l "layer_norm1.weight") (lname2 pre l "layer_norm1.bias") lnh 128 HID)
-                    wq (cvl! f R S (lname2 pre l "self_attn.q_proj.weight") HID HID) wk (cvl! f R S (lname2 pre l "self_attn.k_proj.weight") HID HID)
-                    wv (cvl! f R S (lname2 pre l "self_attn.v_proj.weight") HID HID) wo (cvl! f R S (lname2 pre l "self_attn.out_proj.weight") HID HID)
-                    q1 (linH! f R S lnh wq d (toff f R S (lname2 pre l "self_attn.q_proj.bias")) qh 128 HID HID)
-                    k1 (linH! f R S lnh wk d (toff f R S (lname2 pre l "self_attn.k_proj.bias")) kh 128 HID HID)
-                    v1 (linH! f R S lnh wv d (toff f R S (lname2 pre l "self_attn.v_proj.bias")) vh 128 HID HID)
+              (let [ln1w (if (= scheme 0) (lname2 pre l "layer_norm1.weight") (lname3 pre l "ln_1.weight"))
+                    ln1b (if (= scheme 0) (lname2 pre l "layer_norm1.bias") (lname3 pre l "ln_1.bias"))
+                    ln2w (if (= scheme 0) (lname2 pre l "layer_norm2.weight") (lname3 pre l "ln_2.weight"))
+                    ln2b (if (= scheme 0) (lname2 pre l "layer_norm2.bias") (lname3 pre l "ln_2.bias"))
+                    qwn (if (= scheme 0) (lname2 pre l "self_attn.q_proj.weight") (lname3 pre l "attn.in_proj_weight"))
+                    kwn (if (= scheme 0) (lname2 pre l "self_attn.k_proj.weight") qwn)
+                    vwn (if (= scheme 0) (lname2 pre l "self_attn.v_proj.weight") qwn)
+                    qbn (if (= scheme 0) (lname2 pre l "self_attn.q_proj.bias") (lname3 pre l "attn.in_proj_bias"))
+                    kbn (if (= scheme 0) (lname2 pre l "self_attn.k_proj.bias") qbn)
+                    vbn (if (= scheme 0) (lname2 pre l "self_attn.v_proj.bias") qbn)
+                    own (if (= scheme 0) (lname2 pre l "self_attn.out_proj.weight") (lname3 pre l "attn.out_proj.weight"))
+                    obn (if (= scheme 0) (lname2 pre l "self_attn.out_proj.bias") (lname3 pre l "attn.out_proj.bias"))
+                    f1n (if (= scheme 0) (lname2 pre l "mlp.fc1.weight") (lname3 pre l "mlp.c_fc.weight"))
+                    f1b (if (= scheme 0) (lname2 pre l "mlp.fc1.bias") (lname3 pre l "mlp.c_fc.bias"))
+                    f2n (if (= scheme 0) (lname2 pre l "mlp.fc2.weight") (lname3 pre l "mlp.c_proj.weight"))
+                    f2b (if (= scheme 0) (lname2 pre l "mlp.fc2.bias") (lname3 pre l "mlp.c_proj.bias"))
+                    n1 (ln! f R S xa 0 ln1w ln1b lnh 128 HID)
+                    wq (cvle! f R S qwn HID HID 0)
+                    wk (cvle! f R S kwn HID HID (if (= scheme 0) 0 (* HID HID)))
+                    wv (cvle! f R S vwn HID HID (if (= scheme 0) 0 (* 2 (* HID HID))))
+                    wo (cvl! f R S own HID HID)
+                    q1 (linH! f R S lnh wq d (toff f R S qbn) qh 128 HID HID)
+                    k1 (linH! f R S lnh wk d (+ (toff f R S kbn) (if (= scheme 0) 0 (* HID 4))) kh 128 HID HID)
+                    v1 (linH! f R S lnh wv d (+ (toff f R S vbn) (if (= scheme 0) 0 (* 2 (* HID 4)))) vh 128 HID HID)
                     a1 (emit! S (vector-i64 qh kh vh ath pat) (vector-i64 0 0 0 0 0) 8 1 4 HEADS 128)
-                    o1 (linF! f R S ath wo d (toff f R S (lname2 pre l "self_attn.out_proj.bias")) xa 0 xb 0 128 HID HID 1)
-                    n2 (ln! f R S xb 0 (lname2 pre l "layer_norm2.weight") (lname2 pre l "layer_norm2.bias") lnh 128 HID)
-                    w1 (cvl! f R S (lname2 pre l "mlp.fc1.weight") INTER HID) w2 (cvl! f R S (lname2 pre l "mlp.fc2.weight") HID INTER)
-                    m1 (emit! S (vector-i64 lnh w1 d dummy dummy f1h pl1) (vector-i64 0 0 (toff f R S (lname2 pre l "mlp.fc1.bias")) 0 0 0 0)
-                               6 1 (quot INTER 64) 2 128)
-                    m2 (linF! f R S f1h w2 d (toff f R S (lname2 pre l "mlp.fc2.bias")) xb 0 xa 0 128 INTER HID 1)
+                    o1 (linF! f R S ath wo d (toff f R S obn) xa 0 xb 0 128 HID HID 1)
+                    n2 (ln! f R S xb 0 ln2w ln2b lnh 128 HID)
+                    w1 (cvl! f R S f1n INTER HID) w2 (cvl! f R S f2n HID INTER)
+                    m1 (emit! S (vector-i64 lnh w1 d dummy dummy f1h pl1) (vector-i64 0 0 (toff f R S f1b) 0 0 0 0) 6 1 (quot INTER 64) 2 128)
+                    m2 (linF! f R S f1h w2 d (toff f R S f2b) xb 0 xa 0 128 INTER HID 1)
                     sn (if (= l (- NL 2)) (emit! S (vector-i64 xa pen) (vector-i64 0 0) 18 0 A 1 64) 0)]
                 (recur (+ l 1)))))]
     (if (= proj 0) 0
-      (let [fl (ln! f R S xa 0 (nm pre "text_model.final_layer_norm.weight") (nm pre "text_model.final_layer_norm.bias") lnh 128 HID)
-            wp (cvl! f R S (nm pre "text_projection.weight") HID HID)
+      (let [flw (if (= scheme 0) (nm pre "text_model.final_layer_norm.weight") (nm pre "ln_final.weight"))
+            flb (if (= scheme 0) (nm pre "text_model.final_layer_norm.bias") (nm pre "ln_final.bias"))
+            fl (ln! f R S xa 0 flw flb lnh 128 HID)
+            wp (if (= scheme 0) (cvl! f R S (nm pre "text_projection.weight") HID HID) (cv32! f R S (nm pre "text_projection")))
             pj (fbuf f R S A)
             pl (linF! f R S lnh wp (vector-at S 6) 0 dummy 0 pj 0 128 HID HID 0)
             ppo (pu f R S HID 0 0 0 0 0 0 0 0 0)]
@@ -1642,14 +1713,14 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         u0 (poke f errp 0)
         lib (msg f R dev "newLibraryWithSource:options:error:" (nsstring f R (kernel-source)) 0 errp)
         u1 (if (= lib 0) (refuse f R (peek f errp)) 0)
-        S (zeros 140000)
+        S (zeros 152000)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 33) 0
+             (if (= i 36) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
                           (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
-                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" "cvt32h_t"))))))))))))))))))))))))))))))))
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" (if (= i 32) "cvt32h_t" (if (= i 33) "cph" (if (= i 34) "cph_t" "h2f")))))))))))))))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
@@ -1662,17 +1733,22 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         hdr (cc f (vector-at R 3) (+ hlen 16) 0 0 0 0)
         u4 (cc f (sym f "pread") fd hdr hlen 8 0)
         TT (zeros 16384)
-        chk (zeros 2)
-        nt (index-header f hdr hlen TT chk)
+        chk (zeros 3)
+        TD (zeros 8192)
+        nt (index-header f hdr hlen TT chk TD)
         total (cc f (sym f "lseek") fd 0 2 0 0)
         dlen (- total (+ 8 hlen))
         r1 (if (= (vector-at chk 1) 0) 0 (let [w (wr-text f R "refused: a tensor's size differs from its shape and dtype\n")] (vector-at [0] 1)))
         r2 (if (= (vector-at chk 0) dlen) 0 (let [w (wr-text f R "refused: data_offsets do not match the data region size\n")] (vector-at [0] 1)))
+        r3 (if (= (vector-at chk 2) 0) 0 (let [w (wr-text f R "refused: BF16 tensors are not supported (F16 or F32 checkpoints only)\n")] (vector-at [0] 1)))
         dbuf (msg f R dev "newBufferWithLength:options:" dlen 0 0)
+        m16 (if (= (i64-shift-right (vector-at TD 0) 4) 2) 1 0)
+        pbuf (if (= m16 1) (new-buffer f R dev 805306368) dbuf)
         got (read-all f fd (msg f R dbuf "contents" 0 0 0) dlen (+ 8 hlen))
         u6 (if (= got dlen) 0 (vector-at [0] 1))
-        s3 (vector-assoc! S 3 dbuf) s4 (vector-assoc! S 4 hdr) s5 (vector-assoc! S 5 nt)
+        s3 (vector-assoc! S 3 pbuf) s8 (vector-assoc! S 8 dbuf) s4 (vector-assoc! S 4 hdr) s5 (vector-assoc! S 5 nt)
         cp (loop [i 0] (if (= i (* nt 4)) 0 (let [u (vector-assoc! S (+ (oTT) i) (vector-at TT i))] (recur (+ i 1)))))
+        cpd (loop [i 0] (if (= i nt) 0 (let [u (vector-assoc! S (+ (oTD) i) (vector-at TD i))] (recur (+ i 1)))))
         zero (fbuf f R S 16384) s6 (vector-assoc! S 6 zero)
         dummy (fbuf f R S 16384) s7 (vector-assoc! S 7 dummy)
         ;; geometry
@@ -1717,9 +1793,9 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ic1 (emit! S (vector-i64 idlc idl) (vector-i64 0 0) 18 0 78 1 64)
         ic2 (emit! S (vector-i64 idgc idg) (vector-i64 0 0) 18 0 78 1 64)
         mIc (vector-at S 1)
-        tl (tower! f R S "clip_l." idl 12 768 12 3072 1 penL dummy 0)
+        tl (tower! f R S "@PRE_L@" idl 12 768 12 3072 1 penL dummy 0 @SCHEME_L@)
         mTL (vector-at S 1)
-        tg (tower! f R S "clip_g." idg 32 1280 20 5120 2 penG poolG 1)
+        tg (tower! f R S "@PRE_G@" idg 32 1280 20 5120 2 penG poolG 1 @SCHEME_G@)
         mTG (vector-at S 1)
         oc1 (emit! S (vector-i64 penL lcx) (vector-i64 0 0) 18 0 (* 128 768) 1 64)
         oc2 (emit! S (vector-i64 penG gc) (vector-i64 0 0) 18 0 (* 128 1280) 1 64)
@@ -1757,7 +1833,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ;; input_blocks.0 : conv 4 -> C0, skip h0
         xin-h (cvfh! f R S xin 0 (* 4 hw0))
         wci (cv32! f R S "input_blocks.0.0.weight")
-        c0 (conv! f R S xin-h wci dbuf (toff f R S "input_blocks.0.0.bias") dummy 0 cat8 (* (* C0 hw0) 4) (vector-i64 4 C0 lat lat 3 1 1))
+        c0 (conv! f R S xin-h wci pbuf (toff f R S "input_blocks.0.0.bias") dummy 0 cat8 (* (* C0 hw0) 4) (vector-i64 4 C0 lat lat 3 1 1))
         ;; input_blocks.1, .2 : ResBlock C0
         rb1 (resn! f R S "input_blocks.1.0." cat8 (* (* C0 hw0) 4) 0 C0 C0 lat lat emb cat7 (* (* C0 hw0) 4))
         rb2 (resn! f R S "input_blocks.2.0." cat7 (* (* C0 hw0) 4) 0 C0 C0 lat lat emb cat6 (* (* C1 hw0) 4))
@@ -1824,7 +1900,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
                 oh (hbuf f R S (* C0 hw0))
         og (gn! f R S 2 o8 0 "out.0.weight" "out.0.bias" oh C0 hw0 32 925353388)
         wo (cv32! f R S "out.2.weight")
-        oc (conv! f R S oh wo dbuf (toff f R S "out.2.bias") dummy 0 outb 0 (vector-i64 C0 4 lat lat 3 1 1))
+        oc (conv! f R S oh wo pbuf (toff f R S "out.2.bias") dummy 0 outb 0 (vector-i64 C0 4 lat lat 3 1 1))
         iU2 (vector-at S 1)
         ;; D: keep the conditional output
         dd1 (emit! S (vector-i64 outb ec) (vector-i64 0 0) 18 0 (* 4 hw0) 1 64)

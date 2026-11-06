@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Local test fixture and oracle for pipeline_metal.kotoba.in (not a gate, not a route).
-  python3 make_fixture.py write DIR COMFY_SRC MC LAT CH STEPS TOKDIR
+  python3 make_fixture.py write DIR COMFY_SRC MC LAT CH STEPS TOKDIR [hf|single]
 Builds, with ComfyUI v0.44.0's own classes and RANDOM weights (float32, CPU): the SDXL-topology UNetModel of ../unet-sdxl-named (model_channels MC),
 the VAE Decoder of ../vae-metal (ch CH) with the 1x1 post_quant_conv, runs the whole render the way ComfyUI does it for an eps-prediction
 model: ModelSamplingDiscrete sigmas + the `simple` scheduler, the real sample_euler, a model function that scales the input (x / sqrt(sigma^2 + 1)),
@@ -13,7 +13,7 @@ taken from the files by ast and executed (as in ../sampler-metal). Needs torch, 
 import sys, os, ast, types, logging
 logging.disable(logging.CRITICAL)
 
-def write(d, comfy_src, mc, lat, ch, steps, tokdir):
+def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
     sys.path.insert(0, comfy_src)
     sys.modules.setdefault('torchsde', types.ModuleType('torchsde'))
     import numpy as np, torch, comfy.ops
@@ -57,13 +57,44 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir):
                 else: p.copy_((0.7 / p.shape[1] ** 0.5) * torch.randn_like(p))
         return m
     clip_l = tower(12, 768, 12, 3072, "quick_gelu"); clip_g = tower(32, 1280, 20, 5120, "gelu")
-    sd = {k: v.contiguous() for k, v in unet.state_dict().items()}
-    for pre, m in (("clip_l.", clip_l), ("clip_g.", clip_g)):
-        sd.update({pre + k: v.contiguous() for k, v in m.state_dict().items() if "position_ids" not in k})
-    nclip = sum(1 for k in sd if k.startswith("clip_"))
-    sd.update({k: v.contiguous() for k, v in dec.state_dict().items()})
-    sd.update({"post_quant_conv." + k: v.contiguous() for k, v in pq.state_dict().items()})
-    save_file(sd, os.path.join(d, "model.safetensors"))
+    if layout == "single":
+        # the layout and dtype of a real SDXL single-file checkpoint: float16, UNet under model.diffusion_model., VAE under first_stage_model., CLIP-L in Hugging Face
+        # names under conditioner.embedders.0.transformer., OpenCLIP-bigG in OpenCLIP names under conditioner.embedders.1.model. (q, k, v stacked into in_proj, ln_1/ln_2,
+        # mlp.c_fc/c_proj, ln_final, positional_embedding, text_projection stored [in, out]) -- the inverse of comfy/diffusers_convert.py's textenc_conversion_lst.
+        # The weights are rounded to float16 first, so the oracle (which uses these same tensors in float32) and the file hold identical values.
+        with torch.no_grad():
+            for mdl in (unet, dec, pq, clip_l, clip_g):
+                for p in mdl.parameters(): p.copy_(p.half().float())
+        sd = {}
+        for k, v in unet.state_dict().items(): sd["model.diffusion_model." + k] = v.half().contiguous()
+        for k, v in dec.state_dict().items(): sd["first_stage_model.decoder." + k] = v.half().contiguous()
+        for k, v in pq.state_dict().items(): sd["first_stage_model.post_quant_conv." + k] = v.half().contiguous()
+        for k, v in clip_l.state_dict().items():
+            if k.startswith("text_model.") and "position_ids" not in k: sd["conditioner.embedders.0.transformer." + k] = v.half().contiguous()
+        g = clip_g.state_dict(); P = "conditioner.embedders.1.model."
+        sd[P + "token_embedding.weight"] = g["text_model.embeddings.token_embedding.weight"].half().contiguous()
+        sd[P + "positional_embedding"] = g["text_model.embeddings.position_embedding.weight"].half().contiguous()
+        for l in range(32):
+            hp = "text_model.encoder.layers.%d." % l; op = P + "transformer.resblocks.%d." % l
+            for a_, b_ in (("ln_1", "layer_norm1"), ("ln_2", "layer_norm2")):
+                for t in ("weight", "bias"): sd[op + a_ + "." + t] = g[hp + b_ + "." + t].half().contiguous()
+            for t in ("weight", "bias"):
+                sd[op + "attn.in_proj_" + t] = torch.cat([g[hp + "self_attn.%s_proj.%s" % (c, t)] for c in "qkv"], 0).half().contiguous()
+                sd[op + "attn.out_proj." + t] = g[hp + "self_attn.out_proj." + t].half().contiguous()
+                sd[op + "mlp.c_fc." + t] = g[hp + "mlp.fc1." + t].half().contiguous()
+                sd[op + "mlp.c_proj." + t] = g[hp + "mlp.fc2." + t].half().contiguous()
+        for t in ("weight", "bias"): sd[P + "ln_final." + t] = g["text_model.final_layer_norm." + t].half().contiguous()
+        sd[P + "text_projection"] = g["text_projection.weight"].t().contiguous().half()
+        sd[P + "logit_scale"] = torch.tensor(4.6052).half()      # a scalar a real checkpoint carries (shape [])
+        save_file(sd, os.path.join(d, "model.safetensors"))
+    else:
+        sd = {k: v.contiguous() for k, v in unet.state_dict().items()}
+        for pre, m in (("clip_l.", clip_l), ("clip_g.", clip_g)):
+            sd.update({pre + k: v.contiguous() for k, v in m.state_dict().items() if "position_ids" not in k})
+        nclip = sum(1 for k in sd if k.startswith("clip_"))
+        sd.update({k: v.contiguous() for k, v in dec.state_dict().items()})
+        sd.update({"post_quant_conv." + k: v.contiguous() for k, v in pq.state_dict().items()})
+        save_file(sd, os.path.join(d, "model.safetensors"))
     class Cfg: sampling_settings = {"beta_schedule": "linear", "linear_start": 0.00085, "linear_end": 0.012, "timesteps": 1000}
     msd = ms.ModelSamplingDiscrete(Cfg)
     def grab(path, names):
@@ -130,4 +161,4 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir):
     print("sigmas", [round(float(s), 3) for s in sigmas], "timesteps", calls[::1], "latent max|x|", float(xr.abs().max()), "image", tuple(img.shape), "max|img|", float(img.abs().max()))
 
 if __name__ == "__main__":
-    write(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[7]), sys.argv[8])
+    write(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[7]), sys.argv[8], sys.argv[9] if len(sys.argv) > 9 else "hf")
