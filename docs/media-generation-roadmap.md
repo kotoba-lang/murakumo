@@ -151,6 +151,11 @@ channel counts; bias, epilogues, stride 2, 1 x 1 and the 4-channel end convoluti
 against 77 keys, two mutants detected, 0.4 to 1.4 TMAC/s on an M1 Max under load
 ([record](../bench/results/2026-11-06-attention-metal/README.md)). Approximate (half P, GPU exp), head dim 64 only.
 
+**Stage M, slice 4 (2026-11-06).** The convolution kernel generalised and given epilogues (`bench/kernels/conv-epilogue-metal/`): 1 x 1 and 3 x 3
+windows, stride 1 and 2, any channel counts (so SDXL's 4-channel first and last convolutions), and bias, bias + residual or SiLU applied
+before the store. Exact against an integer reference for the non-SiLU modes (error 0), 7.9e-8 for SiLU, three mutants detected, 0.66 to 0.85 TMAC/s
+on an M1 Max under load, slower than slice 2's plain kernel ([record](../bench/results/2026-11-06-conv-epilogue-metal/README.md)).
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
