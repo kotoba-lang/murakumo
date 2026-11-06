@@ -41,8 +41,10 @@
 
 (defn fresh? [has-obs :bool at-ms :i64 now-ms :i64 ttl-ms :i64] :bool
   ;; Fail closed for missing/invalid time, future observations and nonpositive
-  ;; TTL. The nonnegative ordering also prevents signed subtraction overflow.
-  (and has-obs (>= at-ms 0) (>= now-ms at-ms) (> ttl-ms 0)
+  ;; TTL. Bound times to the interchange-safe integer range and use
+  ;; nonnegative ordering to prevent signed subtraction overflow.
+  (and has-obs (>= at-ms 0) (>= now-ms at-ms) (<= now-ms 9007199254740991)
+       (> ttl-ms 0) (<= ttl-ms 9007199254740991)
        (< (- now-ms at-ms) ttl-ms)))
 
 ;; -1 = absent
@@ -168,7 +170,8 @@
            (not (fresh? true 0 -1 300000))
            (not (fresh? true 10 10 0))
            (not (fresh? true 10 10 -1))
-           (fresh? true 9223372036854775807 9223372036854775807 1)
+           (not (fresh? true 9223372036854775807 9223372036854775807 1))
+           (not (fresh? true 0 0 9007199254740992))
            (not (fresh? true 0 9223372036854775807 9223372036854775807))
            (= (effective-memory 16 32) 16)
            (= (effective-memory -1 32) 32)

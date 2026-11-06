@@ -1,15 +1,99 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/header-dark.svg">
+  <img alt="murakumo, the Kotoba inference engine. Decode tokens per second on a MacBook Pro M1 Max, Qwen2.5-0.5B-Instruct, 2026-11-03: MLX 8-bit 249.4; llama.cpp Metal 218.4; llama.cpp CPU 1 thread 90.7; murakumo Kotoba decode guest 71.2 (2026-10-19 record, GLSL kernels, C loader since removed); llama.cpp CPU 8 threads 49.3; murakumo through Amu selfhost on this Mac 3.6 (one kernel's bound, not tokens)." src="docs/assets/header-light.svg">
+</picture>
+
 # murakumo 叢雲
 
-**An inference node platform.** murakumo turns ordinary machines — Mac minis, PCs,
-Linux boxes, GPU servers — into *inference nodes* and joins them into one network
-that serves models through an OpenAI-compatible `/v1` API. A node brings its own
-model server (Ollama, llama.cpp, vLLM, MLX, …); murakumo provides identity,
-enrollment, heartbeat, job placement, distributed (multi-node) inference and
-fleet operations. The runtime is **not tied to WebAssembly**: WASM components are
-one optional workload a node can host, alongside inference.
+**The Kotoba inference engine.** murakumo runs models for Kotoba programs and
+agents, on one machine and across a network of nodes behind one
+OpenAI-compatible `/v1` API. Its engine is being written in Kotoba and
+compiled by Amu selfhost. The goal is the fastest decode on the machine it
+runs on, measured in the open. It is not there yet: the poster above is
+today's record, murakumo's bars included.
+
+[Benchmarks](#benchmarks) · [Quick start](#quick-start) · [What murakumo is today](#what-murakumo-is-today) · [How it works](#how-it-works) · [Roadmap](docs/inference-roadmap.md) · [How we measure](docs/benchmarks.md) · [Press kit](docs/assets/brand/README.md)
+
+## Benchmarks
+
+Same Mac, same model, three interleaved rounds: a MacBook Pro M1 Max (32 GB,
+macOS 26.4) on 2026-11-03, Qwen2.5-0.5B-Instruct (Q8_0 GGUF; MLX reads its
+8-bit conversion). Prefill is a 512-token prompt, decode a 128-token answer
+(64 for one CPU thread), in tokens per second.
+
+| Engine | Prefill | Decode |
+| --- | ---: | ---: |
+| MLX, 8-bit | 7,191 | **249.4** |
+| llama.cpp Metal, Q8_0 | **8,842** | 218.4 |
+| llama.cpp CPU, 1 thread | 150 | 90.7 |
+| <mark>murakumo</mark>, Kotoba decode guest on the GPU (2026-10-19 record) | — | 71.2 |
+| llama.cpp CPU, 8 threads | 496 | 49.3 |
+| <mark>murakumo</mark>, Amu selfhost on this Mac | no token route yet | 3.6, one kernel's bound |
+
+<sub>The 71.2 cell is the 2026-10-19 run of murakumo's decode guest: Kotoba
+compiled by `bin/amu`, driving GLSL-built kernels through MoltenVK and a C
+loader that Amu has since removed, so it is a dated record. The last row is one Q8_0 × Q8_0 matvec written in Kotoba
+and built by the Amu selfhost Mac CLI: 2.47 ms against 1.45 ms for the same
+algorithm in C, bit-identical results; 3.6 tok/s is the ceiling of a
+single-threaded engine made of that kernel, not a token rate. The host was
+shared with two VMs, which is why eight llama.cpp threads trail one.
+Record and raw files: [bench/results/2026-11-03-m1max](bench/results/2026-11-03-m1max/README.md).
+Method: [docs/benchmarks.md](docs/benchmarks.md).</sub>
+
+## Quick start
+
+Join the network with a model server you already run (details in
+[Join the inference network](#join-the-inference-network-macos--linux)):
+
+```sh
+curl -fsSL https://murakumo.cloud/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+murakumo node init
+murakumo node doctor --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1
+murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1
+```
+
+Measure the Kotoba kernel on your own Mac (needs an Amu checkout beside this
+one):
+
+```sh
+python3 -I bench/kernels/q8_0-matvec/run.py --amu ../amu --out q8-matvec-mymac.json
+```
+
+## What murakumo is today
+
+- **Serving.** A node serves through the model server it brings (Ollama,
+  llama.cpp, vLLM, MLX, …). murakumo provides identity, enrollment, heartbeat,
+  qualification, quorum job placement, distributed inference and fleet
+  operations, all behind one `/v1` API. This is the part in production.
+- **Kotoba on the GPU.** The decode kernels (dequantizing dots, RMSNorm,
+  RoPE, attention, sampling) have Kotoba sources that Amu compiles through KIR
+  v2 to SPIR-V, pinned in [kotoba-lang/inference](https://github.com/kotoba-lang/inference).
+  The last run that generated tokens on this Mac (2026-10-19) was a Kotoba
+  decode guest driving GLSL-built kernels through a C loader that is gone.
+  Amu's own GPU route on macOS is planned, not built.
+- **Amu selfhost on the Mac.** `bin/amu`, the signed Mach-O that Amu builds
+  of itself, compiles murakumo's Q8_0 kernel today at 1.7× the time of C. It
+  cannot yet read a model file, use SIMD, threads or the GPU, and its f32 code
+  is slow (stage S1, kotoba-lang/amu#1813, keeps f32 locals in FP registers and is
+  not yet adopted); [the roadmap](docs/inference-roadmap.md) changes the Kotoba
+  spec and the Amu compiler, stage by stage, until it can (JUN-804).
 
 Native agent development recovery: [signed Git checkpoints between nodes](docs/git-checkpoint.md)
 (JUN-156; two-host recovery drill, separate from automatic placement).
+
+## How it works
+
+- **Kernels** are Kotoba. Amu compiles them for the CPU (scalar AArch64
+  now; NEON lanes are stage S3) and for GPUs (KIR v2 to SPIR-V; MSL emission
+  exists, a macOS launch route does not yet).
+- **Engine**: the forward pass, KV cache and sampler that run those kernels
+  against a GGUF on one machine (Mac-native through Amu selfhost: stages S4–S7).
+- **Node**: one machine's identity, heartbeat, qualification and job loop.
+  Today it fronts an external model server; it will front the engine (S8).
+- **Network**: gateways and 2-of-3 quorum placement of a stable job ID on a
+  ready node, results in kotobase. The runtime is not tied to WebAssembly;
+  WASM components are one optional workload a node can host.
 
 ## Where this fits / quick use
 

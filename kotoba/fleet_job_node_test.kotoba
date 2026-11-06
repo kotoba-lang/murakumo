@@ -1,6 +1,16 @@
 ;; Append after fleet_job_node and its real native dependency closure.
 (ns murakumo.fleet-job-node-test
-  (:export [test-job-dispatch-lease test-job-receipt-binding]))
+  (:export [test-job-dispatch-lease test-job-receipt-binding test-job-attempt]))
+
+;; The host supplies a fresh private directory. A recorded attempt is left in
+;; place because deleting it would allow a duplicate dispatch.
+(defn test-job-attempt [dir :string] :bool
+  (let [jid "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]
+    (and (not (jn-attempt-root? "relative")) (not (jn-attempt-root? "/tmp/../bad"))
+         (not (jn-attempt-id? "short"))
+         (= (jn-attempt dir "short") "job/attempt-config")
+         (= (jn-attempt dir jid) "job/attempt-recorded")
+         (= (jn-attempt dir jid) "job/attempt-exists-or-unknown"))))
 
 (defn test-job-dispatch-lease [] :bool
   (let [now 1792500000000 jid "job-one" until (+ now 60000)
@@ -29,6 +39,11 @@
         wrong-node (step-receipt-text 1000 "did" 1 0 job "other" "output")
         extra (str "{\"class\":\"" job "\",\"epoch\":1,\"node\":\"n\",\"revision\":0,\"slot\":0,\"until\":2000,\"x\":1}")]
     (and (jn-receipt-bound? lease receipt job)
+         (jn-live-receipt? lease receipt job 1000)
+         (not (jn-live-receipt? lease receipt job 999))
+         (not (jn-live-receipt? lease receipt job 2000))
+         (not (jn-live-receipt? lease receipt job -1))
+         (not (jn-live-receipt? (lease-text "n" job 0 2 2000 0) receipt job 1000))
          (not (jn-receipt-bound? lease receipt other))
          (not (jn-receipt-bound? lease wrong-job job))
          (not (jn-receipt-bound? lease wrong-node job))

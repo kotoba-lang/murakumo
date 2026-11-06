@@ -140,6 +140,14 @@
           (or (<= until now) (not (valid-value? holder true class slot epoch until now))) "job/lease-expired-or-invalid"
           :else "job/lease-ok")))
 
+;; Live quorum verification must not certify an expired lease or a receipt
+;; dated after the trusted host clock. Historical archive verification is a
+;; separate operation and must not treat this live check as its evidence.
+(defn- jn-live-receipt? [chosen :string receipt :string expected :string now :i64] :bool
+  (and (jn-receipt-bound? chosen receipt expected)
+       (= (jn-lease-problem chosen (jn-text chosen "node") expected now) "job/lease-ok")
+       (<= (jn-num receipt "at") now)))
+
 ;; The attempt root is provisioned by the host, with private, trusted
 ;; ancestors. Never accept a path selected by a job or checkpoint.
 (defn- jn-attempt-root? [dir :string] :bool
@@ -262,7 +270,8 @@
         token (jn-token 5) expected (jn-arg 6)
         chosen (if (or (= token "-") (not (jn-job-id? expected))) "" (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token))
         holder (if (= chosen "") "" (jn-text chosen "node"))
-        verdict (if (jn-receipt-bound? chosen receipt expected)
+        now (ln-now "clock")
+        verdict (if (jn-live-receipt? chosen receipt expected now)
                   (if (= (jn-text receipt "kind") "itonami.agent-step-receipt/2")
                     (receipt-verdict-v2 (jn-did-of trust holder) (jn-num chosen "epoch") (sha256-hex (jn-bytes chosen))
                       (jn-num receipt "at") (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
