@@ -96,6 +96,7 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir):
         return ids, ids[:e + 1] + [0] * (77 - e - 1)          # L pads with the end token, G with 0 (ComfyUI pad_with_end=False)
     def cond(tag, prompt):
         il, ig = ids_for(prompt)
+        open(os.path.join(d, "prompt_" + tag + ".txt"), "w").write(prompt + "\n")
         np.array(il + [0], dtype=np.int32).tofile(os.path.join(d, "ids_l_" + tag + ".i32")); np.array(ig + [0], dtype=np.int32).tofile(os.path.join(d, "ids_g_" + tag + ".i32"))
         with torch.no_grad():
             ol = clip_l(input_ids=torch.tensor([il]), output_hidden_states=True); og = clip_g(input_ids=torch.tensor([ig]), output_hidden_states=True)

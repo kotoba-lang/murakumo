@@ -1214,6 +1214,223 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
 
 
 
+(defn- hsize [] :i64 131072)
+
+(defn- psize [] :i64 262144)
+
+(defn- fnv [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64] :i64
+  (loop [i 0 h 2166136261]
+    (if (= i n) h
+      (recur (+ i 1) (bit-and (* (bit-xor h (byte-at f (+ p i))) 16777619) 4294967295)))))
+
+(defn- vt-find [f [:fn [[:i64 :i64 :i64] :i64]] VT :vector-i64 arena :i64 p :i64 n :i64] :i64
+  (let [mask (- (hsize) 1)]
+    (loop [s (bit-and (fnv f p n) mask)]
+      (let [off (vector-at VT (* s 3))]
+        (if (= off 0) -1
+          (if (and (= (vector-at VT (+ (* s 3) 1)) n) (= (bytes-eq f p (+ arena (- off 1)) n) 1))
+            (vector-at VT (+ (* s 3) 2))
+            (recur (bit-and (+ s 1) mask))))))))
+
+;; insert the key at p (n bytes) with id; its bytes are copied to the arena at st[0]
+
+(defn- vt-insert [f [:fn [[:i64 :i64 :i64] :i64]] VT :vector-i64 arena :i64 st :vector-i64 p :i64 n :i64 id :i64] :i64
+  (let [mask (- (hsize) 1)
+        top (vector-at st 0)
+        c (loop [i 0] (if (= i n) 0 (let [u (poke8 f (+ arena (+ top i)) (byte-at f (+ p i)))] (recur (+ i 1)))))
+        s0 (bit-and (fnv f p n) mask)
+        s (loop [s s0] (if (= (vector-at VT (* s 3)) 0) s (recur (bit-and (+ s 1) mask))))
+        a (vector-assoc! VT (* s 3) (+ top 1))
+        b (vector-assoc! VT (+ (* s 3) 1) n)
+        d (vector-assoc! VT (+ (* s 3) 2) id)
+        e (vector-assoc! st 0 (+ top n))]
+    0))
+
+;; decode the JSON string whose content starts at p+i into the scratch area at tmp; returns the index after the
+;; closing quote, with the decoded length in out[0] and 1 in out[1] if it held an escape this reader does not decode
+
+(defn- json-string [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 tmp :i64 out :vector-i64] :i64
+  (loop [j i k 0 bad 0]
+    (let [c (byte-at f (+ p j))]
+      (cond
+        (= c 34) (let [a (vector-assoc! out 0 k) b (vector-assoc! out 1 bad)] (+ j 1))
+        (= c 92)
+        (let [d (byte-at f (+ p (+ j 1)))]
+          (cond
+            (= d 34) (let [u (poke8 f (+ tmp k) 34)] (recur (+ j 2) (+ k 1) bad))
+            (= d 92) (let [u (poke8 f (+ tmp k) 92)] (recur (+ j 2) (+ k 1) bad))
+            (= d 117) (recur (+ j 6) k 1)
+            :else (recur (+ j 2) k 1)))
+        (>= c 128) (recur (+ j 1) k 1)
+        :else (let [u (poke8 f (+ tmp k) c)] (recur (+ j 1) (+ k 1) bad))))))
+
+(defn- load-vocab [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 st :vector-i64 tmp :i64] :i64
+  (let [out (vector-alloc 2)
+        num (vector-alloc 1)]
+    (loop [j 0 count 0]
+      (if (>= j n) count
+        (if (= (byte-at f (+ p j)) 34)
+          (let [e (json-string f p (+ j 1) tmp out)
+                len (vector-at out 0)
+                bad (vector-at out 1)
+                colon (loop [q e] (if (= (byte-at f (+ p q)) 58) q (recur (+ q 1))))
+                e2 (parse-uint f p (+ colon 1) num)
+                u (if (= bad 0) (vt-insert f VT arena st tmp len (vector-at num 0)) 0)]
+            (recur e2 (if (= bad 0) (+ count 1) count)))
+          (recur (+ j 1) count))))))
+
+;; merge-rank table: slot s holds [key + 1 (0 = empty), rank] at PT[2s..2s+1], key = idA * 65536 + idB
+
+(defn- pt-find [PT :vector-i64 key :i64] :i64
+  (let [mask (- (psize) 1)]
+    (loop [s (bit-and (* key 2654435761) mask)]
+      (let [k (vector-at PT (* s 2))]
+        (if (= k 0) -1
+          (if (= k (+ key 1)) (vector-at PT (+ (* s 2) 1))
+            (recur (bit-and (+ s 1) mask))))))))
+
+(defn- pt-insert [PT :vector-i64 key :i64 rank :i64] :i64
+  (let [mask (- (psize) 1)
+        s (loop [s (bit-and (* key 2654435761) mask)]
+            (if (= (vector-at PT (* s 2)) 0) s (recur (bit-and (+ s 1) mask))))
+        a (vector-assoc! PT (* s 2) (+ key 1))
+        b (vector-assoc! PT (+ (* s 2) 1) rank)]
+    0))
+
+;; merges.txt: a header line, then "a b" per line, rank = line number after the header
+
+(defn- load-merges [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 PT :vector-i64] :i64
+  (let [first (loop [j 0] (if (= (byte-at f (+ p j)) 10) (+ j 1) (recur (+ j 1))))]
+    (loop [j first rank 0 stored 0]
+      (if (>= j n) stored
+        (let [le (loop [q j] (if (or (= (byte-at f (+ p q)) 10) (>= q n)) q (recur (+ q 1))))
+              sp (loop [q j] (if (or (= (byte-at f (+ p q)) 32) (>= q le)) q (recur (+ q 1))))
+              ascii (loop [q j] (if (>= q le) 1 (if (>= (byte-at f (+ p q)) 128) 0 (recur (+ q 1)))))
+              ia (if (= ascii 1) (vt-find f VT arena (+ p j) (- sp j)) -1)
+              ib (if (= ascii 1) (vt-find f VT arena (+ p (+ sp 1)) (- le (+ sp 1))) -1)
+              ok (if (and (>= ia 0) (>= ib 0)) 1 0)
+              u (if (= ok 1) (pt-insert PT (+ (* ia 65536) ib) rank) 0)]
+          (recur (+ le 1) (+ rank 1) (+ stored ok)))))))
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+
+(defn- refuse-text [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (let [p (cstr f (vector-at R 3) s)
+        w (cc f (sym f "write") 2 p (string-length s) 0 0)]
+    (vector-at [0] 1)))
+
+;; BPE of the word at w (n bytes, lowercase), with "</w>" appended to the buffer; appends its ids to OUT (count in OUT[0])
+
+(defn- bpe-word [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 arena :i64 PT :vector-i64 w :i64 n :i64
+                 SS :vector-i64 SE :vector-i64 SI :vector-i64 OUT :vector-i64] :i64
+  (let [u0 (if (> n 400) (refuse-text f R "refused: a word longer than 400 bytes\n") 0)
+        s0 (poke8 f (+ w n) 60) s1 (poke8 f (+ w (+ n 1)) 47) s2 (poke8 f (+ w (+ n 2)) 119) s3 (poke8 f (+ w (+ n 3)) 62)
+        init (loop [i 0]
+               (if (= i n) 0
+                 (let [st i
+                       en (if (= i (- n 1)) (+ n 4) (+ i 1))
+                       id (vt-find f VT arena (+ w st) (- en st))
+                       u (if (< id 0) (refuse-text f R "refused: a symbol missing from the vocabulary\n") 0)
+                       a (vector-assoc! SS i st) b (vector-assoc! SE i en) c (vector-assoc! SI i id)]
+                   (recur (+ i 1)))))
+        m (loop [m n]
+            (let [best (loop [i 0 br 2147483647 bi -1]
+                         (if (>= i (- m 1)) bi
+                           (let [r (pt-find PT (+ (* (vector-at SI i) 65536) (vector-at SI (+ i 1))))]
+                             (if (and (>= r 0) (< r br)) (recur (+ i 1) r i) (recur (+ i 1) br bi)))))]
+              (if (< best 0) m
+                (let [ia (vector-at SI best)
+                      ib (vector-at SI (+ best 1))
+                      m2 (loop [i 0 k 0]
+                           (if (>= i m) k
+                             (if (and (< i (- m 1)) (and (= (vector-at SI i) ia) (= (vector-at SI (+ i 1)) ib)))
+                               (let [st (vector-at SS i)
+                                     en (vector-at SE (+ i 1))
+                                     id (vt-find f VT arena (+ w st) (- en st))
+                                     u (if (< id 0) (refuse-text f R "refused: a merged symbol missing from the vocabulary\n") 0)
+                                     a (vector-assoc! SS k st) b (vector-assoc! SE k en) c (vector-assoc! SI k id)]
+                                 (recur (+ i 2) (+ k 1)))
+                               (let [a (vector-assoc! SS k (vector-at SS i)) b (vector-assoc! SE k (vector-at SE i)) c (vector-assoc! SI k (vector-at SI i))]
+                                 (recur (+ i 1) (+ k 1))))))]
+                  (recur m2)))))
+        out (loop [i 0 c (vector-at OUT 0)]
+              (if (= i m) (vector-assoc! OUT 0 c)
+                (let [u (vector-assoc! OUT (+ 1 c) (vector-at SI i))] (recur (+ i 1) (+ c 1)))))]
+    0))
+
+(defn- lc [b :i64] :i64 (if (and (>= b 65) (<= b 90)) (+ b 32) b))
+
+(defn- is-ws [b :i64] :i64 (if (or (= b 32) (and (>= b 9) (<= b 13))) 1 0))
+
+(defn- is-letter [b :i64] :i64 (let [c (lc b)] (if (and (>= c 97) (<= c 122)) 1 0)))
+
+(defn- is-digit [b :i64] :i64 (if (and (>= b 48) (<= b 57)) 1 0))
+
+;; the length of the token starting at p+i within [0, e)
+
+(defn- token-len [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64] :i64
+  (let [c (lc (byte-at f (+ p i)))
+        n1 (if (< (+ i 1) e) (lc (byte-at f (+ p (+ i 1)))) 0)
+        n2 (if (< (+ i 2) e) (lc (byte-at f (+ p (+ i 2)))) 0)]
+    (cond
+      (= c 39)
+      (cond
+        (or (= n1 115) (or (= n1 116) (or (= n1 109) (= n1 100)))) 2
+        (or (and (= n1 114) (= n2 101)) (or (and (= n1 118) (= n2 101)) (and (= n1 108) (= n2 108)))) 3
+        :else (loop [j (+ i 1)]
+                (if (and (< j e) (and (= (is-ws (byte-at f (+ p j))) 0) (and (= (is-letter (byte-at f (+ p j))) 0) (= (is-digit (byte-at f (+ p j))) 0))))
+                  (recur (+ j 1)) (- j i))))
+      (= (is-letter c) 1)
+      (loop [j (+ i 1)] (if (and (< j e) (= (is-letter (byte-at f (+ p j))) 1)) (recur (+ j 1)) (- j i)))
+      (= (is-digit c) 1) 1
+      :else
+      (loop [j (+ i 1)]
+        (if (and (< j e) (and (= (is-ws (byte-at f (+ p j))) 0) (and (= (is-letter (byte-at f (+ p j))) 0) (= (is-digit (byte-at f (+ p j))) 0))))
+          (recur (+ j 1)) (- j i))))))
+
+
+(defn- tok-init! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 vpath :string mpath :string VT :vector-i64 PT :vector-i64 arena :i64 st :vector-i64] :i64
+  (let [sz (vector-alloc 1)
+        ttmp (cc f (vector-at R 3) 4096 0 0 0 0)
+        vbuf (slurp f R vpath sz)
+        vlen (vector-at sz 0)
+        mbuf (slurp f R mpath sz)
+        mlen (vector-at sz 0)
+        nv (load-vocab f vbuf vlen VT arena st ttmp)
+        nmg (load-merges f mbuf mlen VT arena PT)]
+    0))
+
+;; the CLIP tokenizer (BPE, ASCII prompts) on the prompt file at path -> 77 ids (BOS, tokens, EOS, then padding: the end token, or 0 after the first end
+;; token when padzero = 1, ComfyUI's rule for the bigG tower) written as uint32 into the buffer ids
+(defn- tokenize! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 PT :vector-i64 arena :i64 path :string ids :i64 padzero :i64] :i64
+  (let [sz (vector-alloc 1)
+        pbuf (slurp f R path sz)
+        plen (vector-at sz 0)
+        wbuf (cc f (vector-at R 3) 1024 0 0 0 0)
+        bos (vt-find f VT arena (cstr f (vector-at R 3) "<|startoftext|>") 15)
+        eos (vt-find f VT arena (cstr f (vector-at R 3) "<|endoftext|>") 13)
+        SS (zeros 512) SE (zeros 512) SI (zeros 512)
+        OUT (zeros 4096)
+        le (loop [q 0] (if (or (>= q plen) (= (byte-at f (+ pbuf q)) 10)) q (recur (+ q 1))))
+        bad (loop [q 0] (if (>= q le) 0 (if (>= (byte-at f (+ pbuf q)) 128) 1 (recur (+ q 1)))))
+        r0 (if (= bad 1) (refuse-text f R "refused: a non-ASCII byte in the prompt\n") 0)
+        walk (loop [i 0]
+               (if (>= i le) 0
+                 (if (= (is-ws (byte-at f (+ pbuf i))) 1) (recur (+ i 1))
+                   (let [n (token-len f pbuf i le)
+                         cp (loop [k 0] (if (= k n) 0 (let [x (poke8 f (+ wbuf k) (lc (byte-at f (+ pbuf (+ i k)))))] (recur (+ k 1)))))
+                         b2 (bpe-word f R VT arena PT wbuf n SS SE SI OUT)]
+                     (recur (+ i n))))))
+        cnt (vector-at OUT 0)
+        keep (if (> cnt 75) 75 cnt)]
+    (loop [k 0]
+      (if (= k 77) 0
+        (let [id (if (= k 0) bos (if (<= k keep) (vector-at OUT k) (if (and (= padzero 1) (> k (+ keep 1))) 0 eos)))
+              u (poke8 f (+ (contents f R ids) (* k 4)) (bit-and id 255))
+              u8 (poke8 f (+ (contents f R ids) (+ (* k 4) 1)) (bit-and (i64-shift-right id 8) 255))
+              u9 (poke8 f (+ (contents f R ids) (+ (* k 4) 2)) 0)
+              u10 (poke8 f (+ (contents f R ids) (+ (* k 4) 3)) 0)]
+          (recur (+ k 1)))))))
+
 (defn- lname2 [pre :string i :i64 suffix :string] :string
   (nm pre (nm "text_model.encoder.layers." (nm (string-from-i64 i) (nm "." suffix)))))
 
@@ -1367,13 +1584,16 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         X (fbuf f R S (* 4 hw0)) hlx (half-load f R S "@X@" X (* 4 hw0))
         xin (fbuf f R S (* 4 hw0))
         ctxfc (fbuf f R S (* 128 2048)) ctxfu (fbuf f R S (* 128 2048))
-        idlc (fbuf f R S 128) hli1 (half-load f R S "@IDLC@" idlc 78)
-        idgc (fbuf f R S 128) hli2 (half-load f R S "@IDGC@" idgc 78)
-        idlu (fbuf f R S 128) hli3 (half-load f R S "@IDLU@" idlu 78)
-        idgu (fbuf f R S 128) hli4 (half-load f R S "@IDGU@" idgu 78)
+        VT (zeros (* (hsize) 3)) PT (zeros (* (psize) 2)) stt (zeros 1)
+        tarena (cc f (vector-at R 3) 4194304 0 0 0 0)
+        tki (tok-init! f R "@VOCAB@" "@MERGES@" VT PT tarena stt)
+        idlc (fbuf f R S 128) tk1 (tokenize! f R VT PT tarena "@PROMPTC@" idlc 0)
+        idgc (fbuf f R S 128) tk2 (tokenize! f R VT PT tarena "@PROMPTC@" idgc 1)
+        idlu (fbuf f R S 128) tk3 (tokenize! f R VT PT tarena "@PROMPTU@" idlu 0)
+        idgu (fbuf f R S 128) tk4 (tokenize! f R VT PT tarena "@PROMPTU@" idgu 1)
         idl (fbuf f R S 128) idg (fbuf f R S 128)
         penL (fbuf f R S (* 128 768)) penG (fbuf f R S (* 128 1280)) poolG (fbuf f R S 1280)
-        lc (fbuf f R S (* 128 768)) gc (fbuf f R S (* 128 1280)) pc (fbuf f R S 1280)
+        lcx (fbuf f R S (* 128 768)) gc (fbuf f R S (* 128 1280)) pc (fbuf f R S 1280)
         lu (fbuf f R S (* 128 768)) gu (fbuf f R S (* 128 1280)) pu2 (fbuf f R S 1280)
         sz (fbuf f R S 8) hlsz (half-load f R S "@SZ@" sz 6)
         yc (fbuf f R S 2816) yu (fbuf f R S 2816)
@@ -1395,7 +1615,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         mTL (vector-at S 1)
         tg (tower! f R S "clip_g." idg 32 1280 20 5120 2 penG poolG 1)
         mTG (vector-at S 1)
-        oc1 (emit! S (vector-i64 penL lc) (vector-i64 0 0) 18 0 (* 128 768) 1 64)
+        oc1 (emit! S (vector-i64 penL lcx) (vector-i64 0 0) 18 0 (* 128 768) 1 64)
         oc2 (emit! S (vector-i64 penG gc) (vector-i64 0 0) 18 0 (* 128 1280) 1 64)
         oc3 (emit! S (vector-i64 poolG pc) (vector-i64 0 0) 18 0 1280 1 64)
         mOc (vector-at S 1)
@@ -1406,7 +1626,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ou2 (emit! S (vector-i64 penG gu) (vector-i64 0 0) 18 0 (* 128 1280) 1 64)
         ou3 (emit! S (vector-i64 poolG pu2) (vector-i64 0 0) 18 0 1280 1 64)
         mOu (vector-at S 1)
-        cx1 (emit! S (vector-i64 lc gc ctxfc) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
+        cx1 (emit! S (vector-i64 lcx gc ctxfc) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
         cx2 (emit! S (vector-i64 lu gu ctxfu) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
         ad1 (emit! S (vector-i64 pc sz yc) (vector-i64 0 0 0) 27 0 2816 1 64)
         ad2 (emit! S (vector-i64 pu2 sz yu) (vector-i64 0 0 0) 27 0 2816 1 64)
@@ -1525,6 +1745,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         w0h (run-range f R queue S mTL mTG)
         w0i (run-range f R queue S mIu mOu)
         w0 (run-range f R queue S mOu iP2)
+        di1 (dump f (contents f R idlc) 308) di2 (dump f (contents f R idgc) 308) di3 (dump f (contents f R idlu) 308) di4 (dump f (contents f R idgu) 308)
         dq1 (dump f (contents f R ctxfc) (* (* 77 2048) 4))
         dq2 (dump f (contents f R yc) (* 2816 4))
         dq3 (dump f (contents f R ctxfu) (* (* 77 2048) 4))
