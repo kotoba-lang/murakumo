@@ -1,0 +1,137 @@
+(ns murakumo.sha256-metal (:export [main]))
+
+;; SHA-256 (FIPS 180-4) of a file, in Kotoba, on the Metal route (amu ADR 0405, profile amu-program-metal, which
+;; gives the program libSystem through dyld, so open / pread are ordinary C calls). The file is @PATH@. It is read
+;; in 1 MiB chunks, hashed block by block on the CPU in plain i64 arithmetic (32-bit words kept in the low half of
+;; an i64), and the digest is printed to stderr as 64 lowercase hex characters followed by a newline.
+;; This is the digest-before-execute step the I3 design asks for ("pin by revision and sha256"); the guest-side
+;; hash/sha256 capability is not used.
+
+(defn- m32 [] :i64 4294967295)
+(defn- rotr [x :i64 n :i64] :i64
+  (bit-and (bit-or (i64-shift-right x n) (i64-shift-left x (- 32 n))) (m32)))
+(defn- shr [x :i64 n :i64] :i64 (i64-shift-right x n))
+(defn- add [a :i64 b :i64] :i64 (bit-and (+ a b) (m32)))
+
+(defn- ksched [] :vector-i64
+  (vector-i64 1116352408 1899447441 3049323471 3921009573 961987163 1508970993 2453635748 2870763221 3624381080 310598401 607225278 1426881987 1925078388 2162078206 2614888103 3248222580 3835390401 4022224774 264347078 604807628 770255983 1249150122 1555081692 1996064986 2554220882 2821834349 2952996808 3210313671 3336571891 3584528711 113926993 338241895))
+(defn- ksched2 [] :vector-i64
+  (vector-i64 666307205 773529912 1294757372 1396182291 1695183700 1986661051 2177026350 2456956037 2730485921 2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344 430227734 506948616 659060556 883997877 958139571 1322822218 1537002063 1747873779 1955562222 2024104815 2227730452 2361852424 2428436474 2756734187 3204031479 3329325298))
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+(defn- peek [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (f 0 p 0))
+(defn- poke [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 1 p v))
+(defn- poke8 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 2 p v))
+(defn- scratch [f [:fn [[:i64 :i64 :i64] :i64]]] :i64 (f 4 0 0))
+
+(defn- cc [f [:fn [[:i64 :i64 :i64] :i64]] fn :i64 a :i64 b :i64 c :i64 d :i64 e :i64] :i64
+  (let [s (+ (scratch f) 64)
+        u0 (poke f s a) u1 (poke f (+ s 8) b) u2 (poke f (+ s 16) c)
+        u3 (poke f (+ s 24) d) u4 (poke f (+ s 32) e)]
+    (f 3 fn s)))
+
+(defn- put-text [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s)) n (vector-count v)]
+    (loop [i 0]
+      (if (= i n) (poke8 f (+ p n) 0)
+        (let [u (poke8 f (+ p i) (vector-at v i))] (recur (+ i 1)))))))
+
+(defn- sym [f [:fn [[:i64 :i64 :i64] :i64]] name :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) name)
+        p (cc f (peek f base) -2 (+ base 256) 0 0 0)]
+    (if (= p 0) (vector-at [0] 1) p)))
+
+(defn- cstr [f [:fn [[:i64 :i64 :i64] :i64]] malloc :i64 s :string] :i64
+  (let [p (cc f malloc (+ (string-length s) 1) 0 0 0 0)
+        u (put-text f p s)]
+    p))
+
+
+(defn- s0 [x :i64] :i64 (bit-xor (bit-xor (rotr x 7) (rotr x 18)) (shr x 3)))
+(defn- s1 [x :i64] :i64 (bit-xor (bit-xor (rotr x 17) (rotr x 19)) (shr x 10)))
+(defn- S0 [x :i64] :i64 (bit-xor (bit-xor (rotr x 2) (rotr x 13)) (rotr x 22)))
+(defn- S1 [x :i64] :i64 (bit-xor (bit-xor (rotr x 6) (rotr x 11)) (rotr x 25)))
+(defn- ch [e :i64 f :i64 g :i64] :i64 (bit-xor (bit-and e f) (bit-and (bit-xor e (m32)) g)))
+(defn- maj [a :i64 b :i64 c :i64] :i64 (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c)))
+
+;; big-endian 32-bit word from four bytes at p
+(defn- be32 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64
+  (let [w (bit-and (peek f p) (m32))]
+    (bit-or (bit-or (i64-shift-left (bit-and w 255) 24) (i64-shift-left (bit-and (i64-shift-right w 8) 255) 16))
+            (bit-or (i64-shift-left (bit-and (i64-shift-right w 16) 255) 8) (bit-and (i64-shift-right w 24) 255)))))
+
+;; one 64-byte block at p: H is updated in place, K the 64 round constants, W a 64-word scratch vector
+(defn- block [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 H :vector-i64 K :vector-i64 W :vector-i64] :i64
+  (let [u0 (loop [t 0]
+             (if (= t 16) 0
+               (let [u (vector-assoc! W t (be32 f (+ p (* t 4))))] (recur (+ t 1)))))
+        u1 (loop [t 16]
+             (if (= t 64) 0
+               (let [v (add (add (s1 (vector-at W (- t 2))) (vector-at W (- t 7)))
+                            (add (s0 (vector-at W (- t 15))) (vector-at W (- t 16))))
+                     u (vector-assoc! W t v)]
+                 (recur (+ t 1)))))]
+    (loop [t 0
+           a (vector-at H 0) b (vector-at H 1) c (vector-at H 2) d (vector-at H 3)
+           e (vector-at H 4) ff (vector-at H 5) g (vector-at H 6) h (vector-at H 7)]
+      (if (= t 64)
+        (let [x0 (vector-assoc! H 0 (add (vector-at H 0) a)) x1 (vector-assoc! H 1 (add (vector-at H 1) b))
+              x2 (vector-assoc! H 2 (add (vector-at H 2) c)) x3 (vector-assoc! H 3 (add (vector-at H 3) d))
+              x4 (vector-assoc! H 4 (add (vector-at H 4) e)) x5 (vector-assoc! H 5 (add (vector-at H 5) ff))
+              x6 (vector-assoc! H 6 (add (vector-at H 6) g)) x7 (vector-assoc! H 7 (add (vector-at H 7) h))]
+          0)
+        (let [t1 (add (add (add h (S1 e)) (add (ch e ff g) (vector-at K t))) (vector-at W t))
+              t2 (add (S0 a) (maj a b c))]
+          (recur (+ t 1) (add t1 t2) a b c (add d t1) e ff g))))))
+
+(defn- hex-digest [H :vector-i64] :string
+  (loop [i 0 s ""]
+    (if (= i 8) s
+      (let [w (vector-at H i)
+            t (loop [k 0 acc ""]
+                (if (= k 8) acc
+                  (let [d (bit-and (i64-shift-right w (- 28 (* 4 k))) 15)]
+                    (recur (+ k 1) (string-concat acc (string-substring "0123456789abcdef" d (+ d 1)))))))]
+        (recur (+ i 1) (string-concat s t))))))
+
+(defn main [] :i64
+  (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
+        dlopen (sym f "dlopen")
+        R (vector-i64 (sym f "objc_msgSend") (sym f "sel_registerName") (sym f "objc_getClass") (sym f "malloc"))
+        fd (cc f (sym f "open") (cstr f (vector-at R 3) "@PATH@") 0 0 0 0)
+        u0 (if (< fd 0) (vector-at [0] 1) 0)
+        total (cc f (sym f "lseek") fd 0 2 0 0)
+        chunk 1048576
+        buf (cc f (vector-at R 3) (+ chunk 8) 0 0 0 0)
+        tail (cc f (vector-at R 3) 256 0 0 0 0)
+        K (vector-alloc 64)
+        k1 (loop [t 0] (if (= t 32) 0 (let [u (vector-assoc! K t (vector-at (ksched) t))] (recur (+ t 1)))))
+        k2 (loop [t 0] (if (= t 32) 0 (let [u (vector-assoc! K (+ 32 t) (vector-at (ksched2) t))] (recur (+ t 1)))))
+        W (vector-alloc 64)
+        H (vector-i64 1779033703 3144134277 1013904242 2773480762 1359893119 2600822924 528734635 1541459225)
+        full (* (quot total 64) 64)
+        u1 (loop [off 0]
+             (if (>= off full) 0
+               (let [want (if (< (- full off) chunk) (- full off) chunk)
+                     got (cc f (sym f "pread") fd buf want off 0)
+                     u (if (= got want) 0 (vector-at [0] 1))
+                     w (loop [p 0]
+                         (if (>= p want) 0
+                           (let [b (block f (+ buf p) H K W)] (recur (+ p 64)))))]
+                 (recur (+ off want)))))
+        rem (- total full)
+        z (loop [i 0] (if (= i 256) 0 (let [u (poke8 f (+ tail i) 0)] (recur (+ i 1)))))
+        got2 (if (= rem 0) 0 (cc f (sym f "pread") fd tail rem full 0))
+        u2 (if (= got2 rem) 0 (vector-at [0] 1))
+        u3 (poke8 f (+ tail rem) 128)
+        nb (if (< rem 56) 64 128)
+        bits (* total 8)
+        u4 (loop [i 0]
+             (if (= i 8) 0
+               (let [u (poke8 f (+ tail (+ (- nb 1) (- 0 i))) (bit-and (i64-shift-right bits (* 8 i)) 255))] (recur (+ i 1)))))
+        u5 (block f tail H K W)
+        u6 (if (= nb 128) (block f (+ tail 64) H K W) 0)
+        text (string-concat (hex-digest H) "\n")
+        p (cstr f (vector-at R 3) text)
+        w (cc f (sym f "write") 2 p (string-length text) 0 0)]
+    0))

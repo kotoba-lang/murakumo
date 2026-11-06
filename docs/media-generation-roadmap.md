@@ -180,7 +180,9 @@ buffer, within 5.6e-2 (normalised; ~5e-4 of the largest output) of the double-pr
 
 **I3a, first slice (2026-11-06).** A safetensors reader on the Metal route (`bench/kernels/safetensors-metal/`): header parsed into a tensor catalog, per-tensor size
 and dtype admission, data read into a Metal buffer, on a synthetic 28-tensor file equal to a Python oracle line for line; truncation and a wrong shape are refused
-([record](../bench/results/2026-11-06-safetensors-metal/README.md)). No real checkpoint, no sha256, no mapping of multi-gigabyte files yet.
+([record](../bench/results/2026-11-06-safetensors-metal/README.md)). No real checkpoint and no mapping of multi-gigabyte files yet.
+
+**SHA-256 (2026-11-06).** SHA-256 of a file in Kotoba on the Metal route (`bench/kernels/sha256-metal/`): equal to `shasum -a 256` on 15 inputs including the padding boundaries and a 5 MiB random file, a changed round constant detected, about 74 MiB/s on one core ([record](../bench/results/2026-11-06-sha256-metal/README.md)). With the reader above this covers digest-before-read for a checkpoint; not yet joined to it, not run on a multi-gigabyte file.
 
 ## Audio stages
 
