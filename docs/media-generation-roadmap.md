@@ -205,6 +205,8 @@ within 1.4e-3 of ComfyUI's float32 forward pass, every block within 4.3e-3, thre
 1.67 s (best; up to 2.4 s under contention) at 768 px and about 4.1 s at 1024 px per UNet call on an M1 Max under load ([record](../bench/results/2026-11-06-unet-sdxl-metal/README.md)).
 At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI reached on a smaller GPU, so about 84 s for the 50 UNet calls of a 25-step render: not yet faster. This replaces the arithmetic in the I3 ADR's time table with one measurement.
 
+**Stage M, slice 12: where the SDXL time goes, and a conv retune (2026-11-06).** Ablating single kernels puts the linear layers at about 0.65 to 0.9 s of a ~1.8 s call at 768 px, the convolution about 0.55 to 0.7 s, attention at noise level, the rest about 0.3 to 0.4 s. The runtime-parameter conv kernel got its pixel decode hoisted, constant-divisor index decode and a 64-wide K tile with vector weight loads; the mini-UNet correctness gate is unchanged (final 1.368e-3) and the SDXL-shaped call is probably modestly faster (about 15 percent at the median at 512 px; not resolved at 768 px under host load) ([record](../bench/results/2026-11-06-conv-tune/README.md)). Next: the linear (f16 GEMM) kernel.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
