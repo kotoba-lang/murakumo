@@ -84,7 +84,107 @@ kernel void linear_t(device const half *A [[buffer(0)]], device const half *W [[
   for (uint i = 0u; i < 4u; i++)
     for (uint j = 0u; j < 4u; j++)
       acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
-  for (uint k = 0u; k < K; k += 8u) {
+  // four k-steps of 8 per iteration with every fragment in its own register (an array indexed in a loop made the compiler spill: 1.7x slower); K % 32 tail below
+  uint k = 0u;
+  for (; k + 32u <= K; k += 32u) {
+    simdgroup_half8x8 a0_0; simdgroup_load(a0_0, A + (m0 + row0 + 0u) * K + k + 0u, K);
+    simdgroup_half8x8 a0_1; simdgroup_load(a0_1, A + (m0 + row0 + 8u) * K + k + 0u, K);
+    simdgroup_half8x8 a0_2; simdgroup_load(a0_2, A + (m0 + row0 + 16u) * K + k + 0u, K);
+    simdgroup_half8x8 a0_3; simdgroup_load(a0_3, A + (m0 + row0 + 24u) * K + k + 0u, K);
+    simdgroup_half8x8 b0_0; simdgroup_load(b0_0, W + (k + 0u) * N + n0 + col0 + 0u, N);
+    simdgroup_half8x8 b0_1; simdgroup_load(b0_1, W + (k + 0u) * N + n0 + col0 + 8u, N);
+    simdgroup_half8x8 b0_2; simdgroup_load(b0_2, W + (k + 0u) * N + n0 + col0 + 16u, N);
+    simdgroup_half8x8 b0_3; simdgroup_load(b0_3, W + (k + 0u) * N + n0 + col0 + 24u, N);
+    simdgroup_half8x8 a1_0; simdgroup_load(a1_0, A + (m0 + row0 + 0u) * K + k + 8u, K);
+    simdgroup_half8x8 a1_1; simdgroup_load(a1_1, A + (m0 + row0 + 8u) * K + k + 8u, K);
+    simdgroup_half8x8 a1_2; simdgroup_load(a1_2, A + (m0 + row0 + 16u) * K + k + 8u, K);
+    simdgroup_half8x8 a1_3; simdgroup_load(a1_3, A + (m0 + row0 + 24u) * K + k + 8u, K);
+    simdgroup_half8x8 b1_0; simdgroup_load(b1_0, W + (k + 8u) * N + n0 + col0 + 0u, N);
+    simdgroup_half8x8 b1_1; simdgroup_load(b1_1, W + (k + 8u) * N + n0 + col0 + 8u, N);
+    simdgroup_half8x8 b1_2; simdgroup_load(b1_2, W + (k + 8u) * N + n0 + col0 + 16u, N);
+    simdgroup_half8x8 b1_3; simdgroup_load(b1_3, W + (k + 8u) * N + n0 + col0 + 24u, N);
+    simdgroup_half8x8 a2_0; simdgroup_load(a2_0, A + (m0 + row0 + 0u) * K + k + 16u, K);
+    simdgroup_half8x8 a2_1; simdgroup_load(a2_1, A + (m0 + row0 + 8u) * K + k + 16u, K);
+    simdgroup_half8x8 a2_2; simdgroup_load(a2_2, A + (m0 + row0 + 16u) * K + k + 16u, K);
+    simdgroup_half8x8 a2_3; simdgroup_load(a2_3, A + (m0 + row0 + 24u) * K + k + 16u, K);
+    simdgroup_half8x8 b2_0; simdgroup_load(b2_0, W + (k + 16u) * N + n0 + col0 + 0u, N);
+    simdgroup_half8x8 b2_1; simdgroup_load(b2_1, W + (k + 16u) * N + n0 + col0 + 8u, N);
+    simdgroup_half8x8 b2_2; simdgroup_load(b2_2, W + (k + 16u) * N + n0 + col0 + 16u, N);
+    simdgroup_half8x8 b2_3; simdgroup_load(b2_3, W + (k + 16u) * N + n0 + col0 + 24u, N);
+    simdgroup_half8x8 a3_0; simdgroup_load(a3_0, A + (m0 + row0 + 0u) * K + k + 24u, K);
+    simdgroup_half8x8 a3_1; simdgroup_load(a3_1, A + (m0 + row0 + 8u) * K + k + 24u, K);
+    simdgroup_half8x8 a3_2; simdgroup_load(a3_2, A + (m0 + row0 + 16u) * K + k + 24u, K);
+    simdgroup_half8x8 a3_3; simdgroup_load(a3_3, A + (m0 + row0 + 24u) * K + k + 24u, K);
+    simdgroup_half8x8 b3_0; simdgroup_load(b3_0, W + (k + 24u) * N + n0 + col0 + 0u, N);
+    simdgroup_half8x8 b3_1; simdgroup_load(b3_1, W + (k + 24u) * N + n0 + col0 + 8u, N);
+    simdgroup_half8x8 b3_2; simdgroup_load(b3_2, W + (k + 24u) * N + n0 + col0 + 16u, N);
+    simdgroup_half8x8 b3_3; simdgroup_load(b3_3, W + (k + 24u) * N + n0 + col0 + 24u, N);
+    simdgroup_multiply_accumulate(acc[0][0], a0_0, b0_0, acc[0][0]);
+    simdgroup_multiply_accumulate(acc[0][1], a0_0, b0_1, acc[0][1]);
+    simdgroup_multiply_accumulate(acc[0][2], a0_0, b0_2, acc[0][2]);
+    simdgroup_multiply_accumulate(acc[0][3], a0_0, b0_3, acc[0][3]);
+    simdgroup_multiply_accumulate(acc[1][0], a0_1, b0_0, acc[1][0]);
+    simdgroup_multiply_accumulate(acc[1][1], a0_1, b0_1, acc[1][1]);
+    simdgroup_multiply_accumulate(acc[1][2], a0_1, b0_2, acc[1][2]);
+    simdgroup_multiply_accumulate(acc[1][3], a0_1, b0_3, acc[1][3]);
+    simdgroup_multiply_accumulate(acc[2][0], a0_2, b0_0, acc[2][0]);
+    simdgroup_multiply_accumulate(acc[2][1], a0_2, b0_1, acc[2][1]);
+    simdgroup_multiply_accumulate(acc[2][2], a0_2, b0_2, acc[2][2]);
+    simdgroup_multiply_accumulate(acc[2][3], a0_2, b0_3, acc[2][3]);
+    simdgroup_multiply_accumulate(acc[3][0], a0_3, b0_0, acc[3][0]);
+    simdgroup_multiply_accumulate(acc[3][1], a0_3, b0_1, acc[3][1]);
+    simdgroup_multiply_accumulate(acc[3][2], a0_3, b0_2, acc[3][2]);
+    simdgroup_multiply_accumulate(acc[3][3], a0_3, b0_3, acc[3][3]);
+    simdgroup_multiply_accumulate(acc[0][0], a1_0, b1_0, acc[0][0]);
+    simdgroup_multiply_accumulate(acc[0][1], a1_0, b1_1, acc[0][1]);
+    simdgroup_multiply_accumulate(acc[0][2], a1_0, b1_2, acc[0][2]);
+    simdgroup_multiply_accumulate(acc[0][3], a1_0, b1_3, acc[0][3]);
+    simdgroup_multiply_accumulate(acc[1][0], a1_1, b1_0, acc[1][0]);
+    simdgroup_multiply_accumulate(acc[1][1], a1_1, b1_1, acc[1][1]);
+    simdgroup_multiply_accumulate(acc[1][2], a1_1, b1_2, acc[1][2]);
+    simdgroup_multiply_accumulate(acc[1][3], a1_1, b1_3, acc[1][3]);
+    simdgroup_multiply_accumulate(acc[2][0], a1_2, b1_0, acc[2][0]);
+    simdgroup_multiply_accumulate(acc[2][1], a1_2, b1_1, acc[2][1]);
+    simdgroup_multiply_accumulate(acc[2][2], a1_2, b1_2, acc[2][2]);
+    simdgroup_multiply_accumulate(acc[2][3], a1_2, b1_3, acc[2][3]);
+    simdgroup_multiply_accumulate(acc[3][0], a1_3, b1_0, acc[3][0]);
+    simdgroup_multiply_accumulate(acc[3][1], a1_3, b1_1, acc[3][1]);
+    simdgroup_multiply_accumulate(acc[3][2], a1_3, b1_2, acc[3][2]);
+    simdgroup_multiply_accumulate(acc[3][3], a1_3, b1_3, acc[3][3]);
+    simdgroup_multiply_accumulate(acc[0][0], a2_0, b2_0, acc[0][0]);
+    simdgroup_multiply_accumulate(acc[0][1], a2_0, b2_1, acc[0][1]);
+    simdgroup_multiply_accumulate(acc[0][2], a2_0, b2_2, acc[0][2]);
+    simdgroup_multiply_accumulate(acc[0][3], a2_0, b2_3, acc[0][3]);
+    simdgroup_multiply_accumulate(acc[1][0], a2_1, b2_0, acc[1][0]);
+    simdgroup_multiply_accumulate(acc[1][1], a2_1, b2_1, acc[1][1]);
+    simdgroup_multiply_accumulate(acc[1][2], a2_1, b2_2, acc[1][2]);
+    simdgroup_multiply_accumulate(acc[1][3], a2_1, b2_3, acc[1][3]);
+    simdgroup_multiply_accumulate(acc[2][0], a2_2, b2_0, acc[2][0]);
+    simdgroup_multiply_accumulate(acc[2][1], a2_2, b2_1, acc[2][1]);
+    simdgroup_multiply_accumulate(acc[2][2], a2_2, b2_2, acc[2][2]);
+    simdgroup_multiply_accumulate(acc[2][3], a2_2, b2_3, acc[2][3]);
+    simdgroup_multiply_accumulate(acc[3][0], a2_3, b2_0, acc[3][0]);
+    simdgroup_multiply_accumulate(acc[3][1], a2_3, b2_1, acc[3][1]);
+    simdgroup_multiply_accumulate(acc[3][2], a2_3, b2_2, acc[3][2]);
+    simdgroup_multiply_accumulate(acc[3][3], a2_3, b2_3, acc[3][3]);
+    simdgroup_multiply_accumulate(acc[0][0], a3_0, b3_0, acc[0][0]);
+    simdgroup_multiply_accumulate(acc[0][1], a3_0, b3_1, acc[0][1]);
+    simdgroup_multiply_accumulate(acc[0][2], a3_0, b3_2, acc[0][2]);
+    simdgroup_multiply_accumulate(acc[0][3], a3_0, b3_3, acc[0][3]);
+    simdgroup_multiply_accumulate(acc[1][0], a3_1, b3_0, acc[1][0]);
+    simdgroup_multiply_accumulate(acc[1][1], a3_1, b3_1, acc[1][1]);
+    simdgroup_multiply_accumulate(acc[1][2], a3_1, b3_2, acc[1][2]);
+    simdgroup_multiply_accumulate(acc[1][3], a3_1, b3_3, acc[1][3]);
+    simdgroup_multiply_accumulate(acc[2][0], a3_2, b3_0, acc[2][0]);
+    simdgroup_multiply_accumulate(acc[2][1], a3_2, b3_1, acc[2][1]);
+    simdgroup_multiply_accumulate(acc[2][2], a3_2, b3_2, acc[2][2]);
+    simdgroup_multiply_accumulate(acc[2][3], a3_2, b3_3, acc[2][3]);
+    simdgroup_multiply_accumulate(acc[3][0], a3_3, b3_0, acc[3][0]);
+    simdgroup_multiply_accumulate(acc[3][1], a3_3, b3_1, acc[3][1]);
+    simdgroup_multiply_accumulate(acc[3][2], a3_3, b3_2, acc[3][2]);
+    simdgroup_multiply_accumulate(acc[3][3], a3_3, b3_3, acc[3][3]);
+  }
+  for (; k < K; k += 8u) {
     simdgroup_half8x8 a[4];
     simdgroup_half8x8 b[4];
     for (uint i = 0u; i < 4u; i++)
@@ -95,6 +195,7 @@ kernel void linear_t(device const half *A [[buffer(0)]], device const half *W [[
       for (uint j = 0u; j < 4u; j++)
         simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
   }
+
   for (uint i = 0u; i < 4u; i++)
     for (uint j = 0u; j < 4u; j++)
       simdgroup_store(acc[i][j], Cs + (row0 + i * 8u) * 64u + col0 + j * 8u, 64);

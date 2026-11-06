@@ -245,6 +245,8 @@ At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI
 
 **Stage M, slice 32: the VAE attention in one pass (2026-11-06).** The 512-wide single-head attention of the VAE mid block got the online softmax: about 12 percent less GPU time (the kernel is bound by tile loads, not by the softmax); two variants that did not help (shared Q loads, untransposed K) are recorded, accuracy slightly lower but inside the limits ([record](../bench/results/2026-11-06-attn-wide-online/README.md)).
 
+**Stage M, slice 33: the linear kernel (2026-11-06).** The structural ideas left open (a 128-row tile with eight simdgroups, threadgroup-staged tiles) were measured and give nothing for the linear layers; an explicit x4 unroll of the k loop with named fragment registers is about 12 percent faster (my slice-24 "unrolling is slower" came from writing the fragments as indexed arrays, which spilled). Numerics unchanged in all gates including the real-width UNet at 512 px; one UNet call about 0.43 s at 512 px and 0.84 s at 768 px on a loaded host ([record](../bench/results/2026-11-06-linear-unroll-x4/README.md)).
+
 **Stage M, slice 20: the UNet graph at wider widths (2026-11-06).** The slice-17 gate at model_channels 128 (494 M parameters) and 192 (1.007 B parameters, heads up to 12) agrees with ComfyUI's `UNetModel` at all 21 stages (worst 9.7e-3, final 1.0e-3), 134 and 187 ms at 256 px ([record](../bench/results/2026-11-06-unet-sdxl-named-widths/README.md)). SDXL's real 320 (2.57 B) was not run: the 10 GB fixture needs ~20 GB of RAM while the Mac's swap was nearly full; the gate scripts now remove their large weight files on success, because earlier slices' leftover build directories had filled the disk.
 
 ## Audio stages
