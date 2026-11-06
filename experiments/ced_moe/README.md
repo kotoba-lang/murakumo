@@ -235,6 +235,33 @@ swap. Process disk counters total161.212GB reads/300.634GB writes. Checkpoints
 readback. Training-objective8-update means fall11.0256 ->10.9839, while fixed
 held-out CE rises10.5399 ->10.5452. Language-quality improvement is not established.
 
+## Two-host replicated-training verification
+
+`distributed_trial.hy` tests two physical ranks against a single-host sequential
+reference, with64MiB exact-dtype gradient buckets. Both process limits must be
+qualified independently. Source/corpus/run settings and distinct-host digests
+are checked before model work. Missing ring configuration refuses a singleton.
+The runner admits at most four updates and is wrapped in `bounded_trial.hy`.
+
+The reference averages the same two **rank-local objectives**, including local
+MoE balancing. Because balancing is nonlinear in aggregate batch statistics,
+this is not the objective produced by simply calling `loss` once on batch2.
+Both modes consume the same global sampler stream, average gradients before
+global clipping, and perform one FP32-master SGD update per global batch.
+DDP replicates full state and does not pool memory or implement PP/EP.
+
+`--initialize-from-single` explicitly imports the immutable step64 snapshot
+as initialization for a new context/global-batch experiment. The original v2
+source/options checks remain unchanged; this is not distributed checkpoint
+resume. Global multi-rank checkpoint/recovery remains unqualified.
+
+Fleet F32 controls compare all155 first-step gradients with sequential reference
+(max1.49e-8); final weights/FP32 masters match exactly, including both rank hashes.
+A deliberate rank loss terminates both children with error and no complete
+result. Missing rank/hostfile refuses before output creation. These are bounded
+failure controls, not elastic recovery. See
+[distributed evidence](../../bench/results/2026-11-06-hy-ced-moe-distributed/README.md).
+
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 
