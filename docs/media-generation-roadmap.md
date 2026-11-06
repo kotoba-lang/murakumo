@@ -188,6 +188,10 @@ and dtype admission, data read into a Metal buffer, on a synthetic 28-tensor fil
 `CLIPTokenizer` on 21 prompt lines (mixed case, contractions, digits, symbols, long words, truncation), three mutants detected, 0.38 s including the table build
 ([record](../bench/results/2026-11-06-clip-tokenizer-metal/README.md)). ASCII only; ComfyUI's weighting, embeddings and chunking are not implemented.
 
+**I3b, second slice: a CLIP text tower on the GPU (2026-11-06).** A CLIPTextModel-structured tower (`bench/kernels/clip-tower-metal/`) reading Hugging Face safetensors weights ([out, in] Linear layout), 32 kernels in one
+command buffer, within 2.3e-3 of PyTorch's float32 `CLIPTextModel` on random weights (2 layers, width 128, the real vocabulary and 77 positions), four mutants detected
+([record](../bench/results/2026-11-06-clip-tower-metal/README.md)). Not CLIP-L / CLIP-G size, not joined to the tokenizer, no SDXL penultimate-layer or projection handling.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
