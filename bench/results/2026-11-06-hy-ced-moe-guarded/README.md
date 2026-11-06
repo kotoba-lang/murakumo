@@ -4,6 +4,48 @@
 here ran on fleet naphtali, M4/16GiB, macOS26.7.2, MLX0.32.4, Hy1.1.0,
 portable CPython3.12.12. No system service or system-wide memory setting changed.
 
+## Current result: both contexts complete within the budget
+
+Same executing revision `ada22acc`,1.0437B total parameters, BF16 weights and
+gradients, FP32 SGD masters on NVMe, attention/MoE rematerialization, expert
+token chunk64, batch1. Each trial has four updates,120s outer deadline,
+110s between-step budget, requested10GiB and lower9GiB kernel fatal limit.
+No checkpoints. Both children exit0 and are reaped.
+
+| Metric | Context256 | Context512 |
+| --- | ---: | ---: |
+| Processed training tokens | 1,024 | 2,048 |
+| Training phase, including periodic validation | 29.7596s | 52.5516s |
+| Training-phase tokens/s | 34.4091 | 38.9712 |
+| Outer supervisor wall, including startup/setup/evaluation | 33.3356s | 56.4906s |
+| MLX allocator peak | 6.7550GiB | 8.7711GiB |
+| Kernel lifetime process footprint peak | 6.9061GiB | 8.9626GiB |
+| System swap before / after | 1,809.88 / 1,809.88MiB | 1,809.88 / 1,809.88MiB |
+| Held-out sample CE | 10.47376 -> 10.46357 | 10.55070 -> 10.55902 |
+| Process physical disk reads / writes | 3.2794 / 20.8776GB | 12.5296 / 20.8777GB |
+
+Both allocator and kernel lifetime peaks are below10GiB; kernel footprint is
+also below its lower9GiB threshold. This is a short operational update test,
+not sustained-performance/quality qualification. The512 run has only about
+38MiB of margin to the kernel threshold; a larger or longer workload can be
+killed rather than exceeding its admitted footprint threshold indefinitely.
+System-wide swap snapshots do not rule out transient swap or other-app impact.
+
+Both use the SHA-verified same corpus/tokenizer and seed936. Validation samples
+differ with context, so their CE is not a quality ranking.512 ran before256;
+the OS page cache/SSD was not cold-reset. The read-byte difference matters:
+these single rates include NVMe work and are not a controlled context-scaling
+curve or a pure GPU-compute measurement. Each trial logically reads16.6992GB
+and writes20.8740GB of FP32 master data (including initial write). Physical
+process I/O counters include filesystem overhead and cache effects.
+
+`comparison.json` binds source digests (matched against fleet files), conditions,
+metrics and limits. Raw results/supervisor/snapshots are adjacent. Normal-exit
+temporary optimizer workfiles are removed. Earlier kernel-killed trial artifacts
+remain separate. Current owned training processes are checked absent at closeout.
+No developer-Mac training, model-size reduction, cap increase or persistent
+service was used.3B sharding, sufficient learning and30B extrapolation remain open.
+
 ## Enforcement qualification
 
 XNU `memorystatus_control` SET/GET_MEMLIMIT_PROPERTIES, active/inactive FATAL,
@@ -74,5 +116,5 @@ isolates optimizer placement; independent BF16 scatter-gradient executions
 are not bitwise reproducibility proof. The actual tiny NVMe training loop also
 completes four steps. Adjacent JSONs preserve results and supervised exits.
 
-At this code unit, the1B NVMe measurement is next. No1B/3B convergence or30B
-duration is established.
+The table above is the later measured result. No1B/3B convergence or30B duration
+is established.

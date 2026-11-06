@@ -7,7 +7,8 @@ this does not establish a production runtime or fleet qualification.
 
 **Fleet training requires a qualified per-process kernel limit.** The earlier fleet
 sequence256 trial exceeded its requested10GiB ceiling: MLX allocator peak
-11.36GiB and system swap rose by1,212.13MiB. Sequence512 was not started.
+11.36GiB and system swap rose by1,212.13MiB. Sequence512 was not started
+at that revision; subsequent qualified and stopped trials are recorded below.
 MLX0.32.4 [`set_memory_limit`](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html)
 is a guideline that may be exceeded, not a hard limit. The current guard uses
 XNU's fatal active/inactive process-footprint limits, set and read back by a
@@ -102,7 +103,7 @@ limit readback. Neither admission nor the time supervisor bypasses that check.
 ```sh
 hy experiments/ced_moe/data.hy --output /path/to/task-data
 hy experiments/ced_moe/train.hy --data /path/to/task-data --output /path/to/run \
-  --preset tiny --steps 60 --seq 64 --memory-limit-gib 1 --max-seconds 180 --checkpoint
+  --preset tiny --steps 60 --seq 64 --memory-limit-gib 2 --max-seconds 180 --checkpoint
 ```
 
 The initial corpus is WikiText-2 raw, immutable revision
@@ -172,6 +173,13 @@ temporaries. Routing and the balancing loss use all tokens; chunk outputs are
 concatenated and every parameter gradient is summed. Context is not truncated.
 The numerical control uses11 tokens/chunk4 to cross boundaries and compares
 all155 gradients against unchunked execution, rematerialization and prior source.
+
+Fleet revision `ada22acc` completes four1B SGD updates at both context256 and512
+with the requested10GiB / kernel9GiB limits: peak process footprints6.9061GiB
+and8.9626GiB, training-phase34.4091/38.9712tokens/s including NVMe work and
+periodic validation. Before/after swap is unchanged. These are one short run
+per context with uncontrolled OS page-cache state, not convergence or sustained
+performance. See the raw guarded evidence before using either measurement.
 
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
