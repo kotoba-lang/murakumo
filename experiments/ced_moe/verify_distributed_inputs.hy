@@ -29,10 +29,11 @@
       (.append local-hashes local-hash))
     (assert (!= (get local-hashes 0) (get local-hashes 1)))
     (.append hashes {"global" global-hash "rank_local" local-hashes}))
-  (setv result {"pass" True "steps" (len hashes) "input_hashes" hashes
+  (setv result {"pass" True "optimizer_updates" (get reference "steps")
+               "global_microsteps" (len hashes) "input_hashes" hashes
                "scope" "CPU-only reconstruction from checkpoint sampler and corpus; no model execution"})
   (.write_text (pathlib.Path args.output) (json.dumps result :indent 2))
-  (print (json.dumps {"pass" True "steps" (len hashes)})))
+  (print (json.dumps {"pass" True "global_microsteps" (len hashes)})))
 
 (when (= __name__ "__main__")
   (setv parser (argparse.ArgumentParser))

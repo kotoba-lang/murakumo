@@ -290,6 +290,17 @@ three conditions, avoiding an update-count/globalbatch confound. Fleet F32
 all-gradient and weight/master controls pass;1B measurements are recorded in
 [accumulation evidence](../../bench/results/2026-11-06-hy-ced-moe-accumulation/README.md).
 
+The fixed1B comparison completes on both physical M4s. Reference /DDP micro
+sync /DDP update sync:33.891 /6.036 /18.094 global phase tokens/s; setup/eval/
+export/hash-inclusive26.350 /5.718 /15.018. Deferred synchronization is2.998x
+faster than every-micro at fixed1024tokens/effectivebatch8/two SGD updates,
+with8→2 averaging calls and16.699→4.175GB logical gradients/rank (75% less).
+Maximum process footprint6.828GiB stays under requested10/fatal9GiB. Final
+fixed128-token CE10.47328 /10.47680 /10.46976 from common10.48991; this short
+single-order trial does not establish quality superiority. BothDDPruns' replicas
+match weight/master hashes exactly; reference/mode BF16 weight maxdiff0.00024414
+remains observational, with no newly chosen tolerance or bitwise qualification.
+
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 
