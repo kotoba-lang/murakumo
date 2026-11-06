@@ -196,6 +196,15 @@ command buffer, within 2.3e-3 of PyTorch's float32 `CLIPTextModel` on random wei
 Hugging Face's `CLIPTokenizer` and hidden states within 2.4e-3 of PyTorch's `CLIPTextModel`, two mutants detected
 ([record](../bench/results/2026-11-06-text-encode-metal/README.md)). First end-to-end path from text to model output in Kotoba; still the small random-weight tower.
 
+**Stage M, slice 10: a ComfyUI UNet on the GPU (2026-11-06).** ComfyUI's own `UNetModel` in a mini configuration (981 k parameters; ResBlocks, a Downsample, SpatialTransformers, skip concatenation,
+an Upsample, the time-embedding MLP) run end to end from one Kotoba program, weights read from a safetensors file under ComfyUI's parameter names, **219 kernels in one command buffer**: final output
+within 1.4e-3 of ComfyUI's float32 forward pass, every block within 4.3e-3, three mutants detected, ~7.9 ms (`bench/kernels/unet-metal/`,
+[record](../bench/results/2026-11-06-unet-metal/README.md)). The whole-UNet wiring named in the I3 ADR exists at mini scale; SDXL sizes, trained weights and the sampler do not.
+
+**Stage M, slice 11: the SDXL graph timed on the GPU (2026-11-06).** ComfyUI's SDXL `UNetModel` graph with synthetic weights (2.57 billion half values, ~2,100 kernels in one command buffer, `bench/kernels/unet-sdxl-metal/`): about 0.84 s at 512 px,
+1.67 s (best; up to 2.4 s under contention) at 768 px and about 4.1 s at 1024 px per UNet call on an M1 Max under load ([record](../bench/results/2026-11-06-unet-sdxl-metal/README.md)).
+At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI reached on a smaller GPU, so about 84 s for the 50 UNet calls of a 25-step render: not yet faster. This replaces the arithmetic in the I3 ADR's time table with one measurement.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
