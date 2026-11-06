@@ -7,8 +7,9 @@
 # line: the merge rank order reversed; letters not lowercased; the contraction rule dropped. The timing line is the wall
 # time of one whole run (table build included): diagnostic. A Metal-route host is required (not a CI step).
 # Non-ASCII text (slice 41): a second corpus, prompts_unicode.txt (make_unicode_prompts.py: "a<c>b" for about 17,700 code points across the
-# supported ranges, plus mixed lines), must also equal the oracle; characters outside the supported set (and anything the oracle's NFC
-# normalization could change) must be refused with a message, not tokenized differently; more mutants cover the Unicode logic.
+# supported ranges plus every letter + combining mark pair that NFC composes into a supported letter, and mixed lines), must also equal the
+# oracle (it NFC-normalizes: a letter plus one combining mark is composed here with a generated table); characters outside the supported set,
+# and marks that do not compose, must be refused with a message, not tokenized differently; more mutants cover the Unicode logic.
 # Not covered: HTML entities, the special-token spellings, ComfyUI's prompt weighting and chunking of prompts longer than 75 tokens (the
 # program truncates, as the Hugging Face call does), scripts outside the supported set (Cyrillic, Greek, Arabic, Indic ...).
 #
@@ -54,6 +55,7 @@ mut utf8-3byte '(* (+ (* (bit-and b0 15) 64) (bit-and b1 63)) 64)' '(* (+ (* (bi
 mut latin1-lower '(or (within c 192 214) (within c 216 222)) (+ c 32)' '(or (within c 192 214) (within c 216 222)) c' u
 mut ideographic-space '(= c 8287) (= c 12288)' '(= c 8287) (= c 1)' u
 mut byte-map '(<= b 32) (+ 256 b)' '(<= b 32) (+ 257 b)' u
+mut nfc-compose 'k2 (if (= m 1) (- k 1) k)' 'k2 k' u
 mut fullwidth-lower '(within c 65313 65338) (+ c 32)' '(within c 65313 65338) c' u
 # refusals: each of these must be refused with a message and no token ids
 ref() { # label text-as-printf
@@ -62,7 +64,9 @@ ref() { # label text-as-printf
   if grep -a -q '^refused' "$WK/r$1.err" && ! grep -a -q '^49406' "$WK/r$1.out"; then echo "refused [$1]: $(grep -a '^refused' "$WK/r$1.err" | cut -c1-60) (detected)"; else echo "refused [$1]: NOT refused"; fail=1; fi
 }
 ref cyrillic 'cat \320\277\321\200\320\270\320\262\320\265\321\202'
-ref combining 'cafe\314\201'
+ref combining-no-composition 'b\314\201'
+ref two-marks 'a\314\201\314\201'
+ref leading-mark '\314\201a'
 ref titlecase 'a\307\205b'
 ref invalid-utf8 'a\377b'
 ref truncated-utf8 'a\343\201'
