@@ -540,6 +540,45 @@ kernel void axpb(device float *O [[buffer(0)]], device const float *Bias [[buffe
                  uint i [[thread_position_in_grid]]) {
   O[i] = O[i] * Sc[0] + Bias[i / P[0]];
 }
+kernel void gn_psum(device const float *X [[buffer(0)]], device float *Part [[buffer(1)]], device const uint *P [[buffer(2)]],
+                     device const float *Stat [[buffer(3)]],
+                     uint2 tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                     uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  uint C = P[0]; uint HW = P[1]; uint NG = P[2]; uint T = P[4]; uint SQ = P[6];
+  uint n = (C / NG) * HW;
+  uint base = tg.y * n;
+  uint chunk = (n + T - 1u) / T;
+  uint lo = tg.x * chunk;
+  uint hi = min(n, lo + chunk);
+  float mean = (SQ == 1u) ? Stat[tg.y * 2u] : 0.0f;
+  float s = 0.0f;
+  for (uint i = lo + tid; i < hi; i += 128u) { float d = X[base + i] - mean; s += (SQ == 1u) ? d * d : d; }
+  s = simd_sum(s);
+  if (lane == 0u) part[sgi] = s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) Part[tg.y * T + tg.x] = part[0] + part[1] + part[2] + part[3];
+}
+// per group: Stat[2g] = mean (SQ = 0) or Stat[2g + 1] = 1 / sqrt(variance + eps) (SQ = 1) from the T partial sums
+kernel void gn_fin(device const float *Part [[buffer(0)]], device float *Stat [[buffer(1)]], device const uint *P [[buffer(2)]], uint g [[thread_position_in_grid]]) {
+  uint C = P[0]; uint HW = P[1]; uint NG = P[2]; uint T = P[4]; uint SQ = P[6];
+  if (g >= NG) return;
+  float n = float((C / NG) * HW);
+  float s = 0.0f;
+  for (uint t = 0u; t < T; t++) s += Part[g * T + t];
+  if (SQ == 0u) Stat[g * 2u] = s / n;
+  else Stat[g * 2u + 1u] = 1.0f / precise::sqrt(s / n + as_type<float>(P[3]));
+}
+// normalise (and SiLU when MODE = 0: planar half out; MODE = 1: no SiLU, token-major half out)
+kernel void gn_apply(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]], device half *O [[buffer(3)]],
+                     device const uint *P [[buffer(4)]], device const float *Stat [[buffer(5)]], uint i [[thread_position_in_grid]]) {
+  uint C = P[0]; uint HW = P[1]; uint NG = P[2]; uint MODE = P[5];
+  uint ch = i / HW; uint pos = i % HW;
+  uint g = ch / (C / NG);
+  float v = ((X[i] - Stat[g * 2u]) * Stat[g * 2u + 1u]) * Ga[ch] + Be[ch];
+  if (MODE == 0u) O[i] = half(v / (1.0f + precise::exp(-v)));
+  else O[pos * C + ch] = half(v);
+}
 kernel void upsample_h(device const float *X [[buffer(0)]], device half *O [[buffer(1)]], device const uint *P [[buffer(2)]],
                        uint i [[thread_position_in_grid]]) {
   uint IH = P[0]; uint IW = P[1];
@@ -1038,9 +1077,24 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
     hb))
 
 (defn- gn! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pso :i64 xf :i64 xoff :i64 gname :string bname :string oh :i64 C :i64 HW :i64 NG :i64 eps :i64] :i64
-  (let [p (pu f R S C HW NG eps 0 0 0 0 0 0)
-        d (vector-at S 3)]
-    (emit! S (vector-i64 xf d d oh p) (vector-i64 xoff (toff f R S gname) (toff f R S bname) 0 0) pso 1 NG 1 128)))
+  (let [d (vector-at S 3)
+        n (* (quot C NG) HW)
+        gofs (toff f R S gname)
+        bofs (toff f R S bname)]
+    (if (< n 262144)
+      (let [p (pu f R S C HW NG eps 0 0 0 0 0 0)]
+        (emit! S (vector-i64 xf d d oh p) (vector-i64 xoff gofs bofs 0 0) pso 1 NG 1 128))
+      ;; large groups (the VAE at 512 px and up): 32 threadgroups cannot saturate the memory system, so the statistics are partial sums over 64 tiles per group
+      ;; (mean first, then the centred sum of squares, as in the single-kernel version) and the normalisation is element-parallel
+      (let [part (fbuf f R S (* NG 64))
+            stat (fbuf f R S (* NG 2))
+            p0 (pu f R S C HW NG eps 64 (if (= pso 2) 0 1) 0 0 0 0)
+            p1 (pu f R S C HW NG eps 64 (if (= pso 2) 0 1) 1 0 0 0)
+            a (emit! S (vector-i64 xf part p0 stat) (vector-i64 xoff 0 0 0) 23 1 64 NG 128)
+            b (emit! S (vector-i64 part stat p0) (vector-i64 0 0 0) 24 0 NG 1 32)
+            c (emit! S (vector-i64 xf part p1 stat) (vector-i64 xoff 0 0 0) 23 1 64 NG 128)
+            e (emit! S (vector-i64 part stat p1) (vector-i64 0 0 0) 24 0 NG 1 32)]
+        (emit! S (vector-i64 xf d d oh p0 stat) (vector-i64 xoff gofs bofs 0 0 0) 25 0 (* C HW) 1 128)))))
 
 ;; conv: P = {cin, cout, ih, iw, ks, str, ow, np, npp, mode}
 (defn- conv! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 xh :i64 wh :i64 bias :i64 boff :i64 res :i64 roff :i64 out :i64 ooff :i64
@@ -1220,10 +1274,10 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
         S (zeros 9800)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 23) 0
+             (if (= i 26) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
-                          (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec" (if (= i 14) "attn_wide" (if (= i 15) "cpy_f" (if (= i 16) "conv_k3s1" (if (= i 17) "cvt32h_t" (if (= i 18) "amax_part" (if (= i 19) "amax_fin" (if (= i 20) "cvfh_sc" (if (= i 21) "upsample_hs" "axpb"))))))))))))))))))))))
+                          (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec" (if (= i 14) "attn_wide" (if (= i 15) "cpy_f" (if (= i 16) "conv_k3s1" (if (= i 17) "cvt32h_t" (if (= i 18) "amax_part" (if (= i 19) "amax_fin" (if (= i 20) "cvfh_sc" (if (= i 21) "upsample_hs" (if (= i 22) "axpb" (if (= i 23) "gn_psum" (if (= i 24) "gn_fin" "gn_apply")))))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))

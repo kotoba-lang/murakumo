@@ -44,10 +44,11 @@ for cfg in $CONFIGS; do
   ns=$(grep -a -o 'best [0-9]* total' "$WK/c$cfg.err" | awk '{print $2}')
   echo "$cfg ($(sed -n 's/^params \([0-9]*\).*/\1/p' "$WK/$cfg.log") parameters, $((8 * L)) px): $(echo "$line" | sed 's/  finite.*//') $([ "$ok" = 1 ] && echo ok || echo FAIL) best=$(awk -v n="$ns" 'BEGIN{printf "%.2f", n/1e9}') s"
 done
-mutant() { # label from to
+mutant() { # label from to [config, default mini]
+  cfgm=${4:-mini}
   [ "${VAESTRESS:-0}" = 0 ] || return 0
-  build "m$1" mini "$2" "$3"
-  line=$(cmp_ "m$1" mini); worst=$(echo "$line" | awk '{m=0; for(i=1;i<=NF;i++){split($i,a,"="); if(a[1]=="final" && a[2]+0>m) m=a[2]+0}; print m}')
+  build "m$1" "$cfgm" "$2" "$3"
+  line=$(cmp_ "m$1" "$cfgm"); worst=$(echo "$line" | awk '{m=0; for(i=1;i<=NF;i++){split($i,a,"="); if(a[1]=="final" && a[2]+0>m) m=a[2]+0}; print m}')
   bad=$(awk -v e="$worst" 'BEGIN{print (e+0 > 0.05 || e != e+0) ? 1 : 0}')
   [ "$bad" = 1 ] && echo "mutant [$1]: final error $worst (detected)" || { echo "mutant [$1]: final error $worst NOT detected"; fail=1; }
 }
@@ -57,7 +58,11 @@ mutant upsample 'O[i] = half(X[(c * IH + y / 2u) * IW + x / 2u] * Sc[1]);' 'O[i]
 mutant residual '(vector-i64 cout cout ih iw 3 1 2))
       (let [sc (scl!' '(vector-i64 cout cout ih iw 3 1 1))
       (let [sc (scl!'
-mutant silu 'O[base + i] = half(v / (1.0f + precise::exp(-v)));' 'O[base + i] = half(v);';; esac
+mutant silu 'O[base + i] = half(v / (1.0f + precise::exp(-v)));' 'O[base + i] = half(v);'
+# the multi-threadgroup GroupNorm (groups of >= 262144 elements: the 512 px config and up)
+case " $CONFIGS " in *" sdxl64 "*)
+  mutant gn-variance-skipped 'Stat[g * 2u + 1u] = 1.0f / precise::sqrt(s / n + as_type<float>(P[3]));' 'Stat[g * 2u + 1u] = 1.0f;' sdxl64
+  mutant gn-mean-wrong 'if (SQ == 0u) Stat[g * 2u] = s / n;' 'if (SQ == 0u) Stat[g * 2u] = 0.0f;' sdxl64;; esac;; esac
 if [ "${VAESTRESS:-0}" != 0 ]; then
   build mnoscale mini 'Sc[0] = s; Sc[1] = 1.0f / s;' 'Sc[0] = 1.0f; Sc[1] = 1.0f;'
   l=$(cmp_ mnoscale mini)
