@@ -61,10 +61,28 @@ def write(d, comfy_src, mc, lat, ch, steps):
     class U: pass
     u = U(); uns = {"torch": torch}; exec(ut["append_dims"], uns); u.append_dims = uns["append_dims"]
     kns = {"torch": torch, "trange": trange, "utils": u}; exec(kd["to_d"], kns); exec(kd["sample_euler"], kns)
-    x0 = torch.randn(1, 4, lat, lat) * sigmas[0]
-    ctx_c = torch.randn(1, 77, 2048) * 0.5; ctx_u = torch.randn(1, 77, 2048) * 0.5
-    y_c = torch.randn(1, 2816) * 0.5; y_u = torch.randn(1, 2816) * 0.5
-    for n, v in (("x", x0), ("ctx_c", ctx_c[0]), ("ctx_u", ctx_u[0]), ("y_c", y_c[0]), ("y_u", y_u[0])): v.numpy().astype(np.float32).tofile(os.path.join(d, n + ".f32"))
+    # the conditioning, as ComfyUI builds it for SDXL: the two towers' penultimate states concatenated L then G (SDXLClipModel.encode_token_weights),
+    # the pooled vector of the G tower, and SDXL.encode_adm (pooled, then Timestep(256) embeddings of height, width, crop_h, crop_w, target_height,
+    # target_width); the real encode_adm / sdxl_pooled source text is taken from model_base.py by ast
+    from comfy.ldm.modules.diffusionmodules.openaimodel import Timestep
+    src = open(comfy_src + "/comfy/model_base.py").read(); tree = ast.parse(src)
+    sdxl_cls = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SDXL"][0]
+    enc = [n for n in sdxl_cls.body if isinstance(n, ast.FunctionDef) and n.name == "encode_adm"][0]
+    pooled_fn = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "sdxl_pooled"][0]
+    ns2 = {"torch": torch}; exec(ast.get_source_segment(src, pooled_fn), ns2)
+    import textwrap; exec(textwrap.dedent(ast.get_source_segment(src, enc)).replace("def encode_adm", "def encode_adm_fn"), dict(ns2, sdxl_pooled=ns2["sdxl_pooled"]), ns2)
+    class FakeSDXL: pass
+    fs = FakeSDXL(); fs.embedder = Timestep(256); fs.noise_augmentor = None
+    sizes = dict(height=256, width=384, crop_h=16, crop_w=32, target_height=512, target_width=640)
+    def cond(tag):
+        lpen = torch.randn(1, 77, 768) * 0.8; gpen = torch.randn(1, 77, 1280) * 0.8; gpool = torch.randn(1, 1280) * 0.5
+        ctx = torch.cat([lpen, gpen], dim=-1)
+        y = ns2["encode_adm_fn"](fs, pooled_output=gpool, **sizes)
+        for n, v in (("l" + tag, lpen[0]), ("g" + tag, gpen[0]), ("p" + tag, gpool[0]), ("ctx_" + tag, ctx[0]), ("y_" + tag, y[0])): v.numpy().astype(np.float32).tofile(os.path.join(d, n + ".f32"))
+        return ctx, y
+    ctx_c, y_c = cond("c"); ctx_u, y_u = cond("u")
+    torch.tensor([sizes[k] for k in ("height", "width", "crop_h", "crop_w", "target_height", "target_width")], dtype=torch.float32).numpy().tofile(os.path.join(d, "sz.f32"))
+    x0 = torch.randn(1, 4, lat, lat) * sigmas[0]; x0.numpy().astype(np.float32).tofile(os.path.join(d, "x.f32"))
     cfg_scale = 4.0
     calls = []
     def model(x, sigma, **kw):
