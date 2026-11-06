@@ -206,8 +206,8 @@
 (defn- within [c :i64 a :i64 b :i64] :bool (and (>= c a) (<= c b)))
 ;; Unicode class of a code point, for the supported set only: 0 whitespace (str.isspace), 1 letter (\p{L}), 2 number (\p{N}),
 ;; 3 other, 4 not supported (the program refuses it rather than tokenizing it differently from the Hugging Face tokenizer). The Hugging Face
-;; tokenizer NFC-normalizes first, which this program does not implement, so everything NFC could change is refused: combining marks that can
-;; compose with a base letter (U+0300-036F, U+3099-309A), and the singleton / exclusion characters U+2329, U+232A, U+2ADC. Whitespace is the
+;; tokenizer NFC-normalizes first. A letter followed by one combining mark (U+0300-036F, U+3099, U+309A) is composed with the table below
+;; (the same as NFC); any other use of a mark, and the singleton / exclusion characters U+2329, U+232A, U+2ADC, are refused. Whitespace is the
 ;; White_Space property (not str.isspace: U+001C-001F are not whitespace). Latin-1 and the other supported letters are NFC-stable.
 (defn- cls [c :i64] :i64
   (cond
@@ -281,6 +281,27 @@
       :else
       (loop [j (+ i 1)]
         (if (and (< j e) (= (vector-at CL j) 3)) (recur (+ j 1)) (- j i))))))
+
+;; NFC for a letter followed by one combining mark (U+0300-036F, U+3099, U+309A): the entries (base << 28 | mark << 14 | composed), generated from
+;; unicodedata.normalize("NFC") over the supported lower-case letters whose composition is also in the supported set
+(defn- nfc-t0 [] :vector-i64
+  (vector-i64 26050822368 26050838753 26050855138 26050871523 26050887937 26050920707 26050953444 26050986213 26051477765 26051870944 26051887329 26587709703 26587726089 26587808011 26587889933 26588332263 26588758279 26856325391 27124564200 27124580585 27124596970 27124629779 27124662549 27124678935 27124695275 27124760859 27125219609 27125612776 27125629161 27661467933 27661533471 27661549857 27662074147 27929903397 28198306028 28198322413 28198338798 28198355241 28198371627 28198404397 28198437103 28198961455 28199354604 28199370989 28466774325 28735815991 29003628858 29003809086 29004251452 29004677434 29540499780 29540532465 29540680008 29541122374 29541548356 29808918770 29808935155 29808951540 29808967925 29808984397))
+(defn- nfc-t1 [] :vector-i64
+  (vector-i64 29809017167 29809049846 29809099089 29809967346 29809983731 30614241621 30614421849 30614864215 30615290197 30882677083 30882693469 30882857313 30883299679 30883725659 31151292773 31151735139 31419531513 31419547898 31419564283 31419580777 31419597163 31419629933 31419662588 31419695471 31419711857 31420186995 31420580089 31420596474 31956435317 32493289725 32493306231 32493404415 32494338301 32761725306 32761823612 32761905534 32762773882 3317529211028 3318871388236 3319408259150 3319945130064 3320482000978 3321018871892 3321555742806 3322092613720 3322629484634 3323166355548 3323703226462 3324240097376 3324776968290 3325582274661 3326119145575 3326656016489 3328535064688 3328535081073 3329340371059 3329340387444 3330145677430 3330145693815 3330950983801))
+(defn- nfc-t2 [] :vector-i64
+  (vector-i64 3330951000186 3331756290172 3331756306557 3340883095710 3343299014900 3344641192108 3345178063022 3345714933936 3346251804850 3346788675764 3347325546678 3347862417592 3348399288506 3348936159420 3349473030334 3350009901248 3350546772162 3351352078533 3351888949447 3352425820361 3354304868560 3354304884945 3355110174931 3355110191316 3355915481302 3355915497687 3356720787673 3356720804058 3357526094044 3357526110429 3362894803191 3363163238648 3363431674105 3363700109562 3366652899582))
+(defn- nfc-scan [T :vector-i64 key :i64] :i64
+  (loop [i 0]
+    (if (= i (vector-count T)) -1
+      (let [e (vector-at T i)]
+        (if (= (i64-shift-right e 14) key) (bit-and e 16383) (recur (+ i 1)))))))
+;; the composed code point of base + mark, or -1
+(defn- nfc-find [base :i64 mark :i64] :i64
+  (let [key (+ (* base 16384) mark)
+        a (nfc-scan (nfc-t0) key)]
+    (if (>= a 0) a
+      (let [b (nfc-scan (nfc-t1) key)]
+        (if (>= b 0) b (nfc-scan (nfc-t2) key))))))
 
 (defn- bad-utf8 [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64] :i64 (refuse-text f R "refused: invalid UTF-8 in a prompt\n"))
 ;; decode the UTF-8 sequence at p: code point * 8 + length; refuses invalid UTF-8 (overlong forms, surrogates, truncation)
@@ -377,10 +398,14 @@
                       (let [d (utf8-at f R pbuf q le)
                             c (lcp (i64-shift-right d 3))
                             u0 (if (>= k 8192) (refuse-text f R "refused: a prompt line longer than 8192 characters\n") 0)
-                            cl (cls c)
+                            m (if (or (within c 768 879) (within c 12441 12442)) 1 0)
+                            pc (if (and (= m 1) (> k 0)) (nfc-find (vector-at CP (- k 1)) c) -1)
+                            u2 (if (and (= m 1) (< pc 0)) (refuse-text f R "refused: a combining mark that does not compose with the character before it\n") 0)
+                            cl (if (= m 1) 1 (cls c))
                             u1 (if (= cl 4) (refuse-text f R "refused: a character outside the supported set (ASCII, Latin-1, Latin Extended-A, CJK, kana, Hangul, fullwidth forms, common symbols and emoji)\n") 0)
-                            a (vector-assoc! CP k c) b (vector-assoc! CL k cl)]
-                        (recur (+ q (bit-and d 7)) (+ k 1)))))
+                            k2 (if (= m 1) (- k 1) k)
+                            a (vector-assoc! CP k2 (if (= m 1) pc c)) b (vector-assoc! CL k2 cl)]
+                        (recur (+ q (bit-and d 7)) (+ k2 1)))))
               walk (loop [i 0]
                      (if (>= i ncp) 0
                        (if (= (vector-at CL i) 0) (recur (+ i 1))
