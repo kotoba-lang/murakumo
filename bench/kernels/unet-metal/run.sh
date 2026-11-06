@@ -5,7 +5,7 @@
 # command buffer. make_fixture.py builds the same model with ComfyUI v0.44.0's own PyTorch UNetModel (random weights, float32, CPU; a local
 # oracle only) and records its output and the activations after each block; compare.py prints the largest |gpu - ref| / max(1, |ref|) per
 # stage. Limits: final output 1e-2 and every stage 2e-2 (the f16 scale of the earlier slices, set before this slice's first run).
-# Mutants must push the final error above 0.05: the time embedding left out of the ResBlocks, the Upsample reading the wrong source row,
+# (A mutant replaces every occurrence of its text, so it reaches both the general and the 3x3 stride-1 convolution kernel.) Mutants must push the final error above 0.05: the time embedding left out of the ResBlocks, the Upsample reading the wrong source row,
 # the final ResBlock's skip dropped. ms is the best of 20 whole-graph runs, on whatever load the host has: diagnostic. A GPU host is
 # required (not a CI step).
 #
@@ -20,7 +20,7 @@ TOTAL=258560
 build() { # name [from to]
   sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@X@#$WK/fx/x.f32#;s#@CTX@#$WK/fx/ctx.f32#;s#@REPS@#20#" "$HERE/unet_metal.kotoba.in" > "$WK/$1.kotoba"
   if [ -n "${2:-}" ]; then
-    FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/$1.kotoba"
+    FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/g or die "mutation did not apply\n"' "$WK/$1.kotoba"
   fi
   "$AMU/bin/amu" compile "$WK/$1.kotoba" --runtime-profile amu-program-metal -o "$WK/$1" >/dev/null
 }
