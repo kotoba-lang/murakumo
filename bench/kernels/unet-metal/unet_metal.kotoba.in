@@ -295,14 +295,15 @@ kernel void conv(device const half *X [[buffer(0)]], device const half *Wt [[buf
                  device const float *Res [[buffer(3)]], device float *C [[buffer(4)]], device const uint *P [[buffer(5)]],
                  uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
                  uint tid [[thread_index_in_threadgroup]]) {
-  threadgroup half As[64 * 32];
-  threadgroup half Bs[32 * 64];
+  threadgroup half As[64 * 64];
+  threadgroup half Bs[64 * 64];
   threadgroup float Cs[64 * 64];
   uint CIN = P[0]; uint COUT = P[1]; uint IH = P[2]; uint IW = P[3]; uint KS = P[4]; uint STR = P[5];
   uint OW = P[6]; uint NP = P[7]; uint NPP = P[8]; uint MODE = P[9];
   int PADV = int(KS) / 2;
   uint KD = CIN * KS * KS;
-  uint KDP = ((KD + 31u) / 32u) * 32u;
+  uint KDP = ((KD + 63u) / 64u) * 64u;
+  bool vec4 = (KD & 3u) == 0u;
   uint m0 = tg.y * 64u;
   uint n0 = tg.x * 64u;
   uint row0 = (sg / 2u) * 32u;
@@ -311,34 +312,53 @@ kernel void conv(device const half *X [[buffer(0)]], device const half *Wt [[buf
   for (uint i = 0u; i < 4u; i++)
     for (uint j = 0u; j < 4u; j++)
       acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
-  for (uint k0 = 0u; k0 < KDP; k0 += 32u) {
-    for (uint idx = tid; idx < 2048u; idx += 128u) {
-      uint r = idx / 32u;
-      uint c = idx % 32u;
-      uint m = m0 + r;
-      uint kc = k0 + c;
-      As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
-      uint kk = idx / 64u;
-      uint n = idx % 64u;
-      uint k = k0 + kk;
-      uint p = n0 + n;
+  uint pg = n0 + (tid & 63u);
+  bool pok = pg < NP;
+  int oy = int((pg / OW) * STR) - PADV;
+  int ox = int((pg % OW) * STR) - PADV;
+  uint kk0 = tid >> 6;
+  for (uint k0 = 0u; k0 < KDP; k0 += 64u) {
+    if (vec4) {
+      for (uint it = 0u; it < 8u; it++) {
+        uint idx4 = tid + it * 128u;
+        uint r = idx4 >> 4;
+        uint c = (idx4 & 15u) * 4u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        half4 w = half4(0.0h);
+        if (m < COUT && kc < KD) w = *((device const half4 *)(Wt + m * KD + kc));
+        *((threadgroup half4 *)(As + r * 64u + c)) = w;
+      }
+    }
+    for (uint it = 0u; it < 32u; it++) {
+      uint idx = tid + it * 128u;
+      if (!vec4) {
+        uint r = idx >> 6;
+        uint c = idx & 63u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
+      }
+      uint k = k0 + kk0 + it * 2u;
       half v = half(0.0f);
-      if (k < KD && p < NP) {
-        uint ci = k / (KS * KS);
-        uint kr = k % (KS * KS);
-        int yy = int((p / OW) * STR) + int(kr / KS) - PADV;
-        int xx = int((p % OW) * STR) + int(kr % KS) - PADV;
+      if (k < KD && pok) {
+        uint ci; int ky; int kx;
+        if (KS == 3u) { ci = k / 9u; uint kr = k - ci * 9u; uint q = kr / 3u; ky = int(q); kx = int(kr - q * 3u); }
+        else if (KS == 1u) { ci = k; ky = 0; kx = 0; }
+        else { ci = k / (KS * KS); uint kr = k % (KS * KS); ky = int(kr / KS); kx = int(kr % KS); }
+        int yy = oy + ky;
+        int xx = ox + kx;
         if (yy >= 0 && yy < int(IH) && xx >= 0 && xx < int(IW))
           v = X[(ci * IH + uint(yy)) * IW + uint(xx)];
       }
       Bs[idx] = v;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint ks = 0u; ks < 4u; ks++) {
+    for (uint ks = 0u; ks < 8u; ks++) {
       simdgroup_half8x8 a[4];
       simdgroup_half8x8 b[4];
       for (uint i = 0u; i < 4u; i++)
-        simdgroup_load(a[i], As + (row0 + i * 8u) * 32u + ks * 8u, 32u);
+        simdgroup_load(a[i], As + (row0 + i * 8u) * 64u + ks * 8u, 64u);
       for (uint j = 0u; j < 4u; j++)
         simdgroup_load(b[j], Bs + ks * 8u * 64u + col0 + j * 8u, 64u);
       for (uint i = 0u; i < 4u; i++)
