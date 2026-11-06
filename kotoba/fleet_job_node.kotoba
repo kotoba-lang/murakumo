@@ -131,7 +131,7 @@
         epoch (jn-num chosen "epoch") slot (jn-num chosen "slot")
         until (jn-num chosen "until") revision (jn-num chosen "revision")]
     (cond (or (= chosen "") (not (json-canonical? b)) (not (= (json-kind b 0) 1))
-              (not (= (json-count b 0) 6)) (= node "") (< now 0) (> now 9007199253000000)) "job/lease-invalid"
+              (not (= (json-count b 0) 6)) (= node "") (<= now 0) (> now 9007199253000000)) "job/lease-invalid"
           (not (= holder node)) "job/lease-holder"
           (or (not (= class jid)) (not (= slot 0)) (not (= epoch 1)) (not (= revision 0))) "job/lease-binding"
           (or (<= until now) (not (valid-value? holder true class slot epoch until now))) "job/lease-expired-or-invalid"
@@ -185,6 +185,8 @@
 
 ;; Only a trusted composed adapter may pass a source it has already verified.
 ;; The public run entry passes the exact CID-checked input.
+(defn- jn-clock-ballot-ok? [now :i64 ballot :i64] :bool
+  (and (> now 0) (<= now 9007199253000000) (>= ballot 1) (< ballot 9007199254740991)))
 (defn- jn-run-with-source [source :string source-admitted :bool] :i64
   (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
         node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
@@ -200,7 +202,7 @@
           (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
           (not (= (jn-arg 9) "clock")) (let [x (jn-say "job/clock-required")] 2)
           (not (= mode "follow")) (let [x (jn-say "job/mode-refused")] 2)
-          (or (< now 0) (> now 9007199253000000) (< t 1) (>= t 9007199254740991))
+          (not (jn-clock-ballot-ok? now t))
             (let [x (jn-say "job/time-or-ballot-refused")] 2)
           (not (jn-attempt-root? attempts)) (let [x (jn-say "job/attempt-config")] 1)
           (and (not (= capture-arg "")) (not capture)) (let [x (jn-say "job/capture-refused")] 2)

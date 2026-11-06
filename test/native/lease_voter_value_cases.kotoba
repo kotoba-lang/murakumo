@@ -1,0 +1,34 @@
+;; Source cases for topology-bound acceptance. A live integration fixture
+;; must also exercise persisted prior accepted values and quorum recovery.
+(ns murakumo.lease-voter-value-cases (:export [test-lease-voter-values test-lease-register-shape test-lease-complete-line]))
+
+;; Timeout, EOF, and the receive bound can all return a valid-looking prefix.
+(defn test-lease-complete-line [] :bool
+  (and (ln-complete-line? "prepare 1 node\n")
+       (ln-complete-line? "prepare 1 node\nextra")
+       (not (ln-complete-line? "prepare 1 node"))
+       (not (ln-complete-line? ""))))
+
+(defn test-lease-voter-values [] :bool
+  (let [topo (ln-bytes "{\"payload\":{\"nodes\":[{\"enabled\":true,\"node\":\"node-a\"}]}}")
+        ok (lease-text "node-a" "job" 0 1 2000 0)
+        expired (lease-text "node-a" "job" 0 1 0 0)
+        extra "{\"class\":\"job\",\"epoch\":1,\"extra\":0,\"node\":\"node-a\",\"revision\":0,\"slot\":0,\"until\":2000}"
+        missing "{\"class\":\"job\",\"epoch\":1,\"node\":\"node-a\",\"slot\":0,\"until\":2000}"
+        negative (lease-text "node-a" "job" 0 1 2000 -1)]
+    (and (ln-member-ok? topo 1000 ok) (ln-member-ok? topo 1000 expired)
+         (not (ln-member-ok? topo 1000 extra)) (not (ln-member-ok? topo 1000 missing))
+         (not (ln-member-ok? topo 1000 negative))
+         (not (ln-member-ok? topo 1000 (lease-text "node-b" "job" 0 1 2000 0)))
+         (ln-member-ok? (vector-alloc 0) 1000 extra))))
+
+;; Shape preflight returns classifications only; it does not validate quorum,
+;; provenance, membership, or whether an accepted value is currently live.
+(defn test-lease-register-shape [] :bool
+  (let [valid (lease-text "node-a" "job" 0 1 2000 0)
+        extra "{\"class\":\"job\",\"epoch\":1,\"extra\":0,\"node\":\"node-a\",\"revision\":0,\"slot\":0,\"until\":2000}"]
+    (and (= (ln-register-shape "0 - 0 - -") "voter/state-no-accepted-value")
+         (= (ln-register-shape (str "1 node 1 node " valid)) "voter/state-shape-compatible")
+         (= (ln-register-shape (str "1 node 1 node " extra)) "voter/state-shape-incompatible")
+         (= (ln-register-shape "") "voter/state-unknown")
+         (= (ln-register-shape "bad") "voter/state-unknown"))))

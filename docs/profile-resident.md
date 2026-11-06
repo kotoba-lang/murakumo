@@ -248,7 +248,7 @@ projection and runtime contract. Missing, malformed,
 acknowledgement before the resident starts the next turn. Missing, malformed,
 mismatched or expired acknowledgement yields `resident/archive-pending`.
 A present but empty, non-string, unsafe or colliding configuration path is
-refused. Omitting `archiveAck` preserves the earlier behavior. The ack path and
+refused. Omitting `archiveAck` preserves the earlier behavior for existing non-Flint runtimes. A Flint resident must configure the GitHub archive acknowledgement gate before a cycle can proceed; the host must archive the bootstrap checkpoint first and provide the verified acknowledgement. The ack path and
 its parent must be private and writable only by the trusted host components;
 this local file is not a signed receipt or a distributed lease.
 
@@ -549,3 +549,101 @@ This entry point is a draft: the existing cron controller does not call it,
 work-directory retention is not automated, and production use requires the
 full process/credential/governor gates described in
 [native-github-checkpoint-archive.md](native-github-checkpoint-archive.md).
+
+## Bounded local profile reads
+
+The recovery candidate checks regular-file sizes before range-reading profile
+metadata, role, work order, context, profile state, prior output, dispatch
+marker and request. Profile metadata, role, and explicit runtime/contract
+inputs are limited to 131072 bytes; work and context to 8192; state and
+replicable output to 16384. A saved request is bounded by the exact expected
+request length. Empty, oversized, short or size-changing reads are refused.
+These are component limits and may reject larger previously accepted inputs.
+The FS2 host must enforce the range bound and own these paths exclusively;
+metadata and range reads do not establish a same-FD snapshot. This source
+change has not been qualified on a native runtime or production host.
+
+## Flint token preflight candidate
+
+The Flint response contract refuses any top-level `error` member, including
+`null`, even if a completion is also present. It also requires a choices
+array containing exactly one object. A server that emits `error: null` on
+successful replies therefore requires compatibility qualification before use.
+
+Before a Flint generation the candidate sends the same system and conversation
+text to the local Kapitsa count endpoint, requires a valid positive integer,
+and caps output to `min(maxTokens, 8192 - inputTokens - 256)`. Less than 64
+tokens available, a bad response, or unknown dispatch refuses generation.
+The count request has its own durable request and dispatch marker: an unknown
+outcome is reconciled by the host, never silently resubmitted. A cached count
+is useful only while the host binds it to the same authenticated process,
+model, tokenizer and template as the generation.
+
+The private Flint runtime must provide a 64-character lowercase hexadecimal
+`serverInstance` identifier. The trusted host must assign a fresh identifier
+to each server start, bind it to the authenticated process and socket, and
+keep the process unchanged between count and generation. Both the count and Flint
+generation request identities include that identifier, so a correctly rotated
+identifier cannot reuse an earlier count, generation unit or response. The identifier's syntax is checked, but its freshness
+and binding are not established by this component. It is host-local and is
+not placed in the public checkpoint environment.
+
+Before generation, a separate durable marker in the private cache binds the
+prior state and turn to one exact generation request identity. Its key does
+not use the disposable checkout path. A different request for the same turn,
+an unreadable marker or failed synchronization refuses dispatch; a matching
+marker permits only the existing request's normal reconciliation. Markers are
+retained after completion. This is host-local crash evidence, not a lease,
+distributed fence or proof of process identity. The host must preserve and
+exclusively serialize the same cache across restarts; migration, lost cache,
+rollback and marker retention need explicit reconciliation. The marker does
+not authorize replay after a server restart: the host must rotate the
+server identifier and reconcile the prior turn marker. A changed count that
+would change an already reserved generation request is refused. Generation
+identities use the `local-flint/2` domain: existing markers or units from the
+older identity format require reconciliation and are not silently migrated.
+
+The candidate writes a server-instance busy marker before token counting,
+binding the turn and exact count-request identities. The separate turn marker
+binds the generation request. Another turn using the same instance and retained
+cache is refused until the first turn's verified response and state update have
+been synchronized, then the busy marker is moved aside and the cache synced.
+A completed count with insufficient budget releases occupancy only when the
+turn's generation marker is explicitly absent and the release is synchronized.
+Unknown count, present/unknown generation marker or uncertain release retains
+occupancy for host reconciliation. This cooperative marker assumes every caller
+uses the same exclusively serialized cache; it neither limits memory nor
+controls other clients. Before issuing a new server identifier, the host must
+independently establish that the previous process and its work have stopped.
+The earlier `flint-busy/1` marker requires reconciliation; it is not silently
+upgraded. Power loss, concurrent callers and process replacement remain
+unqualified.
+
+Flint runtime and public-environment descriptions must now declare
+`reasoningMemory` as `disabled`. This declaration is not proof of the server's
+environment: the host must verify and maintain `NI_REASONING_MEMORY=0` and
+the process identity through both calls. Kapitsa 0.2.26 can otherwise restore
+reasoning during generation that its count endpoint did not count. The one
+observed parity test is not proof for all messages, templates or transports.
+The source and source-only cases remain unqualified; no real resident turn,
+native host, crash recovery or resource governor was tested.
+
+Resident request files are size-checked and range-read with an 8192-byte cap
+before JSON validation. Archive acknowledgement files use the same bounded
+reader with a 4096-byte cap. Empty, oversized, short or unavailable reads
+refuse progress. These path-based checks require host-owned paths and do not
+protect against same-size replacement by a concurrent writer; an FS2 provider
+that does not implement the required metadata and range operations may refuse
+or trap.
+
+Resident configuration, restored state, signed head and candidate-head files
+are bounded to 16 KiB, saved lease files to 4 KiB, and environment, policy and
+private runtime files to 128 KiB. Empty or unavailable environment and policy
+reads cannot satisfy their CID pins. Existing installations using empty files
+or files beyond these caps must provision compatible inputs before enabling the
+updated resident. The same host isolation and FS2 provider requirements apply.
+
+The standalone fenced recovery entry does not yet coordinate the GitHub
+archive acknowledgement and publication path. It explicitly refuses Flint
+runtime dispatch; use an archive-gated, otherwise qualified resident flow until
+an equivalent recovery coordinator exists.

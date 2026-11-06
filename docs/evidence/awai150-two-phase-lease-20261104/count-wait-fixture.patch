@@ -1,0 +1,23 @@
+--- awai-flint-count-expired.kotoba
++++ awai-flint-count-expired.kotoba
+@@ -5400 +5400 @@
+-    (if (and (= result "profile/budget-refused") (= called "0") (= busy "1")) 0 3)
++    (if (and (= result "profile/context-budget-unknown-or-insufficient") (= called "0") (= busy "1")) 0 3)
+@@ -5638 +5638 @@
+-(defn- pr-count-wait [unit :string response :string] :i64
++(defn- pr-count-wait [unit :string response :string started :i64 deadline :i64 seconds :i64] :i64
+@@ -5640,4 +5640,7 @@
+-    (let [state (pr-unit-code unit)]
+-      (cond (= state 1) (pr-count-value (pr-read-bounded response 1024))
+-            (or (= state -1) (> i 900)) -1
+-            :else (let [z (pr-pause)] (if z (recur (+ i 1)) -1))))))
++    ;; Expiry or an unknown clock is not proof that the unit stopped. The
++    ;; caller keeps the busy marker and requires host reconciliation.
++    (if (< (pr-window-seconds started deadline (pr-wall-ms) seconds) 1) -1
++      (let [state (pr-unit-code unit)]
++        (cond (= state 1) (pr-count-value (pr-read-bounded response 1024))
++              (or (= state -1) (> i 900)) -1
++              :else (let [z (pr-pause)] (if z (recur (+ i 1)) -1)))))))
+@@ -5690 +5693 @@
+-      (if submitted (pr-count-wait unit response) -1))))
++      (if submitted (pr-count-wait unit response started deadline seconds) -1))))
