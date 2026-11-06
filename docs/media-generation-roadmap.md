@@ -160,6 +160,11 @@ on an M1 Max under load, slower than slice 2's plain kernel ([record](../bench/r
 (`bench/kernels/ops-metal/`): 2.2e-7 to 6.9e-5 against a double-precision reference (upsample and add exact), six mutants detected
 ([record](../bench/results/2026-11-06-ops-metal/README.md)). Their timings are the command-buffer floor; batching dispatches is the next gap.
 
+**Stage M, slice 6 (2026-11-06).** Batching: a dispatch in its own command buffer costs ~264 to 338 us, the same dispatches in one command buffer and one
+encoder cost ~3.5 us (tiny kernel) to ~20 us (12 MB moved), 76x and 17x cheaper (`bench/kernels/batch-metal/`,
+[record](../bench/results/2026-11-06-batch-metal/README.md)); one SDXL UNet forward makes at least 1,314 counted module calls, about 4.6 ms of dispatch overhead
+per call batched against about 347 ms unbatched (arithmetic).
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
