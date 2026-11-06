@@ -43,7 +43,7 @@ static REAL S(rerf)(REAL x){
 }
 /* GroupNorm (affine), no activation. x,y: [C,HW] */
 static void S(gn)(const REAL* x,REAL* y,int Cn,int HW,int Gn,const REAL* ga,const REAL* be){
-  int n=(Cn/Gn)*HW; REAL one=1, eps=(REAL)(float)1e-5, invn=one/(REAL)n;
+  int n=(Cn/Gn)*HW; REAL one=1, eps=(REAL)(float)GNEPS, invn=one/(REAL)n;
   for(int g=0;g<Gn;g++){
     const REAL* xb=x+g*n; REAL sum=0; for(int i=0;i<n;i++) sum=sum+xb[i];
     REAL mean=sum*invn, sq=0; for(int i=0;i<n;i++){REAL d=xb[i]-mean; sq=sq+d*d;}

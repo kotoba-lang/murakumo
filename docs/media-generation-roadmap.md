@@ -129,8 +129,11 @@ comfyui-clj or ComfyUI output.
 connection is detected ([record](../bench/results/2026-11-06-resblock/README.md)). Step 2, a SpatialTransformer block (groupnorm, proj_in, self- and
 cross-attention, GEGLU feed-forward, proj_out, residuals) in `bench/kernels/spatial/`: bit-exact against its twin on two shapes,
 within 7e-6 of an f64 reference, a wrong cross-attention source is detected
-([record](../bench/results/2026-11-06-spatial/README.md)). The comfyui-clj comparison named in the I2 gate has not been done:
-it needs a Deno/JVM run and a checkpoint-layout mapping.
+([record](../bench/results/2026-11-06-spatial/README.md)). Step 3 (oracle): both blocks were also run against ComfyUI v0.44.0's own
+PyTorch `ResBlock` and `SpatialTransformer` on the same parameters (one-off local run, owner-approved download): max error 7.6e-6 and
+3.6e-6, and a nudged weight is detected ([record](../bench/results/2026-11-06-comfyui-oracle/README.md), script in
+`bench/oracle/comfyui/`). The comparison with comfyui-clj named in the I2 gate has still not been done; the owner has since also
+approved ComfyUI's Python as an oracle, and that is what ran.
 
 ## Audio stages
 

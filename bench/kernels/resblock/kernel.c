@@ -62,6 +62,14 @@ int main(void){
     run_f();
     for(int i=0;i<CO*H*W;i++) c=(c*31+(int64_t)B(out_[i]))&MASK48;
   }
-  printf("%lld\n",(long long)c); return 0;
+  printf("%lld\n",(long long)c);
+  /* DUMP_OUT order: x, temb, g1, b1, w1, c1, wt, bt, g2, b2, w2, c2, ws, bs, out */
+  FILE* df=dump_open();
+  if(df){
+    dump_f32(df,x_,CI*H*W); dump_f32(df,temb_,TE); dump_f32(df,g1_,CI); dump_f32(df,b1_,CI); dump_f32(df,w1_,CO*CI*9); dump_f32(df,c1_,CO);
+    dump_f32(df,wt_,TE*CO); dump_f32(df,bt_,CO); dump_f32(df,g2_,CO); dump_f32(df,b2_,CO); dump_f32(df,w2_,CO*CO*9); dump_f32(df,c2_,CO);
+    dump_f32(df,ws_,CO*CI); dump_f32(df,bs_,CO); dump_f32(df,out_,CO*H*W); fclose(df);
+  }
+  return 0;
 }
 #endif
