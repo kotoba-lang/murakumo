@@ -1,0 +1,17 @@
+--- awai-flint-count-expired-run.py
++++ awai-flint-count-expired-run.py
+@@ -2 +2 @@
+-source=pathlib.Path('/private/tmp/awai-flint-count-expired.kotoba').read_bytes()
++source=pathlib.Path('/private/tmp/awai-flint-count-wait-expired.kotoba').read_bytes()
+@@ -83,0 +84,3 @@
++  if mode=='expired-count':
++   substate=show('SubState');print('count-unit-after-refusal',substate,flush=True)
++   if substate!='start':raise RuntimeError('unit was not still active')
+@@ -103 +106,6 @@
+- for mode in ('expired-count','same'):scenario(mode)
++ scenario('expired-count')
++ for _ in range(60):
++  if show('SubState')=='exited':break
++  time.sleep(.1)
++ if show('SubState')!='exited':raise RuntimeError('unit did not finish')
++ scenario('same')

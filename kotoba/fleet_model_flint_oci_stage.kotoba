@@ -1,0 +1,148 @@
+;; Flint-specific metadata staging candidate. Compose after fleet_model_assets
+;; and fleet_model_flint_oci_seal. A trusted host owns source and stage paths,
+;; independently pins all digests and excludes aliases/concurrent mutation.
+;; Partial stages remain for explicit reconciliation and must not be loaded.
+(ns murakumo.fleet-model-flint-oci-stage (:export [model-flint-oci-stage-main]))
+
+(defn- ft-name [id :i64] :string
+  (case id 0 "config.json" 1 "tokenizer.json" 2 "tokenizer_config.json"
+    3 "chat_template.jinja" 4 "generation_config.json"
+    5 "model.safetensors.index.json" 6 ".kapitsa/manifest.json" ""))
+(defn- ft-id [b :vector-i64] :i64
+  (loop [i 0] (if (= i 7) -1 (if (ta-name? b (ft-name i)) i (recur (+ i 1))))))
+
+(defn- ft-walk [source :string stage :string size :i64 work :vector-i64] :bool
+  (let [k (s2-k) summary (vector-alloc 3)]
+    (loop [offset 0 seen 0 zeros 0]
+      (if (= offset size)
+        (and (>= zeros 2) (= (bit-and seen 127) 127) (md-pad work (vector-alloc 0) 0 0 size k))
+        (let [read-ok (arena-scope
+                        (let [header (ta-read source offset 512)]
+                          (if (not (= (vector-count header) 512)) false
+                            (let [hashed (md-blocks work header 512 k)
+                                  zero (ta-zero? header 0 512)
+                                  id (if zero -1 (ft-id header)) n (if zero 0 (ta-octal header 124 136))
+                                  valid (or zero (ta-header? header))
+                                  a (vector-assoc! summary 0 (if zero 0 1))
+                                  b (vector-assoc! summary 1 id) c (vector-assoc! summary 2 n)]
+                              (and hashed valid)))))
+              zero (= (vector-at summary 0) 0) id (vector-at summary 1) n (vector-at summary 2)
+              padded (if (and (> n 0) (<= n 16777216)) (* (quot (+ n 511) 512) 512) -1)
+              next (+ offset 512 padded)]
+          (cond (not read-ok) false
+                zero (recur (+ offset 512) seen (+ zeros 1))
+                (or (> zeros 0) (< id 0) (< padded 0) (> next size)
+                    (not (= (bit-and seen (i64-shift-left 1 id)) 0))) false
+                (ta-file source (str stage "/" (ft-name id)) (+ offset 512) n work k)
+                (recur next (bit-or seen (i64-shift-left 1 id)) 0)
+                :else false))))))
+
+;; Exact regular-file names only; tar directory entries and extra files are
+;; refused. This verifies bytes against the tar digest, not manifest semantics.
+(defn- ft-stage [source :string stage :string digest :string size :i64] :string
+  (let [entry (if (md-path? source) (typed-cap-call 35 :string :string (ol-frame "O" source "")) "")
+        meta (if (and (md-regular? entry) (= (ol-size entry 67108864) size))
+               (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")
+        metadata-dir (str stage "/.kapitsa")]
+    (if (or (not (md-path? source)) (not (md-path? stage)) (not (md-path? (str metadata-dir "/manifest.json")))
+            (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/")
+            (ta-overlap? source stage) (not (= (digest-problem digest) "oci/ok"))
+            (< size 1024) (> size 67108864) (not (= (rem size 512) 0))
+            (not (md-regular? entry)) (not (= (ol-size entry 67108864) size))
+            (not (md-regular? meta)) (not (= (ol-size meta 67108864) size)) (not (= (ta-fs "D" stage "") "0")))
+      "flint-assets/input-refused"
+      (if (not (and (= (ta-fs "I" stage "") "1") (= (ta-fs "H" stage "700") "1")
+                    (= (ta-fs "M" (ta-parent stage) "") "1")
+                    (= (ta-fs "I" metadata-dir "") "1") (= (ta-fs "H" metadata-dir "700") "1")
+                    (= (ta-fs "M" stage "") "1")))
+        "flint-assets/staging-unknown"
+        (let [work (s2-work (s2-iv 8)) ok (ft-walk source stage size work)
+              after (typed-cap-call 35 :string :string (ol-frame "F" source ""))
+              actual (if ok (str "sha256:" (hex (s2-out work 8))) "")]
+          (if (and ok (= after meta) (= actual digest) (= (ta-fs "M" metadata-dir "") "1")
+                   (= (ta-fs "M" stage "") "1"))
+            "flint-assets/staged" "flint-assets/staging-unknown"))))))
+
+;; This checks the observed Kapitsa 0.2.26 file-list contract, not tensor
+;; contents, model provenance, other manifest fields, or loader compatibility.
+(defn- fk-file-name [id :i64] :string
+  (if (< id 6) (ft-name id) (case id 6 "model.safetensors" 7 "experts.safetensors" "")))
+(defn- fk-file-id [name :string] :i64
+  (loop [i 0] (if (= i 8) -1 (if (= name (fk-file-name i)) i (recur (+ i 1))))))
+(defn- fk-manifest-valid? [b :vector-i64 base-size :i64 experts-size :i64 metadata-sizes :vector-i64] :bool
+  (if (or (not (ol-read-ok? b)) (= (vector-count b) 0) (> (vector-count b) 16384)
+          (not (= (vector-count metadata-sizes) 6)) (not (json-valid? b))) false
+    (let [root (ol-root b) files (json-member b root "files")]
+      (and (= (json-kind b root) 1) (= (ol-text b root "name") "flint-ud-iq2_xxs")
+           (= (ol-text b root "kapitsa") "0.2.26") (= (ol-text b root "variant") "gguf IQ2_XXS")
+           (>= files 0) (= (json-kind b files) 2) (= (json-count b files) 8)
+           (loop [i 0 seen 0 total 0]
+             (if (= i 8) (and (= seen 255) (= (ol-int b root "total_bytes") total))
+               (let [item (json-element b files i) id (if (>= item 0) (fk-file-id (ol-text b item "path")) -1)
+                     size (if (>= item 0) (ol-int b item "size") -1)
+                     expected (cond (< id 0) -1 (< id 6) (vector-at metadata-sizes id)
+                                    (= id 6) base-size :else experts-size)]
+                 (and (>= item 0) (= (json-kind b item) 1) (= (json-count b item) 2)
+                      (>= id 0) (= (bit-and seen (i64-shift-left 1 id)) 0)
+                      (> expected 0) (= size expected)
+                      (recur (+ i 1) (bit-or seen (i64-shift-left 1 id)) (+ total size))))))))))
+(defn- fk-stage-manifest? [stage :string base-size :i64 experts-size :i64] :bool
+  (let [sizes (loop [i 0 out (vector-alloc 6)]
+                (if (= i 6) out
+                  (let [p (str stage "/" (ft-name i))
+                        meta (typed-cap-call 35 :string :string (ol-frame "O" p ""))
+                        n (if (and (md-regular? meta) (mp-mode? p "384" "0")) (ol-size meta 16777216) -1)]
+                    (recur (+ i 1) (vector-assoc! out i n)))))
+        path (str stage "/.kapitsa/manifest.json")
+        b (if (mp-mode? path "384" "0") (ma-read path 16384) (ol-failed))]
+    (fk-manifest-valid? b base-size experts-size sizes)))
+
+;; Count raw colons before JSON validation, whose duplicate-key checks can be
+;; quadratic. Colons inside strings count too: this is a conservative profile
+;; bound, not a general JSON or safetensors rule.
+(defn- fk-index-colons? [b :vector-i64] :bool
+  (loop [i 0 count 0]
+    (if (= i (vector-count b)) true
+      (let [next (if (= (vector-at b i) 58) (+ count 1) count)]
+        (if (> next 4100) false (recur (+ i 1) next))))))
+;; Restrict shard references and count for this observed Flint profile.
+;; This is not safetensors header/tensor validation or a loader grant.
+(defn- fk-index-valid? [b :vector-i64] :bool
+  (if (or (not (ol-read-ok? b)) (= (vector-count b) 0) (> (vector-count b) 1048576)
+          (not (fk-index-colons? b)) (not (json-valid? b))) false
+    (let [root (ol-root b) mapping (if (= (json-kind b root) 1) (json-member b root "weight_map") -1)]
+      (if (or (< mapping 0) (not (= (json-kind b mapping) 1))) false
+        (loop [i (jr-skip b (+ mapping 1)) seen 0 count 0]
+          (if (or (>= count 4096) (not (= (jr-at b i) 34))) false
+            (let [end (jr-skip-string b i) colon (jr-skip b end) value (jr-skip b (+ colon 1))
+                  shard (if (= (json-kind b value) 3) (json-string b value) "")
+                  kind (cond (= shard "model.safetensors") 1 (= shard "experts.safetensors") 2 :else 0)
+                  next (jr-skip b (jr-skip-value b value)) sep (jr-at b next)
+                  updated (bit-or seen kind)]
+              (if (or (= kind 0) (<= end (+ i 2))) false
+                (cond (= sep 125) (= updated 3)
+                      (= sep 44) (recur (jr-skip b (+ next 1)) updated (+ count 1))
+                      :else false)))))))))
+(defn- fk-stage-index? [stage :string] :bool
+  (fk-index-valid? (ma-read (str stage "/model.safetensors.index.json") 1048576)))
+
+;; Stage only, never publish or approve loading. Independent directory
+;; inventory, complete Kapitsa semantics, publication and recovery are absent.
+(defn model-flint-oci-stage-main [] :i64
+  (let [layout (md-arg 0) manifest (md-arg 1) manifest-size (md-decimal (md-arg 2))
+        base (md-arg 3) base-size (md-decimal (md-arg 4)) experts (md-arg 5) experts-size (md-decimal (md-arg 6))
+        assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9)
+        valid (and (= (md-arg 10) "") (md-path? layout) (md-path? stage)
+                   (not (ta-overlap? layout stage)) (>= size 1024) (<= size 67108864) (= (rem size 512) 0)
+                   (= (ta-fs "D" stage "") "0"))
+        checked (if valid (mf-check layout manifest manifest-size base base-size experts experts-size assets size false) "")
+        result (if (not (= checked "flint-artifact/descriptors-observed")) "flint-artifact/input-refused"
+                 (let [staged (ft-stage (ol-blob-path layout assets) stage assets size)]
+                   (if (not (= staged "flint-assets/staged")) "flint-artifact/staging-unknown"
+                     (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
+                              (tw-copy (ol-blob-path layout experts) (str stage "/experts.safetensors") experts experts-size)
+                              (fk-stage-manifest? stage base-size experts-size) (fk-stage-index? stage)
+                              (= (ta-fs "M" stage "") "1"))
+                       "flint-artifact/staged-file-list-verified" "flint-artifact/staging-unknown"))))
+        x (md-out result)]
+    (if (= result "flint-artifact/staged-file-list-verified") 0 1)))

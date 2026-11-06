@@ -73,7 +73,12 @@
     (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
       (string-substring r 5 (string-length r)) "")))
 (defn- ln-exists? [path :string] :bool (= (ln-fs "D" path "") "1"))
-(defn- ln-load [path :string] :string (if (ln-exists? path) (ln-fs "A" path "") ""))
+;; An unknown or oversized register must never become a fresh voter state.
+;; Compare the decoded bytes as well: malformed UTF-8 is not a valid register.
+(defn- ln-load [path :string] :string
+  (let [b (ln-read-bounded path 131072)
+        text (if (> (vector-count b) 0) (string-from-utf8 (bytes-from-vector-i64 b)) "")]
+    (if (and (> (vector-count b) 0) (ln-doc-equal? b (ln-bytes text))) text "")))
 ;; the parent directory of path ("/" for a top-level file)
 (defn- ln-dirname [path :string] :string
   (let [b (ln-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))]
@@ -82,12 +87,13 @@
 ;; fsync it, rename it over <path>, fsync the directory; 1 when every step
 ;; answered 1, else 0
 (defn- ln-store [path :string text :string] :i64
-  (let [tmp (string-concat path ".tmp")
-        w (ln-fs "B" tmp text)
-        f (if (and (not (= text "")) (= w text)) (ln-fs "M" tmp "") "0")
-        r (if (= f "1") (ln-fs "L" tmp path) "0")
-        d (if (= r "1") (ln-fs "M" (ln-dirname path) "") "0")]
-    (if (= d "1") 1 0)))
+  (if (> (string-byte-length text) 131072) 0
+    (let [tmp (string-concat path ".tmp")
+          w (ln-fs "B" tmp text)
+          f (if (and (not (= text "")) (= w text)) (ln-fs "M" tmp "") "0")
+          r (if (= f "1") (ln-fs "L" tmp path) "0")
+          d (if (= r "1") (ln-fs "M" (ln-dirname path) "") "0")]
+      (if (= d "1") 1 0))))
 
 ;; Explicit genesis for a new voter only. T is FS2's no-replace rename, so
 ;; even concurrent initializers cannot overwrite an existing register. This
@@ -142,6 +148,7 @@
 
 ;; text before the first newline; text after the first space ("" when none)
 (defn- ln-line [s :string] :string (let [k (string-index-of s "\n")] (if (< k 0) s (string-substring s 0 k))))
+(defn- ln-complete-line? [s :string] :bool (>= (string-index-of s "\n") 0))
 (defn- ln-rest [s :string] :string (let [k (string-index-of s " ")] (if (< k 0) "" (string-substring s (+ k 1) (string-length s)))))
 
 ;; ---------------------------------------------------------------------------
@@ -233,12 +240,25 @@
                 (let [en (json-member topo e "enabled")] (and (>= en 0) (= (json-kind topo en) 5)))
                 :else (recur (+ k 1))))))))
 
-;; no topology: any canonical value; else lease.cljk valid-value? against it
+;; The shape check is independent of membership and wall-clock freshness.
+;; It is also used by the read-only migration preflight; it is not a grant.
+(defn- ln-lease-shape? [value :string] :bool
+  (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node") class (ln-text v r "class")
+        slot (ln-num v r "slot") epoch (ln-num v r "epoch") until (ln-num v r "until")
+        revision (ln-num v r "revision")]
+    (and (json-valid? v) (json-canonical? v) (= (json-kind v r) 1) (= (json-count v r) 6)
+         (>= revision 0) (<= revision 9007199254740991)
+         (= value (lease-text node class slot epoch until revision))
+         (valid-value? node true class slot epoch until 9007199254740991))))
+
+;; Topology-free mode is diagnostic. In fleet mode only the exact canonical
+;; six-field lease is admitted; this is not a receiver-side fence.
 (defn- ln-member-ok? [topo :vector-i64 now :i64 value :string] :bool
   (if (= (vector-count topo) 0) true
     (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node")]
-      (valid-value? node (ln-enabled? topo node) (ln-text v r "class") (ln-num v r "slot")
-                    (ln-num v r "epoch") (ln-num v r "until") now))))
+      (and (ln-lease-shape? value)
+           (valid-value? node (ln-enabled? topo node) (ln-text v r "class") (ln-num v r "slot")
+                         (ln-num v r "epoch") (ln-num v r "until") now)))))
 
 ;; An absent, truncated or inconsistent durable register is not a fresh
 ;; voter. Reinitialization requires an independently authorized recovery.
@@ -252,6 +272,23 @@
            (and (ln-ballot-valid? at aid) (not (= av ""))
                 (>= (ballot-cmp pt pid at aid) 0)
                 (json-valid? (ln-bytes av)) (json-canonical? (ln-bytes av)))))))
+
+;; Never print the register or infer a new voter from an unreadable file.
+;; This reports shape compatibility only, not identity, provenance, freshness,
+;; quorum consistency, admission or permission to reset a register.
+(defn- ln-register-shape [st :string] :string
+  (cond (not (ln-state-ok? st)) "voter/state-unknown"
+        (= (ln-int (ln-field st 2)) 0) "voter/state-no-accepted-value"
+        (ln-lease-shape? (ln-undash (ln-field st 4))) "voter/state-shape-compatible"
+        :else "voter/state-shape-incompatible"))
+
+(defn- ln-inspect-register [] :i64
+  (let [path (ln-arg 1)
+        valid (and (> (string-length path) 1) (= (string-substring path 0 1) "/")
+                   (< (string-index-of path "..") 0) (< (string-index-of path "//") 0)
+                   (< (string-index-of path "_SEP") 0) (= (ln-arg 2) ""))
+        result (if valid (ln-register-shape (ln-load path)) "voter/state-unknown") x (ln-say result)]
+    (if (or (= result "voter/state-no-accepted-value") (= result "voter/state-shape-compatible")) 0 1)))
 
 ;; one request against the state in file; the new state is stored before the
 ;; reply is returned
@@ -273,33 +310,62 @@
           :else (ln-reply false st))))
 
 ;; one connection, or none within ms: 0 when one was answered, else 1
-(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string] :i64
+(defn- ln-topology-current? [path :string topo :vector-i64] :bool
+  (or (= path "") (= (arena-scope (ln-doc-state path topo)) 0)))
+
+(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string permitted :bool topology-path :string] :i64
   (arena-scope
     (let [c (ln-accept (str l " " ms))]
       (if (< (ln-int c) 1) 1
-        (let [raw (ln-line (ln-recv c true))
-              line (if (= token "") raw (ln-rest raw))
-              ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))]
-          (if (not ok)
-            (let [x (ln-say "voter refused unauthenticated") z (ln-write c)] 0)
-            (let [rep (ln-handle file line topo now)
-                  out (if (= token "") rep (str (ln-mac token (str "rep " line "\n" rep)) " " rep))
-                  w (ln-write (str c " " (hex (ln-bytes (string-concat out "\n")))))
-                  z (ln-write c)]
-              0)))))))
+        ;; Accept and receiving a request can both wait. A later change still
+        ;; requires a real fence, and a lost response remains unknown.
+        (if (not (and permitted (ln-topology-current? topology-path topo)))
+          (let [z (ln-write c)] 0)
+          (let [received (ln-recv c true)
+                raw (ln-line received)
+                line (if (= token "") raw (ln-rest raw))
+                ok (and (ln-complete-line? received)
+                        (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line)))))]
+            (if (not ok)
+              (let [x (ln-say "voter refused incomplete or unauthenticated") z (ln-write c)] 0)
+              (if (not (ln-topology-current? topology-path topo)) (let [z (ln-write c)] 0)
+                (let [rep (ln-handle file line topo now)
+                      current (ln-topology-current? topology-path topo)
+                      out (if (= token "") rep (str (ln-mac token (str "rep " line "\n" rep)) " " rep))
+                      w (if current (ln-write (str c " " (hex (ln-bytes (string-concat out "\n"))))) "")
+                      z (ln-write c)]
+                  0)))))))))
 
-(defn- ln-load-doc [path :string] :vector-i64
-  (let [r (typed-cap-call :fs/app-data :string :bytes (ln-frame "A" path "")) n (bytes-count r)]
-    (if (and (>= n 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
-             (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
-      (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))
+;; Topology validation caps documents at 262144 bytes. Check a no-follow
+;; regular-file size before requesting exactly that bounded range, and check
+;; the size again. The provider must enforce response bounds; the host must
+;; exclude path replacement and same-size concurrent writes.
+(defn- ln-bounded-size [path :string maximum :i64] :i64
+  (let [meta (ln-fs "O" path "") digits (ln-field meta 1) size (ln-int digits)]
+    (if (and (= (ln-field meta 3) "0") (<= (string-length digits) 6)
+             (> size 0) (<= size maximum)) size -1)))
 
-;; does the topology file still hold the bytes last seen (or is it gone)?
-(defn- ln-same-file? [path :string seen :vector-i64] :bool
-  (if (not (ln-exists? path)) true
-    (let [d (ln-load-doc path)]
-      (and (= (vector-count d) (vector-count seen))
-           (loop [i 0] (cond (= i (vector-count d)) true (= (vector-at d i) (vector-at seen i)) (recur (+ i 1)) :else false))))))
+(defn- ln-read-bounded [path :string maximum :i64] :vector-i64
+  (let [size (ln-bounded-size path maximum)]
+    (if (< size 1) (vector-alloc 0)
+      (let [r (typed-cap-call :fs/app-data :string :bytes (ln-frame "E" path (str "0:" size))) n (bytes-count r)]
+        (if (and (= n (+ size 5)) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+                 (= (bytes-at r 3) 50) (= (bytes-at r 4) 0) (= (ln-bounded-size path maximum) size))
+          (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))))
+
+(defn- ln-load-doc [path :string] :vector-i64 (ln-read-bounded path 262144))
+
+(defn- ln-doc-equal? [a :vector-i64 b :vector-i64] :bool
+  (and (= (vector-count a) (vector-count b))
+       (loop [i 0]
+         (if (= i (vector-count a)) true
+           (and (= (vector-at a i) (vector-at b i)) (recur (+ i 1)))))))
+
+;; 0 = exact match, 1 = changed, 2 = unavailable or unreadable. Empty
+;; documents cannot be valid topology; never treat a failed read as a match.
+(defn- ln-doc-state [path :string seen :vector-i64] :i64
+  (let [d (ln-load-doc path)]
+    (cond (= (vector-count d) 0) 2 (ln-doc-equal? d seen) 0 :else 1)))
 
 ;; a changed topology file, as replicated_topology accept!: adopt it (0) when it
 ;; verifies against the trust, advances the revision held and keeps every
@@ -312,22 +378,30 @@
     (if (= why "") (let [x (ln-say (str "voter topology " (topology-revision doc)))] 0)
       (let [x (ln-say (string-concat "voter kept " why))] 1))))
 
-;; serve until idle ms pass without a connection. Waiting in slices of 500 ms,
-;; a voter with a topology looks at its file after each empty slice and
-;; rotates when it changed. Only an adopted or newly seen document stays
-;; allocated; the comparison and the verification run in arena-scope.
+;; Check before accepting each connection and after empty wait slices. An
+;; unavailable or rejected topology closes requests without processing them.
+;; A change during an in-flight request is not an atomic revocation fence.
+;; The path-empty mode is the existing topology-free diagnostic mode.
 (defn- ln-voter [addr :string file :string idle :i64 topo :vector-i64 now :i64 live-clock :bool
                  path :string trust :string threshold :i64 token :string] :i64
   (let [l (ln-listen (ln-addr addr))]
-    (loop [n 0 left idle cur topo seen topo]
-      (let [r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token)]
-        (cond (= r 0) (recur (+ n 1) idle cur seen)
-              (<= left 500) n
-              (or (= path "") (= (arena-scope (if (ln-same-file? path seen) 0 1)) 0)) (recur n (- left 500) cur seen)
-              :else (let [d (ln-load-doc path)]
-                      (if (= (arena-scope (ln-rotate d cur trust threshold)) 0)
-                        (recur n (- left 500) d d)
-                        (recur n (- left 500) cur d))))))))
+    (loop [n 0 left idle cur topo seen topo seen-ok true]
+      (let [state (if (= path "") 0 (arena-scope (ln-doc-state path seen)))]
+        (if (= state 1)
+          (let [d (ln-load-doc path)]
+            (cond (= (vector-count d) 0)
+                    (let [r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token false path)]
+                      (if (and (not (= r 0)) (<= left 500)) n
+                        (recur (if (= r 0) (+ n 1) n) (if (= r 0) idle (- left 500)) cur seen false)))
+                  (ln-doc-equal? d cur) (recur n left cur d true)
+                  (= (arena-scope (ln-rotate d cur trust threshold)) 0) (recur n left d d true)
+                  :else (recur n left cur d false)))
+          (let [permitted (or (= path "") (and (= state 0) seen-ok))
+                r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token permitted path)
+                next-n (if (= r 0) (+ n 1) n)
+                next-left (if (= r 0) idle (- left 500))]
+            (if (and (not (= r 0)) (<= left 500)) n
+              (recur next-n next-left cur seen seen-ok))))))))
 
 ;; the voter's topology: none, or the verified document; "" and the reason
 ;; when it does not verify. A token file that is named but missing or short
@@ -458,6 +532,7 @@
   (loop [k 5] (cond (= (ln-arg k) "") "" (ln-tok-arg? (ln-arg k)) (string-substring (ln-arg k) 6 (string-length (ln-arg k))) :else (recur (+ k 1)))))
 
 (defn lease-node-main [] :i64
+  (if (= (ln-arg 0) "inspect-register") (ln-inspect-register)
   (if (= (ln-arg 0) "init-fresh")
     (let [result (ln-init-fresh (ln-arg 1)) x (ln-say result)]
       (if (= result "voter/init-created") 0 1))
@@ -465,4 +540,4 @@
     (ln-voter-main)
     (let [tp (ln-arg-token-path) token (ln-token tp)]
       (if (and (not (= tp "")) (= token "")) (let [x (ln-say "proposer token/missing-or-short")] 2)
-        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token))))))
+        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token)))))))
