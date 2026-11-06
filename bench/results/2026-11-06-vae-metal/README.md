@@ -22,5 +22,5 @@ gate passed
 ## What it does not show
 - Random weights: no trained VAE was read; the real `sdxl_vae.safetensors` may name or store tensors differently (the old `first_stage_model.decoder.*` / `.mid.attn_1.q` 1x1-conv layout is used here; some checkpoints store the attention projections as Linear `[C, C]`, which would need a reshape).
 - No scaling of the latent by 0.13025 (done by the caller in ComfyUI), no clamp/rescale of the output to [0, 1], no encoder, no tiled decode (ComfyUI falls back to tiling when memory is short; this program needs the whole image's activations at once).
-- No gradient of speed work: the convolution and GroupNorm kernels are the general ones; the single-head attention reloads Q per key block (no register-resident Q) and was not tuned; the LK must be a multiple of 32.
+- No speed tuning: the convolution and GroupNorm kernels are the general ones; the single-head attention reloads Q per key block (no register-resident Q) and was not tuned; the LK must be a multiple of 32.
 - Four mutants (attention scale 1, Upsample reading the wrong column, residual dropped in the identity block, SiLU dropped) are detected on the small config.
