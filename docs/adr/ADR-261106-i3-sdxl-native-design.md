@@ -66,7 +66,7 @@ State read 2026-11-06 from amu `origin/main` (`f6c6ea215`) and JUN-804.
 | Threads | not started (S6) | JUN-804 |
 | GPU: one hand-written MSL kernel through dyld | merged (S7 slice 1, ADR 0405) | amu#1822 |
 | GPU: Amu KIR v2 -> MSL, batching a step's dispatches | not started (rest of S7) | JUN-804 |
-| GPU: simdgroup *matrix* multiply (f16 MMA) | **GEMM only, merged** (stage M slice 1: bit-exact against an integer twin, 3.1 to 3.6 TMAC/s on an M1 Max under load). Implicit-GEMM convolution, fused attention, per-UNet-call batching and KIR v2 emission: not started | this ADR, stage M; `bench/kernels/gemm-metal/` |
+| GPU: simdgroup *matrix* multiply (f16 MMA) | **GEMM and the stride-1 3 x 3 convolution (implicit GEMM), merged** (stage M slices 1 and 2: bit-exact against integer twins, 3.1 to 3.6 TMAC/s for GEMM and 1.1 to 1.9 TMAC/s for convolution on an M1 Max under load). Fused attention, convolution epilogues, the stride-2 / 1 x 1 / 4-channel cases, per-UNet-call batching and KIR v2 emission: not started | this ADR, stage M; `bench/kernels/gemm-metal/`, `bench/kernels/conv-metal/` |
 | Kernels | conv, GroupNorm, LayerNorm, attention, GEGLU, upsample, timestep embedding, matmul, ResBlock, SpatialTransformer: done on CPU (I1/I2) | `bench/kernels/` |
 | CLIP BPE tokenizer | not written in Kotoba (comfyui-clj has one in `.cljk`, as an oracle) | I3b |
 | Label-embedding MLP, input/output block wiring with skip concat, middle block, sampler, tiled VAE, PNG writer | not written | I3c-I3e |
@@ -111,8 +111,10 @@ scheduled; the stages are independent enough that M and I3a-I3b can proceed in p
   sufficient *for the GEMM share*. Not yet measured, and what decides whether I3f takes minutes or an hour: convolution as
   implicit GEMM, attention (a softmax between two GEMMs), norms and activations, and the roughly 275 us command-buffer
   floor of each unbatched dispatch. The slice uses integer-valued f16 data, so f16 rounding on model data, f16 storage as
-  a language type, and the 16 GiB M4 minis are untouched. Next in M: implicit-GEMM convolution, a fused attention kernel,
-  batching a whole UNet call, emission from KIR v2.
+  a language type, and the 16 GiB M4 minis are untouched. Slice 2 is merged too (amended 2026-11-06): the 3 x 3 convolution as an implicit GEMM, bit-exact on five shapes, 1.1 to 1.9 TMAC/s
+  ([record](../../bench/results/2026-11-06-conv-metal/README.md)); only the stride-1, multiple-of-32/64-channel case. Next in M: a fused
+  attention kernel, convolution epilogues (bias, SiLU, residual) and the stride-2 / 1 x 1 / 4-channel cases, batching a whole UNet
+  call, emission from KIR v2.
 
 ### Still open for the owner
 
