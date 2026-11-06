@@ -871,6 +871,15 @@ kernel void cat_ctx(device const float *L [[buffer(0)]], device const float *G [
   uint r = i / 2048u; uint c = i % 2048u;
   O[i] = (r < 77u) ? ((c < 768u) ? L[r * 768u + c] : G[r * 1280u + (c - 768u)]) : 0.0f;
 }
+// prompt weighting (ComfyUI encode_token_weights): z = (z - z_empty) * w + z_empty per token row, w a fixed point int (65536 = 1.0, a row with exactly 1.0 is left alone)
+kernel void blend_l(device float *Z [[buffer(0)]], device const float *E [[buffer(1)]], device const int *W [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint r = i / 768u; if (r >= 77u) return; int wi = W[r]; if (wi == 65536) return;
+  float w = float(wi) / 65536.0f; Z[i] = (Z[i] - E[i]) * w + E[i];
+}
+kernel void blend_g(device float *Z [[buffer(0)]], device const float *E [[buffer(1)]], device const int *W [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint r = i / 1280u; if (r >= 77u) return; int wi = W[r]; if (wi == 65536) return;
+  float w = float(wi) / 65536.0f; Z[i] = (Z[i] - E[i]) * w + E[i];
+}
 // SDXL's adm vector: the pooled 1280 floats, then Timestep(256) embeddings of [height, width, crop_h, crop_w, target_height, target_width] (cos half, sin half)
 kernel void adm(device const float *Pool [[buffer(0)]], device const float *Sz [[buffer(1)]], device float *O [[buffer(2)]], uint i [[thread_position_in_grid]]) {
   if (i < 1280u) { O[i] = Pool[i]; return; }
@@ -1904,6 +1913,158 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         e (vector-assoc! OFF nsb (vector-at r 0))]
     r))
 
+;; ---- prompt weighting (ComfyUI's escape_important / parse_parentheses / token_weights), weights as fixed point with 16 fractional bits ----
+;; A prompt is cut into segments (start, end, weight): the pieces between parentheses and inside them, nested as in ComfyUI: "(x)" multiplies the
+;; weight by 1.1, "(x:1.3)" sets it to 1.3. "\\(" and "\\)" are ordinary characters. Each segment is tokenized on its own (words never join across a segment).
+(defn- wsent [] :i64 -4611686018427387904)
+(defn- is-pyspace [b :i64] :bool (or (= b 32) (or (within b 9 13) (within b 28 31))))
+;; the ASCII letters of a trimmed byte range equal to the lower-case word s (nan, inf, infinity), ignoring a sign
+(defn- word-eq [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :i64 e :i64 w :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 w))
+        n (vector-count v)]
+    (if (= (- e s) n)
+      (loop [k 0] (if (= k n) 1 (let [b (byte-at f (+ p (+ s k)))
+                                      l (if (within b 65 90) (+ b 32) b)]
+                                  (if (= l (vector-at v k)) (recur (+ k 1)) 0))))
+      0)))
+;; Python's float() of the bytes [s, e), as a fixed-point weight; wsent when it is not a number (ComfyUI then keeps 1.1 x the weight and the text)
+;; and a refusal for the forms this program does not read (nan, inf, underscores, more than 12 digits, huge exponents)
+(defn- parse-fp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s0 :i64 e0 :i64] :i64
+  (let [s (loop [i s0] (if (and (< i e0) (is-pyspace (byte-at f (+ p i)))) (recur (+ i 1)) i))
+        e (loop [i e0] (if (and (> i s) (is-pyspace (byte-at f (+ p (- i 1))))) (recur (- i 1)) i))
+        neg (if (and (< s e) (= (byte-at f (+ p s)) 45)) 1 0)
+        s1 (if (and (< s e) (or (= (byte-at f (+ p s)) 45) (= (byte-at f (+ p s)) 43))) (+ s 1) s)
+        spec (if (or (= (word-eq f p s1 e "nan") 1) (or (= (word-eq f p s1 e "inf") 1) (= (word-eq f p s1 e "infinity") 1))) 1 0)
+        und (if (and (> (loop [i s a 0] (if (>= i e) a (recur (+ i 1) (if (= (byte-at f (+ p i)) 95) 1 a)))) 0)
+                     (= (loop [i s a 1] (if (>= i e) a (let [b (byte-at f (+ p i))] (recur (+ i 1) (if (or (within b 48 57) (or (= b 95) (or (= b 46) (or (= b 101) (or (= b 69) (or (= b 43) (= b 45))))))) a 0))))) 1))
+              1 0)
+        u0 (if (or (= spec 1) (= und 1)) (refuse-text f R "refused: a weight written as nan, inf or with underscores\n") 0)
+        ;; digits before the point
+        ie (loop [i s1] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        has-dot (if (and (< ie e) (= (byte-at f (+ p ie)) 46)) 1 0)
+        fs (if (= has-dot 1) (+ ie 1) ie)
+        fe (loop [i fs] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        nd (+ (- ie s1) (- fe fs))
+        has-exp (if (and (< fe e) (or (= (byte-at f (+ p fe)) 101) (= (byte-at f (+ p fe)) 69))) 1 0)
+        xs (if (= has-exp 1) (+ fe 1) fe)
+        xneg (if (and (= has-exp 1) (and (< xs e) (= (byte-at f (+ p xs)) 45))) 1 0)
+        xd0 (if (and (= has-exp 1) (and (< xs e) (or (= (byte-at f (+ p xs)) 45) (= (byte-at f (+ p xs)) 43)))) (+ xs 1) xs)
+        xe (loop [i xd0] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        ok (if (and (> nd 0) (and (= xe e) (or (= has-exp 0) (> xe xd0)))) 1 0)]
+    (if (= ok 0) (wsent)
+      (let [nint (- ie s1)
+            nfrac (- fe fs)
+            ;; the mantissa digits as one integer (at most 12 of them)
+            u1 (if (> nd 12) (refuse-text f R "refused: a weight with more than 12 digits\n") 0)
+            m (loop [i s1 acc 0]
+                (if (>= i fe) acc
+                  (let [b (byte-at f (+ p i))]
+                    (if (within b 48 57) (recur (+ i 1) (+ (* acc 10) (- b 48))) (recur (+ i 1) acc)))))
+            xv (loop [i xd0 acc 0] (if (>= i xe) acc (recur (+ i 1) (+ (* acc 10) (- (byte-at f (+ p i)) 48)))))
+            u2 (if (> xv 30) (refuse-text f R "refused: a weight with a huge exponent\n") 0)
+            dexp (- (if (= xneg 1) (- 0 xv) xv) nfrac)
+            val (if (>= dexp 0)
+                  (let [pw (loop [k 0 a 1] (if (= k dexp) a (recur (+ k 1) (* a 10))))
+                        u3 (if (> (* m pw) 1000000) (refuse-text f R "refused: a weight above 1,000,000\n") 0)]
+                    (* (* m pw) 65536))
+                  (if (< dexp -18) 0
+                    (let [pw (loop [k 0 a 1] (if (= k (- 0 dexp)) a (recur (+ k 1) (* a 10))))]
+                      (quot (+ (* m 65536) (quot pw 2)) pw))))]
+        (if (= neg 1) (- 0 val) val)))))
+
+;; a weight times 1.1
+(defn- fp-mul11 [w :i64] :i64 (quot (+ (* w 11) (if (>= w 0) 5 -5)) 10))
+
+;; ComfyUI's parse_parentheses on [s, e): pieces (start, end, is_paren) into PCS, returns the count
+(defn- find-pieces [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s :i64 e :i64 PCS :vector-i64] :i64
+  (let [r (loop [i s cur -1 level 0 lastreal 0 n 0]
+            (if (>= i e)
+              (if (>= cur 0)
+                (let [u (vector-assoc! PCS (* n 3) cur) v (vector-assoc! PCS (+ (* n 3) 1) e)
+                      w (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (- e cur) 2) (and (= (byte-at f (+ p cur)) 40) (= lastreal 1))) 1 0))]
+                  (+ n 1))
+                n)
+              (let [b (byte-at f (+ p i))
+                    nb (if (< (+ i 1) e) (byte-at f (+ p (+ i 1))) 0)
+                    esc (if (and (= b 92) (or (= nb 40) (= nb 41))) 1 0)
+                    w (if (= esc 1) 2 1)
+                    u0 (if (> (+ n 2) 80) (refuse-text f R "refused: more than 80 weighted pieces in a prompt\n") 0)]
+                (cond
+                  (and (= esc 0) (= b 40))
+                  (if (= level 0)
+                    (if (>= cur 0)
+                      (let [u (vector-assoc! PCS (* n 3) cur) v (vector-assoc! PCS (+ (* n 3) 1) i)
+                            x (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (- i cur) 2) (and (= (byte-at f (+ p cur)) 40) (= lastreal 1))) 1 0))]
+                        (recur (+ i 1) i 1 0 (+ n 1)))
+                      (recur (+ i 1) i 1 0 n))
+                    (recur (+ i 1) (if (>= cur 0) cur i) (+ level 1) 0 n))
+                  (and (= esc 0) (= b 41))
+                  (if (= (- level 1) 0)
+                    (let [c0 (if (>= cur 0) cur i)
+                          u (vector-assoc! PCS (* n 3) c0) v (vector-assoc! PCS (+ (* n 3) 1) (+ i 1))
+                          x (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (+ (- i c0) 1) 2) (= (byte-at f (+ p c0)) 40)) 1 0))]
+                      (recur (+ i 1) -1 0 1 (+ n 1)))
+                    (recur (+ i 1) (if (>= cur 0) cur i) (- level 1) 1 n))
+                  :else (recur (+ i w) (if (>= cur 0) cur i) level 0 n)))))]
+    r))
+
+;; the segments (start, end, weight) of the prompt [s, e), in order, into SEG; STK and PCS are scratch; returns the count
+(defn- segments [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s :i64 e :i64 SEG :vector-i64 STK :vector-i64 PCS :vector-i64] :i64
+  (if (= 1 0)
+    (let [a (vector-assoc! SEG 0 s) b (vector-assoc! SEG 1 e) c (vector-assoc! SEG 2 65536)] 1)
+  (let [u (vector-assoc! STK 0 s) v (vector-assoc! STK 1 e) w (vector-assoc! STK 2 65536) x (vector-assoc! STK 3 0)]
+    (loop [sp 1 n 0]
+      (if (= sp 0) n
+        (let [t (* (- sp 1) 4)
+              ts (vector-at STK t) te (vector-at STK (+ t 1)) tw (vector-at STK (+ t 2)) tk (vector-at STK (+ t 3))]
+          (if (= tk 1)
+            ;; an emit entry: the segment itself
+            (let [a (vector-assoc! SEG (* n 3) ts) b (vector-assoc! SEG (+ (* n 3) 1) te) c (vector-assoc! SEG (+ (* n 3) 2) tw)
+                  u0 (if (>= n 200) (refuse-text f R "refused: more than 200 segments in a prompt\n") 0)]
+              (recur (- sp 1) (+ n 1)))
+            ;; a parse entry: cut it into pieces and push them back to front
+            (let [np (find-pieces f R p ts te PCS)
+                  sp2 (loop [k (- np 1) q (- sp 1)]
+                        (if (< k 0) q
+                          (let [ps (vector-at PCS (* k 3)) pe (vector-at PCS (+ (* k 3) 1)) pp (vector-at PCS (+ (* k 3) 2))
+                                u1 (if (>= q 90) (refuse-text f R "refused: prompt parentheses nested too deeply\n") 0)]
+                            (if (= pp 1)
+                              (let [is (+ ps 1) ie (- pe 1)
+                                    colon (loop [i (- ie 1)] (if (< i is) -1 (if (= (byte-at f (+ p i)) 58) i (recur (- i 1)))))
+                                    fp (if (> (- colon is) 0) (parse-fp f R p (+ colon 1) ie) (wsent))
+                                    w2 (if (= fp (wsent)) (fp-mul11 tw) fp)
+                                    e2 (if (= fp (wsent)) ie colon)
+                                    a (vector-assoc! STK (* q 4) is) b (vector-assoc! STK (+ (* q 4) 1) e2)
+                                    c (vector-assoc! STK (+ (* q 4) 2) w2) d (vector-assoc! STK (+ (* q 4) 3) 0)]
+                                (recur (- k 1) (+ q 1)))
+                              (let [a (vector-assoc! STK (* q 4) ps) b (vector-assoc! STK (+ (* q 4) 1) pe)
+                                    c (vector-assoc! STK (+ (* q 4) 2) tw) d (vector-assoc! STK (+ (* q 4) 3) 1)]
+                                (recur (- k 1) (+ q 1)))))))]
+              (recur sp2 n)))))))))
+
+;; the code points of the bytes [s, e) (with "\\(" and "\\)" as plain parentheses) into CP / CL / WT from index k, lower-cased, classified,
+;; NFC-composed, special tokens marked; then one boundary entry (class 0) so that nothing joins across a segment; returns the new k
+(defn- decode-seg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 s :i64 e :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 k0 :i64 w :i64] :i64
+  (let [k (loop [q s k k0]
+            (if (>= q e) k
+              (let [b0 (byte-at f (+ pbuf q))
+                    nb (if (< (+ q 1) e) (byte-at f (+ pbuf (+ q 1))) 0)
+                    esc (if (and (= 1 1) (and (= b0 92) (or (= nb 40) (= nb 41)))) 1 0)
+                    d (if (= esc 1) (+ (* nb 8) 2) (utf8-at f R pbuf q e))
+                    sp (if (= esc 1) 0 (special-at f pbuf q e))
+                    c (if (> sp 0) (+ 2097152 sp) (lcp (i64-shift-right d 3)))
+                    u0 (if (>= k 8190) (refuse-text f R "refused: a prompt line longer than 8190 characters\n") 0)
+                    m (if (or (within c 768 879) (within c 12441 12442)) 1 0)
+                    pc (if (and (= m 1) (> k 0)) (nfc-find (vector-at CP (- k 1)) c) -1)
+                    u2 (if (and (= m 1) (< pc 0)) (refuse-text f R "refused: a combining mark that does not compose with the character before it\n") 0)
+                    cl (if (> sp 0) 5 (if (= m 1) 1 (cls c)))
+                    u1 (if (= cl 4) (refuse-text f R "refused: a character outside the supported set (ASCII, Latin-1, Latin Extended-A, CJK, kana, Hangul, fullwidth forms, common symbols and emoji)\n") 0)
+                    k2 (if (= m 1) (- k 1) k)
+                    a (vector-assoc! CP k2 (if (= m 1) pc c)) b (vector-assoc! CL k2 cl) x (vector-assoc! WT k2 w)]
+                (recur (+ q (if (> sp 0) (if (= sp 1) 15 13) (bit-and d 7))) (+ k2 1)))))
+        a (vector-assoc! CP k 32) b (vector-assoc! CL k 0) x (vector-assoc! WT k 0)]
+    (+ k 1)))
+
 (defn- tok-init! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 vpath :string mpath :string VT :vector-i64 PT :vector-i64 arena :i64 st :vector-i64] :i64
   (let [sz (vector-alloc 1)
         ttmp (cc f (vector-at R 3) 4096 0 0 0 0)
@@ -1917,7 +2078,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
 
 ;; the CLIP tokenizer (byte-level BPE; UTF-8 prompts within the supported set, see cls) on the prompt file at path -> 77 ids (BOS, tokens, EOS, then padding: the end token, or 0 after the first end
 ;; token when padzero = 1, ComfyUI's rule for the bigG tower) written as uint32 into the buffer ids
-(defn- tokenize! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 PT :vector-i64 arena :i64 path :string ids :i64 padzero :i64] :i64
+(defn- tokenize! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 PT :vector-i64 arena :i64 path :string ids :i64 padzero :i64 wout :i64] :i64
   (let [sz (vector-alloc 1)
         pbuf (slurp f R path sz)
         plen (vector-at sz 0)
@@ -1925,38 +2086,52 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         bos (vt-find f VT arena (cstr f (vector-at R 3) "<|startoftext|>") 15)
         eos (vt-find f VT arena (cstr f (vector-at R 3) "<|endoftext|>") 13)
         SS (zeros 512) SE (zeros 512) SI (zeros 512)
-        OUT (zeros 4096)
+        OUT (zeros 4096) OUTW (zeros 4096)
+        SEG (zeros 640) STK (zeros 400) PCS (zeros 252) WT (zeros 8192)
         le (loop [q 0] (if (or (>= q plen) (= (byte-at f (+ pbuf q)) 10)) q (recur (+ q 1))))
         CP (zeros 8192) CL (zeros 8192) OFF (zeros 520)
         tmpw (cc f (vector-at R 3) 1024 0 0 0 0)
-        ncp (loop [q 0 k 0]
-              (if (>= q le) k
-                (let [d (utf8-at f R pbuf q le)
-                      sp (special-at f pbuf q le)
-                            c (if (> sp 0) (+ 2097152 sp) (lcp (i64-shift-right d 3)))
-                      u0 (if (>= k 8192) (refuse-text f R "refused: a prompt line longer than 8192 characters\n") 0)
-                      m (if (or (within c 768 879) (within c 12441 12442)) 1 0)
-                      pc (if (and (= m 1) (> k 0)) (nfc-find (vector-at CP (- k 1)) c) -1)
-                      u2 (if (and (= m 1) (< pc 0)) (refuse-text f R "refused: a combining mark that does not compose with the character before it\n") 0)
-                      cl (if (> sp 0) 5 (if (= m 1) 1 (cls c)))
-                      u1 (if (= cl 4) (refuse-text f R "refused: a character outside the supported set (ASCII, Latin-1, Latin Extended-A, CJK, kana, Hangul, fullwidth forms, common symbols and emoji)\n") 0)
-                      k2 (if (= m 1) (- k 1) k)
-                      a (vector-assoc! CP k2 (if (= m 1) pc c)) b (vector-assoc! CL k2 cl)]
-                  (recur (+ q (if (> sp 0) (if (= sp 1) 15 13) (bit-and d 7))) (+ k2 1)))))
+        nseg (segments f R pbuf 0 le SEG STK PCS)
+        ncp (loop [g 0 k 0]
+              (if (= g nseg) k
+                (recur (+ g 1) (decode-seg f R pbuf (vector-at SEG (* g 3)) (vector-at SEG (+ (* g 3) 1)) CP CL WT k (vector-at SEG (+ (* g 3) 2))))))
         walk (loop [i 0]
                (if (>= i ncp) 0
                  (if (= (vector-at CL i) 0) (recur (+ i 1))
                    (if (= (vector-at CL i) 5)
-                     (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (if (= (vector-at CP i) 2097153) bos eos)) v (vector-assoc! OUT 0 (+ cc 1))] (recur (+ i 1)))
-                   (let [n (token-len CP CL i ncp)
-                         r (word-symbols f R CP i n wbuf tmpw OFF)
-                         b2 (bpe-word f R VT arena PT wbuf (vector-at r 0) (vector-at r 1) OFF SS SE SI OUT)]
-                     (recur (+ i n)))))))
+                     (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (if (= (vector-at CP i) 2097153) bos eos))
+                           ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) v (vector-assoc! OUT 0 (+ cc 1))]
+                       (recur (+ i 1)))
+                     (let [n (token-len CP CL i ncp)
+                           r (word-symbols f R CP i n wbuf tmpw OFF)
+                           c0 (vector-at OUT 0)
+                           b2 (bpe-word f R VT arena PT wbuf (vector-at r 0) (vector-at r 1) OFF SS SE SI OUT)
+                           c1 (vector-at OUT 0)
+                           ws (loop [j c0] (if (>= j c1) 0 (let [x (vector-assoc! OUTW (+ 1 j) (vector-at WT i))] (recur (+ j 1)))))]
+                       (recur (+ i n)))))))
         cnt (vector-at OUT 0)
         keep (if (> cnt 75) 75 cnt)]
     (loop [k 0]
       (if (= k 77) 0
         (let [id (if (= k 0) bos (if (<= k keep) (vector-at OUT k) (if (and (= padzero 1) (> k (+ keep 1))) 0 eos)))
+              u (poke8 f (+ (contents f R ids) (* k 4)) (bit-and id 255))
+              u8 (poke8 f (+ (contents f R ids) (+ (* k 4) 1)) (bit-and (i64-shift-right id 8) 255))
+              u9 (poke8 f (+ (contents f R ids) (+ (* k 4) 2)) 0)
+              u10 (poke8 f (+ (contents f R ids) (+ (* k 4) 3)) 0)
+              wv (if (and (>= k 1) (<= k keep)) (vector-at OUTW k) 65536)
+              w0 (poke8 f (+ (contents f R wout) (* k 4)) (bit-and wv 255))
+              w1 (poke8 f (+ (contents f R wout) (+ (* k 4) 1)) (bit-and (i64-shift-right wv 8) 255))
+              w2 (poke8 f (+ (contents f R wout) (+ (* k 4) 2)) (bit-and (i64-shift-right wv 16) 255))
+              w3 (poke8 f (+ (contents f R wout) (+ (* k 4) 3)) (bit-and (i64-shift-right wv 24) 255))]
+          (recur (+ k 1)))))))
+
+;; the ids of an empty prompt: start, end, then the padding (the end token for CLIP-L, 0 for the bigG tower), as ComfyUI's gen_empty_tokens
+(defn- empty-ids! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 arena :i64 ids :i64 padzero :i64] :i64
+  (let [bos (vt-find f VT arena (cstr f (vector-at R 3) "<|startoftext|>") 15)
+        eos (vt-find f VT arena (cstr f (vector-at R 3) "<|endoftext|>") 13)]
+    (loop [k 0]
+      (if (= k 77) 0
+        (let [id (if (= k 0) bos (if (= k 1) eos (if (= padzero 1) 0 eos)))
               u (poke8 f (+ (contents f R ids) (* k 4)) (bit-and id 255))
               u8 (poke8 f (+ (contents f R ids) (+ (* k 4) 1)) (bit-and (i64-shift-right id 8) 255))
               u9 (poke8 f (+ (contents f R ids) (+ (* k 4) 2)) 0)
@@ -2203,6 +2378,45 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         trap (if (= bad 0) 0 (vector-at [0] 1))]
     st0))
 
+(defn- alloc-w! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 VT :vector-i64 arena :i64] :vector-i64
+  (let [wb (vector-i64 (fbuf f R S 128) (fbuf f R S 128) (fbuf f R S 128) (fbuf f R S 128) (fbuf f R S (* 128 768)) (fbuf f R S (* 128 1280)))
+        e1 (empty-ids! f R VT arena (vector-at wb 2) 0)
+        e2 (empty-ids! f R VT arena (vector-at wb 3) 1)]
+    wb))
+
+;; the runs of prompt weighting after the two prompts' towers: the empty prompt through both towers, its outputs, the blends
+(defn- run-weights! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 queue :i64 S :vector-i64 mOu :i64 mIc :i64 mTL :i64 mTG :i64 wr :vector-i64 iP2 :i64] :i64
+  (let [a (run-range f R queue S mOu (vector-at wr 0))
+        b (run-range f R queue S mIc mTL)
+        c (run-range f R queue S mTL mTG)
+        d (run-range f R queue S (vector-at wr 0) (vector-at wr 1))
+        e (run-range f R queue S (vector-at wr 1) (vector-at wr 2))
+        g (run-range f R queue S (vector-at wr 2) iP2)]
+    0))
+
+;; both towers' token ids of the prompt at path (and the per-position weights into wout)
+(defn- tokenize2! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 PT :vector-i64 arena :i64 path :string idl :i64 idg :i64 wout :i64] :i64
+  (let [a (tokenize! f R VT PT arena path idl 0 wout)
+        b (tokenize! f R VT PT arena path idg 1 wout)]
+    0))
+
+;; the recorded dispatches of prompt weighting, after the two prompts' towers have run: the empty prompt's ids into the towers, its outputs kept
+;; in WB[4], WB[5], and the four blends of the cond / uncond L and G outputs; returns the marks (after the ids, after the outputs, after the blends)
+(defn- weights-rec! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 WB :vector-i64 idl :i64 idg :i64 penL :i64 penG :i64
+                     lcx :i64 gc :i64 lu :i64 gu :i64] :vector-i64
+  (let [ie1 (emit! S (vector-i64 (vector-at WB 2) idl) (vector-i64 0 0) 18 0 78 1 64)
+        ie2 (emit! S (vector-i64 (vector-at WB 3) idg) (vector-i64 0 0) 18 0 78 1 64)
+        mIe (vector-at S 1)
+        oe1 (emit! S (vector-i64 penL (vector-at WB 4)) (vector-i64 0 0) 18 0 (* 128 768) 1 64)
+        oe2 (emit! S (vector-i64 penG (vector-at WB 5)) (vector-i64 0 0) 18 0 (* 128 1280) 1 64)
+        mOe (vector-at S 1)
+        b1 (emit! S (vector-i64 lcx (vector-at WB 4) (vector-at WB 0)) (vector-i64 0 0 0) 44 0 (* 128 768) 1 64)
+        b2 (emit! S (vector-i64 gc (vector-at WB 5) (vector-at WB 0)) (vector-i64 0 0 0) 45 0 (* 128 1280) 1 64)
+        b3 (emit! S (vector-i64 lu (vector-at WB 4) (vector-at WB 1)) (vector-i64 0 0 0) 44 0 (* 128 768) 1 64)
+        b4 (emit! S (vector-i64 gu (vector-at WB 5) (vector-at WB 1)) (vector-i64 0 0 0) 45 0 (* 128 1280) 1 64)
+        mBw (vector-at S 1)]
+    (vector-i64 mIe mOe mBw)))
+
 (defn main [] :i64
   (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
         dlopen (sym f "dlopen")
@@ -2221,11 +2435,11 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         S (zeros 152000)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 44) 0
+             (if (= i 46) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
                           (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
-                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" (if (= i 32) "cvt32h_t" (if (= i 33) "cph" (if (= i 34) "cph_t" (if (= i 35) "h2f" (if (= i 36) "amax_part" (if (= i 37) "amax_fin" (if (= i 38) "cvfh_sc" (if (= i 39) "upsample_hs" (if (= i 40) "axpb" (if (= i 41) "gn_psum" (if (= i 42) "gn_fin" "gn_apply")))))))))))))))))))))))))))))))))))))))))))
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" (if (= i 32) "cvt32h_t" (if (= i 33) "cph" (if (= i 34) "cph_t" (if (= i 35) "h2f" (if (= i 36) "amax_part" (if (= i 37) "amax_fin" (if (= i 38) "cvfh_sc" (if (= i 39) "upsample_hs" (if (= i 40) "axpb" (if (= i 41) "gn_psum" (if (= i 42) "gn_fin" (if (= i 43) "gn_apply" (if (= i 44) "blend_l" "blend_g")))))))))))))))))))))))))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
@@ -2277,10 +2491,9 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         VT (zeros (* (hsize) 3)) PT (zeros (* (psize) 2)) stt (zeros 1)
         tarena (cc f (vector-at R 3) 4194304 0 0 0 0)
         tki (tok-init! f R "@VOCAB@" "@MERGES@" VT PT tarena stt)
-        idlc (fbuf f R S 128) tk1 (tokenize! f R VT PT tarena "@PROMPTC@" idlc 0)
-        idgc (fbuf f R S 128) tk2 (tokenize! f R VT PT tarena "@PROMPTC@" idgc 1)
-        idlu (fbuf f R S 128) tk3 (tokenize! f R VT PT tarena "@PROMPTU@" idlu 0)
-        idgu (fbuf f R S 128) tk4 (tokenize! f R VT PT tarena "@PROMPTU@" idgu 1)
+        WB (alloc-w! f R S VT tarena)
+        idlc (fbuf f R S 128) idgc (fbuf f R S 128) tk1 (tokenize2! f R VT PT tarena "@PROMPTC@" idlc idgc (vector-at WB 0))
+        idlu (fbuf f R S 128) idgu (fbuf f R S 128) tk3 (tokenize2! f R VT PT tarena "@PROMPTU@" idlu idgu (vector-at WB 1))
         idl (fbuf f R S 128) idg (fbuf f R S 128)
         penL (fbuf f R S (* 128 768)) penG (fbuf f R S (* 128 1280)) poolG (fbuf f R S 1280)
         lcx (fbuf f R S (* 128 768)) gc (fbuf f R S (* 128 1280)) pc (fbuf f R S 1280)
@@ -2316,6 +2529,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ou2 (emit! S (vector-i64 penG gu) (vector-i64 0 0) 18 0 (* 128 1280) 1 64)
         ou3 (emit! S (vector-i64 poolG pu2) (vector-i64 0 0) 18 0 1280 1 64)
         mOu (vector-at S 1)
+        wr (weights-rec! f R S WB idl idg penL penG lcx gc lu gu)
         cx1 (emit! S (vector-i64 lcx gc ctxfc) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
         cx2 (emit! S (vector-i64 lu gu ctxfu) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
         ad1 (emit! S (vector-i64 pc sz yc) (vector-i64 0 0 0) 27 0 2816 1 64)
@@ -2434,7 +2648,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         w0g (run-range f R queue S mIc mTL)
         w0h (run-range f R queue S mTL mTG)
         w0i (run-range f R queue S mIu mOu)
-        w0 (run-range f R queue S mOu iP2)
+        w0 (run-weights! f R queue S mOu mIc mTL mTG wr iP2)
         di1 (dump f (contents f R idlc) 308) di2 (dump f (contents f R idgc) 308) di3 (dump f (contents f R idlu) 308) di4 (dump f (contents f R idgu) 308)
         dq1 (dump f (contents f R ctxfc) (* (* 77 2048) 4))
         dq2 (dump f (contents f R yc) (* 2816 4))
