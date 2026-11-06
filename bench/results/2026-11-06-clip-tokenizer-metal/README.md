@@ -18,7 +18,7 @@ gate passed
 
 ## What this shows
 - The CLIP byte-pair tokenizer written in Kotoba and built by `bin/amu` reads ComfyUI's `vocab.json` and `merges.txt` (with libSystem's `open` and `pread`), builds a hash table of the vocabulary (47,071 of the 49,408 entries: the ones with ASCII keys) and one of the merge ranks (46,881 of 48,894 merges: the ASCII ones), and tokenizes the 21 lines of `prompts.txt` to the same ids as Hugging Face's `CLIPTokenizer`, line for line, with `<|startoftext|>` and `<|endoftext|>` and truncation to 77. The prompts cover mixed case, SD-style comma lists, contractions, a possessive, digits, brackets and other symbols, quotes, runs of punctuation, repeated and trailing spaces, an empty line, two very long words, a single character, the apostrophe cases and a prompt of more than 75 tokens.
-- "a photo of a cat" gives 49406 320 1125 539 320 2368 49407, the ids the CLIP papers' examples show.
+- "a photo of a cat" gives 49406 320 1125 539 320 2368 49407, as Hugging Face's tokenizer does.
 - Three mutants are detected: the merge rank order reversed (17 of 21 lines differ), letters not lowercased (3), the contraction rule dropped (3). The whole run, tables included, takes 0.38 s.
 
 ## What it does not show
