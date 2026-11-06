@@ -10,6 +10,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
 (import data [digest])
 (import memory_policy [require-hard-memory-enforcer])
 (import process_memory [counters])
+(import nvme_master [MasterStore])
 
 (defn sample-batch [tokens batch seq rng]
   (setv starts (.integers rng 0 (- (len tokens) seq 1) :size batch)
@@ -70,7 +71,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   #(p state meta))
 
 (defn training-options [args]
-  (dfor key ["optimizer" "lr" "weight_decay" "clip" "seq" "batch" "seed" "world_size" "dtype"]
+  (dfor key ["optimizer" "lr" "weight_decay" "clip" "seq" "batch" "seed" "world_size" "dtype"
+             "master_offload" "activation_checkpoint"]
         key (getattr args key)))
 
 (defn step-update [p grads state step args]
@@ -84,7 +86,9 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (for [key (list p)]
     (setv value (get p key)
           g (* (.astype (get grads key) mx.float32) scale)
-          master (get (get state "master") key))
+          master (if (= args.master_offload "nvme")
+                     (.read (get state "master") key)
+                     (get (get state "master") key)))
     (if (= args.optimizer "adamw")
       (do
         (setv moment (+ (* 0.9 (get (get state "m") key)) (* 0.1 g))
@@ -98,7 +102,10 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
     (setv new-master (- (* master (- 1 (* args.lr args.weight_decay))) (* args.lr update))
           new-param (.astype new-master value.dtype))
     (mx.eval new-master new-param)
-    (setv (get (get state "master") key) new-master (get p key) new-param)
+    (if (= args.master_offload "nvme")
+      (.write (get state "master") key new-master)
+      (setv (get (get state "master") key) new-master))
+    (setv (get p key) new-param)
     (.pop grads key))
   (float grad-norm))
 
@@ -113,7 +120,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
         report (m.parameter-report cfg)
         budget (int (* args.memory_limit_gib (** 1024 3)))
         dtype (if (= args.dtype "float32") mx.float32 mx.bfloat16)
-        bytes-per-param (+ (if (= args.optimizer "adamw") 12 4)
+        bytes-per-param (+ (if (= args.master_offload "nvme") 0
+                               (if (= args.optimizer "adamw") 12 4))
                            (if (= args.dtype "float32") 8 4))
         minimum (+ (* bytes-per-param (get report "total_parameters")) (* 256 (** 1024 2))))
   (when (> minimum budget)
@@ -123,6 +131,9 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (when (or (<= args.steps 0) (<= args.max_seconds 0) (< args.seq 4)
             (<= args.batch 0) (< args.world_size 1))
     (raise (ValueError "invalid bounded run options")))
+  (when (and (= args.master_offload "nvme")
+             (or (!= args.optimizer "sgd") args.checkpoint args.resume))
+    (raise (ValueError "NVMe master mode currently supports SGD without checkpoint/resume only")))
   ;; Qualify the one-shot kernel setter on this exact host/source first. Its
   ;; fatal process-footprint threshold is 1GiB below the requested ceiling.
   (setv memory-enforcer (require-hard-memory-enforcer budget))
@@ -155,16 +166,22 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
             rng.bit_generator.state (get old "rng_state")))
     (do
       (setv p (m.init-parameters cfg args.seed dtype :materialize True)
-            state {"master" {}})
+            state {"master" (if (= args.master_offload "nvme") (MasterStore output) {})})
+      (print (json.dumps {"phase" "parameters_initialized" "mlx_active_bytes" (mx.get-active-memory)
+                          "process_memory" (counters)}) :flush True)
       (for [[k v] (.items p)]
         (setv master (.astype v mx.float32))
         (mx.eval master)
-        (setv (get (get state "master") k) master))
+        (if (= args.master_offload "nvme")
+          (.write (get state "master") k master)
+          (setv (get (get state "master") k) master)))
       (setv master None)
       (when (= args.optimizer "adamw")
         (for [kind ["m" "v"]]
           (setv (get state kind) (dfor [k v] (.items p) k (mx.zeros v.shape)))))))
-  (mx.eval p state)
+  (if (= args.master_offload "nvme") (mx.eval p) (mx.eval p state))
+  (print (json.dumps {"phase" "optimizer_initialized" "mlx_active_bytes" (mx.get-active-memory)
+                      "process_memory" (counters)}) :flush True)
   (setv initial-step step initial-seen seen
         initial-val (ce-value p validation cfg args.seq args.eval_batches args.seed)
         trace [] grad-fn (mx.value-and-grad m.loss)
@@ -221,9 +238,14 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
               "world_size" args.world_size "rank" rank})
   (when args.checkpoint
     (save-checkpoint (/ output f"checkpoint-{step}-rank-{rank}") p state meta))
+  (setv offload-report (when (= args.master_offload "nvme")
+          {"logical_read_bytes" (. (get state "master") bytes_read)
+           "logical_write_bytes" (. (get state "master") bytes_written)
+           "checkpoint" False}))
+  (when (= args.master_offload "nvme") (.close (get state "master")))
   (setv result {"schema" "ced-moe-training-pilot/v1" "config" cfg
                 "parameters" report "optimizer" args.optimizer
-                "dtype" args.dtype
+                "dtype" args.dtype "master_offload" args.master_offload "offload_io" offload-report
                 "host" (mx.device-info) "platform" (platform.platform)
                 "hy_version" "1.1.0" "mlx_version" "0.32.4"
                 "world_size" args.world_size "rank" rank
@@ -254,6 +276,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (for [name ["data" "output"]] (.add_argument parser (+ "--" name) :required True))
   (.add_argument parser "--preset" :choices ["tiny" "small" "1b" "3b"] :default "tiny")
   (.add_argument parser "--optimizer" :choices ["adamw" "sgd"] :default "adamw")
+  (.add_argument parser "--master-offload" :choices ["none" "nvme"] :default "none")
   (.add_argument parser "--dtype" :choices ["bfloat16" "float32"] :default "bfloat16")
   (.add_argument parser "--backend" :choices ["ring" "mpi"] :default "ring")
   (.add_argument parser "--lr" :type float :default 0.001)

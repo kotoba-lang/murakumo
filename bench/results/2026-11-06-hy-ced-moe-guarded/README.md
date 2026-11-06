@@ -47,5 +47,32 @@ large-model BF16 bitwise reproducibility. Existing causality/perturbation,
 nonzero shared-source gradients and shared-KV VJP control also pass after
 refactoring. A four-step tiny BF16 SGD run completes under the kernel guard.
 
-At this code unit, guarded1B measurements are next; no1B/3B convergence or30B
-duration is established. Raw successful controls are adjacent JSON files.
+## Resident-master1B stop and additional memory savings
+
+The first guarded1B sequence256 attempt (`d543a91c`) was killed by the kernel
+after1.984s during initialization, before any optimizer step. Supervisor
+exit-9, no timeout, child reaped. No memory ceiling was increased. System swap
+was1,809.88MiB before and after; the memory event and snapshots are preserved.
+
+The next implementation adds `--master-offload nvme`: one FP32 master tensor
+is loaded/updated/written at a time instead of retaining all4.175GB of masters
+in the MLX allocator. Files are temporary optimizer working state, cleaned on
+normal completion, not resumable checkpoints. It supports SGD only and refuses
+checkpoint/resume. Physical process counters include actual disk I/O; logical
+bytes are recorded separately, because page-cache reads may avoid SSD I/O.
+
+Attention also uses batched matrix products to avoid full head/selection/dim
+broadcast intermediates. Compared against the SHA-pinned earlier full model
+(`model.hy` SHA256 `5c0915427f140de1327a63fea920da705638e5feef4fae36a2ef32271fe28628`),
+FP32 worst gradient difference is9.8943710e-6. Rematerialization enabled/disabled
+after this change: loss difference0, worst gradient1.4603138e-6,
+update1.4901161e-8. All155 parameter gradients are compared.
+
+NVMe-vs-RAM masters: exact initial FP32 serialization and three SGD updates
+under identical gradient inputs give maximum weight/master error0. The test
+isolates optimizer placement; independent BF16 scatter-gradient executions
+are not bitwise reproducibility proof. The actual tiny NVMe training loop also
+completes four steps. Adjacent JSONs preserve results and supervised exits.
+
+At this code unit, the1B NVMe measurement is next. No1B/3B convergence or30B
+duration is established.

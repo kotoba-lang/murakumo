@@ -117,12 +117,12 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
         keys (mx.concatenate [kk lk] :axis 2)
         values (mx.concatenate [vv lv] :axis 2)
         mask (mx.concatenate [valid (mx.broadcast-to lm [batch seq window])] :axis 2)
-        scores (/ (mx.sum (* (mx.expand_dims q -2)
-                               (mx.expand_dims keys 1)) :axis -1) (math.sqrt dim))
+        ;; Batched matrix products avoid the B*H*S*K*D broadcast products.
+        scores (/ (.transpose (@ (.transpose q [0 2 1 3]) (.swapaxes keys -1 -2))
+                              [0 2 1 3]) (math.sqrt dim))
         scores (mx.where (mx.expand_dims mask 1) scores -1e9)
         probs (mx.softmax (.astype scores mx.float32) :axis -1))
-  (mx.sum (* (mx.expand_dims (.astype probs values.dtype) -1)
-             (mx.expand_dims values 1)) :axis -2))
+  (.transpose (@ (.transpose (.astype probs values.dtype) [0 2 1 3]) values) [0 2 1 3]))
 
 (defn selected-attention [q main-k main-v local-k local-v indices valid cfg]
   (setv apply (if (.get cfg "activation_checkpoint" False)

@@ -20,7 +20,7 @@
                  :data corpus :output (str target) :preset preset :optimizer "sgd"
                  :memory_limit_gib 10.0 :dtype "bfloat16"
                  :steps 4 :max_seconds 110 :seq seq :batch 1 :world_size world
-                 :activation_checkpoint True))
+                 :activation_checkpoint True :master_offload "none" :checkpoint False :resume None))
     (assert (not (.exists target)) "control output must be fresh")
     (setv refused False)
     (try

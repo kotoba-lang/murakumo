@@ -151,6 +151,22 @@ gradient entries after updating each parameter; the training loop releases
 the previous gradient tree before the next forward/backward. MLX cache is zero.
 These reduce peak overlap without changing precision, optimizer or model size.
 
+The guarded1B resident-master attempt was killed by the9GiB kernel limit
+during initialization. `--optimizer sgd --master-offload nvme` instead keeps
+one FP32 master tensor in memory at a time. Its safetensor files are temporary
+optimizer working state, removed after normal completion, not model checkpoints.
+Killed runs can leave their own temporary directories for inspection. This
+mode refuses checkpoint/resume and AdamW, which are not qualified for offload.
+It preserves FP32 masters and BF16 weights/gradients. Logical offload bytes and
+OS physical disk counters are separate; page-cache hits are not SSD reads.
+`check_offload.hy` compares three updates under identical gradient inputs and
+requires exact initial serialization plus tight update equivalence.
+
+Selected attention uses batched matrix products instead of broadcast
+`B*H*S*K*D` multiplication intermediates. The FP32 full-model gradient control
+also compares the prior source digest: worst gradient difference9.8944e-6.
+BF16 end-to-end bitwise reproducibility remains unqualified.
+
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 
