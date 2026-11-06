@@ -11,7 +11,7 @@
 # Limits (the f16 scale of slice 10, set before any run of this program): final output 1e-2, every stage 2e-2 (|gpu - ref| / max(1, |ref|)).
 # Mutants must push the final error above 5e-2: a skip tensor stored at the wrong offset (the bug this slice found in the timing program),
 # the middle block one transformer layer short, the label embedding left out, cross-attention keys taken from the value weights.
-# ms is the best of 3 whole-graph runs on whatever load the host has: diagnostic. A GPU host is required (not a CI step).
+# MUTANTS=0 skips the mutants (they use the first config's size; at MC 128 two of them are below the 5e-2 bar). ms is the best of 3 whole-graph runs on whatever load the host has: diagnostic. A GPU host is required (not a CI step).
 #
 #   sh run.sh /path/to/amu-checkout /path/to/ComfyUI-0.44.0 /path/to/stubs /path/to/python-with-torch [configs: "64:32 64:64"  (MC:LAT)]
 set -eu
@@ -39,6 +39,7 @@ for cfg in $CONFIGS; do
   nd=$(grep -a -o 'dispatches [0-9]*' "$WK/c${mc}_$lat.err" | awk '{print $2}')
   echo "MC=$mc latent ${lat}x$lat ($((lat * 8)) px, $(sed -n 's/^params \([0-9]*\).*/\1/p' "$WK/mc${mc}_$lat.log") parameters, $nd dispatches): $line $([ "$ok" = 1 ] && echo ok || echo FAIL) best=$(awk -v n="$ns" 'BEGIN{printf "%.1f", n/1e6}') ms"
 done
+if [ "${MUTANTS:-1}" = 1 ]; then
 # the mutants run on a "strong" fixture (output projections of attention and feed-forward x3): with the plain one a wrong layer count or
 # wrong cross-attention keys moves the final output by only ~2e-2, below the 5e-2 bar fixed beforehand. The same build is also checked clean.
 cfg=${CONFIGS%% *}; mc=${cfg%%:*}; lat=${cfg##*:}; SD="mc${mc}_${lat}_strong"
@@ -59,4 +60,9 @@ mutant skip-offset 'cat6 (* (* C1 hw0) 4)' 'cat6 (* (* C0 hw0) 4)'
 mutant middle-depth '"middle_block.1." ma 0 mb 0 C2 l2 l2 10 ctxh' '"middle_block.1." ma 0 mb 0 C2 l2 l2 9 ctxh'
 mutant label-embedding '(vector-i64 te le emb)' '(vector-i64 te te emb)'
 mutant cross-keys 'ctxh wk2 z 0 k-h 128 2048 C' 'ctxh wv2 z 0 k-h 128 2048 C'
-[ "$fail" = 0 ] && echo "gate passed, build dir $WK" || { echo "GATE FAILED, build dir $WK"; exit 1; }
+fi
+# the fixtures are large (0.6 GB at MC 64, 4 GB at MC 192): on success the weight files are removed from the build dir unless KEEP=1
+if [ "$fail" = 0 ]; then
+  [ "${KEEP:-0}" = 1 ] || rm -f "$WK"/mc*/model.safetensors
+  echo "gate passed, build dir $WK"
+else echo "GATE FAILED, build dir $WK (weights kept)"; exit 1; fi
