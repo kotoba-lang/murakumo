@@ -165,6 +165,10 @@ encoder cost ~3.5 us (tiny kernel) to ~20 us (12 MB moved), 76x and 17x cheaper 
 [record](../bench/results/2026-11-06-batch-metal/README.md)); one SDXL UNet forward makes at least 1,314 counted module calls, about 4.6 ms of dispatch overhead
 per call batched against about 347 ms unbatched (arithmetic).
 
+**Stage M, slice 7 (2026-11-06).** The GEMM on non-integer data (`bench/kernels/gemm-f16-metal/`, [record](../bench/results/2026-11-06-gemm-f16-metal/README.md)): against
+a double reference built from the half-rounded values the error is 1.3e-5 to 2.1e-5 (float32 accumulation); against the unrounded values it is
+8.5e-3 to 1.2e-2 (f16 storage), about 1 percent for random data of order 1. That second figure is the scale of the f16-versus-exact gap I3e has to tolerate.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
