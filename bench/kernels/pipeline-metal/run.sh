@@ -48,6 +48,7 @@ cmp_() { PYTHONPATH="$STUBS" "$PYC" "$HERE/compare.py" "$WK/$1.err" "$WK/fx" "$L
 build clean
 line=$(cmp_ clean)
 ok=$(echo "$line" | awk '{ok=1; for(i=1;i<=NF;i++){split($i,a,"="); if(a[1]=="finite"){if(a[2]!=1) ok=0} else if(a[1]=="ids_mismatch"){if(a[2]!=0) ok=0} else if(a[1] ~ /^(step|image)/){if(a[2]>0.05) ok=0} else if(a[1] ~ /^(ctx|y)_/){if(a[2]>0.05) ok=0}}; print ok}')
+case "$line" in *finite=1*) ;; *) ok=0 ;; esac
 [ "$ok" = 1 ] || fail=1
 echo "$STEPS Euler steps (2 UNet passes each) + VAE decode, 256 px, $(grep -a -o 'dispatches [0-9]*' "$WK/clean.err" | awk '{print $2}') recorded dispatches: $line $([ "$ok" = 1 ] && echo ok || echo FAIL) process wall $(cat "$WK/clean.sec") s"
 # digest-before-read negative control: the same program pointed at a digest that differs in one character must refuse the checkpoint,
@@ -80,15 +81,21 @@ fi
 # compared after the last read) and trap before any render output. Run before the swap test, which replaces the file.
 build mwrite 'u3 (cc f (sym f "pread") fd lenb 8 0 0)' "u3 (cc f (sym f \"pread\") fd lenb 8 0 0) wwr (cc f (sym f \"pwrite\") (cc f (sym f \"open\") (cstr f (vector-at R 3) \"$WK/fx/model.safetensors\") 1 0 0 0) lenb 1 0 0)"
 if grep -a -q 'dispatches' "$WK/mwrite.err"; then echo "in-place write after hash: render still ran (NOT detected)"; fail=1; else echo "in-place write after hash: modification detected, no render output (detected)"; fi
-# swap after the hash: the program renames a 4 KiB file over the checkpoint path right after the digest check. It reads through the
-# descriptor it hashed, so the render must be unchanged (the clean criteria) while the path now holds the other file. This is run last
-# because it replaces the fixture's checkpoint.
+# the same in-place write, but with size and mtime ignored by the stamp (the mutant reads them as 0): only ctime can notice it, which also
+# checks the ctime offset; a program that compared only size and mtime would pass this write, a restored mtime would not hide it.
+cp "$WK/mwrite.kotoba" "$WK/mctime.kotoba"
+perl -0pi -e 's/\(peek f \(\+ sb 96\)\) \(peek f \(\+ sb 48\)\) \(peek f \(\+ sb 56\)\)/0 0 0/ or die "ctime-only mutation did not apply\n"' "$WK/mctime.kotoba"
+"$AMU/bin/amu" compile "$WK/mctime.kotoba" --runtime-profile amu-program-metal -o "$WK/mctime" >/dev/null
+"$WK/mctime" > /dev/null 2> "$WK/mctime.err" || true
+if grep -a -q 'dispatches' "$WK/mctime.err"; then echo "in-place write, ctime only: render still ran (NOT detected)"; fail=1; else echo "in-place write, ctime only: detected by change time, no render output (detected)"; fi
+# swap after the hash: the program renames a 4 KiB file over the checkpoint path right after the digest check. Replacing the path unlinks
+# the hashed file's old name, which changes its change time, so the stamp check refuses the run; the program also reads through the
+# descriptor it hashed, so even without that check the data it read would be the hashed file's. Expected: path replaced (checked by
+# size) and no render output. Run last because it replaces the fixture's checkpoint.
 head -c 4096 /dev/zero | tr '\0' 'z' > "$WK/fx/alt.bin"
 build mswap 'shv (sha-verify! f R fd "'"$WK/fx/model.sha256"'")' "shv (sha-verify! f R fd \"$WK/fx/model.sha256\") swp (cc f (sym f \"rename\") (cstr f (vector-at R 3) \"$WK/fx/alt.bin\") (cstr f (vector-at R 3) \"$WK/fx/model.safetensors\") 0 0 0)"
-sline=$(cmp_ mswap)
-sok=$(echo "$sline" | awk '{ok=1; for(i=1;i<=NF;i++){split($i,a,"="); if(a[1]=="finite"){if(a[2]!=1) ok=0} else if(a[1]=="ids_mismatch"){if(a[2]!=0) ok=0} else if(a[1] ~ /^(step|image)/){if(a[2]>0.05) ok=0} else if(a[1] ~ /^(ctx|y)_/){if(a[2]>0.05) ok=0}}; print ok}')
 swapped=$(wc -c < "$WK/fx/model.safetensors" | tr -d ' ')
-if [ "$swapped" = 4096 ] && [ "$sok" = 1 ]; then echo "swap after hash: path replaced by a 4096-byte file, render unchanged ($sline) (immune)"; else echo "swap after hash: path size $swapped, ok=$sok NOT immune"; fail=1; fi
+if [ "$swapped" = 4096 ] && ! grep -a -q 'dispatches' "$WK/mswap.err"; then echo "swap after hash: path replaced by a 4096-byte file, run refused, no render output (detected)"; else echo "swap after hash: path size $swapped, render output present or swap did not happen (NOT detected)"; fail=1; fi
 # the fixtures are large (up to 2.8 GB): on success the weight files are removed from the build dir unless KEEP=1
 if [ "$fail" = 0 ]; then
   [ "${KEEP:-0}" = 1 ] || rm -f "$WK"/fx/model.safetensors

@@ -2031,16 +2031,17 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
     (sha-hex-digest H)))
 
 
-;; fstat (macOS arm64 struct stat: st_mtimespec at 48, st_size at 96): size, mtime seconds and nanoseconds of an open file
+;; fstat (macOS arm64 struct stat: st_mtimespec at 48, st_ctimespec at 64, st_size at 96): size, mtime and ctime (seconds and nanoseconds) of an
+;; open file. ctime is set by the kernel on any write or metadata change and cannot be set back by a program.
 (defn- fd-stamp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64] :vector-i64
   (let [sb (cc f (vector-at R 3) 160 0 0 0 0)
         r (cc f (sym f "fstat") fd sb 0 0 0)
         u (if (= r 0) 0 (vector-at [0] 1))]
-    (vector-i64 (peek f (+ sb 96)) (peek f (+ sb 48)) (peek f (+ sb 56)))))
-;; traps if the open file's size or modification time differs from the stamp taken before it was hashed
+    (vector-i64 (peek f (+ sb 96)) (peek f (+ sb 48)) (peek f (+ sb 56)) (peek f (+ sb 64)) (peek f (+ sb 72)))))
+;; traps if the open file's size, modification time or change time differs from the stamp taken before it was hashed
 (defn- stamp-same! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 st0 :vector-i64] :i64
   (let [st1 (fd-stamp f R fd)]
-    (if (= (+ (+ (bit-xor (vector-at st0 0) (vector-at st1 0)) (bit-xor (vector-at st0 1) (vector-at st1 1))) (bit-xor (vector-at st0 2) (vector-at st1 2))) 0)
+    (if (= (+ (+ (+ (bit-xor (vector-at st0 0) (vector-at st1 0)) (bit-xor (vector-at st0 1) (vector-at st1 1))) (+ (bit-xor (vector-at st0 2) (vector-at st1 2)) (bit-xor (vector-at st0 3) (vector-at st1 3)))) (bit-xor (vector-at st0 4) (vector-at st1 4))) 0)
       0 (vector-at [0] 1))))
 
 (defn- sha-verify! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 expect :string] :vector-i64
