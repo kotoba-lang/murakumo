@@ -146,6 +146,11 @@ bit-exact against an integer C twin on five shapes up to 640 -> 640 channels at 
 on an M1 Max under load ([record](../bench/results/2026-11-06-conv-metal/README.md)). Only the 3 x 3 stride-1 case with multiple-of-32/64
 channel counts; bias, epilogues, stride 2, 1 x 1 and the 4-channel end convolutions are not covered.
 
+**Stage M, slice 3 (2026-11-06).** Fused non-causal multi-head attention on the same matrix units (`bench/kernels/attention-metal/`): within
+2.4e-4 to 3.1e-4 of a double-precision reference on five shapes including SDXL-like self-attention (2304 x 2304, 10 heads) and cross-attention
+against 77 keys, two mutants detected, 0.4 to 1.4 TMAC/s on an M1 Max under load
+([record](../bench/results/2026-11-06-attention-metal/README.md)). Approximate (half P, GPU exp), head dim 64 only.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
