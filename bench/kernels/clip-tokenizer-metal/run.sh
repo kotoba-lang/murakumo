@@ -13,7 +13,8 @@
 # The special-token spellings <|startoftext|> / <|endoftext|> in a prompt (case-insensitive, splitting the text) and HTML entities (which this tokenizer
 # does not unescape either) are covered by prompts.txt.
 # Not covered: ComfyUI's prompt weighting and chunking of prompts longer than 75 tokens (the
-# program truncates, as the Hugging Face call does), scripts outside the supported set (Cyrillic, Greek, Arabic, Indic ...).
+# program truncates, as the Hugging Face call does), scripts outside the supported set (Arabic, Indic, Thai ... ; Greek, Cyrillic, Armenian and Hebrew
+# letters are supported since slice 47).
 #
 #   sh run.sh /path/to/amu-checkout /path/to/comfy/sd1_tokenizer [python3]
 set -eu
@@ -114,6 +115,8 @@ mut latin1-lower '(or (within c 192 214) (within c 216 222)) (+ c 32)' '(or (wit
 mut ideographic-space '(= c 8287) (= c 12288)' '(= c 8287) (= c 1)' u
 mut byte-map '(<= b 32) (+ 256 b)' '(<= b 32) (+ 257 b)' u
 mut nfc-compose 'k2 (if (= m 1) (- k 1) k)' 'k2 k' u
+mut script-class '(<= c (bit-and (i64-shift-right e 4) 65535))' '(<= c (- (bit-and (i64-shift-right e 4) 65535) 1))' u
+mut script-lower '(if (= (bit-and (- c lo) 1) 0) (+ c 1) c))' '(if (= (bit-and (- c lo) 1) 1) (+ c 1) c))' u
 mut fullwidth-lower '(within c 65313 65338) (+ c 32)' '(within c 65313 65338) c' u
 # refusals: each of these must be refused with a message and no token ids
 ref() { # label text-as-printf
@@ -121,7 +124,8 @@ ref() { # label text-as-printf
   PROMPTS="$WK/r_$1.txt" build "r$1"; run "r$1"
   if grep -a -q '^refused' "$WK/r$1.err" && ! grep -a -q '^49406' "$WK/r$1.out"; then echo "refused [$1]: $(grep -a '^refused' "$WK/r$1.err" | cut -c1-60) (detected)"; else echo "refused [$1]: NOT refused"; fail=1; fi
 }
-ref cyrillic 'cat \320\277\321\200\320\270\320\262\320\265\321\202'
+ref arabic 'cat \330\263\331\204\330\247\331\205'
+ref capital-sigma 'a\316\243b'
 ref combining-no-composition 'b\314\201'
 ref two-marks 'a\314\201\314\201'
 ref leading-mark '\314\201a'

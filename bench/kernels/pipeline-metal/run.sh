@@ -30,7 +30,7 @@ LAYOUT=${LAYOUT:-hf}
 # the conditional prompt mixes ASCII, Japanese, accented Latin, fullwidth forms and an emoji, so the whole path (tokenizer, towers, render) is exercised on non-ASCII text
 # ComfyUI prompt weighting in both prompts: nested and explicit weights, an escaped parenthesis, a weighted special token
 # both prompts run past 75 tokens: ComfyUI cuts them into blocks of 77 (here 2 and 3), each through the towers, joined along the sequence axis; the shorter is repeated to the common length
-export PROMPT_C=${PROMPT_C:-"(桜の花:1.3) が咲く夜景、a ((photo)) of a (cat:0.7) \\(x\\) ÀÉ (Straße:1.15) ＡＢＣ１２３ 😀 école が $(python3 -c "print(' '.join(['sharp', 'detail'] * 32))")"}
+export PROMPT_C=${PROMPT_C:-"(桜の花:1.3) が咲く夜景、a ((photo)) of a (cat:0.7) \\(x\\) ÀÉ Привет ΑΘΗΝΑ Ողջույն שלום (Straße:1.15) ＡＢＣ１２３ 😀 école が $(python3 -c "print(' '.join(['sharp', 'detail'] * 14))")"}
 export PROMPT_U=${PROMPT_U:-"(blurry:1.4), ugly, (bad hands:0.6) $(python3 -c "print(' '.join(['blur', 'noise', 'grain'] * 50))")"}
 if [ "$LAYOUT" = single ]; then PRE_L=conditioner.embedders.0.transformer.; PRE_G=conditioner.embedders.1.model.; SCH_G=1; else PRE_L=clip_l.; PRE_G=clip_g.; SCH_G=0; fi
 PYTHONPATH="$STUBS" "$PYC" "$HERE/make_fixture.py" write "$WK/fx" "$COMFY" "$MC" "$LAT" "$CH" "$STEPS" "$TOKDIR" "$LAYOUT" > "$WK/fx.log" 2>&1
