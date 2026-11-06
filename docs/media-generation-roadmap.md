@@ -141,6 +141,11 @@ C twin on four shapes, 3.1 to 3.6 TMAC/s on an M1 Max under load
 ([record](../bench/results/2026-11-06-gemm-metal/README.md)). A GEMM only: convolution, attention, norms and dispatch batching
 are the rest of M.
 
+**Stage M, slice 2 (2026-11-06).** A 3 x 3 convolution as an implicit GEMM on the same matrix units (`bench/kernels/conv-metal/`):
+bit-exact against an integer C twin on five shapes up to 640 -> 640 channels at 48 x 48, a wrong padding offset detected, 1.1 to 1.9 TMAC/s
+on an M1 Max under load ([record](../bench/results/2026-11-06-conv-metal/README.md)). Only the 3 x 3 stride-1 case with multiple-of-32/64
+channel counts; bias, epilogues, stride 2, 1 x 1 and the 4-channel end convolutions are not covered.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
