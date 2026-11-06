@@ -513,6 +513,22 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
   }
   int pix = oy * int(IW) + ox;
   uint kk0 = tid >> 6;
+  half vv[16];
+  uint k = kk0;
+  uint ci = k / 9u;
+  uint tap = k - ci * 9u;
+  for (uint it = 0u; it < 16u; it++) {
+    half v = half(0.0f);
+    if (k < KD && ((vmask >> tap) & 1u) != 0u) {
+      uint ky = tap / 3u;
+      uint kx = tap - ky * 3u;
+      v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
+    }
+    vv[it] = v;
+    k += 4u;
+    tap += 4u;
+    if (tap >= 9u) { tap -= 9u; ci += 1u; }
+  }
   for (uint k0 = 0u; k0 < KDP; k0 += 64u) {
     if (vec4) {
       for (uint it = 0u; it < 8u; it++) {
@@ -535,23 +551,21 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
         As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
       }
     }
-    uint k = k0 + kk0;
-    uint ci = k / 9u;
-    uint tap = k - ci * 9u;
+    for (uint it = 0u; it < 16u; it++) Bs[tid + it * 256u] = vv[it];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // software pipelining: the next tile's gather loads are issued here and consumed (stored to Bs) at the top of the next iteration, behind this tile's matrix multiplies
     for (uint it = 0u; it < 16u; it++) {
-      uint idx = tid + it * 256u;
       half v = half(0.0f);
       if (k < KD && ((vmask >> tap) & 1u) != 0u) {
         uint ky = tap / 3u;
         uint kx = tap - ky * 3u;
         v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
       }
-      Bs[idx] = v;
+      vv[it] = v;
       k += 4u;
       tap += 4u;
       if (tap >= 9u) { tap -= 9u; ci += 1u; }
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint ks = 0u; ks < 8u; ks++) {
       simdgroup_half8x8 a[4];
       simdgroup_half8x8 b[4];
