@@ -92,7 +92,7 @@ kernel void linear_t(device const half *A [[buffer(0)]], device const half *W [[
     for (uint i = 0u; i < 4u; i++)
       simdgroup_load(a[i], A + (m0 + row0 + i * 8u) * K + k, K);
     for (uint j = 0u; j < 4u; j++)
-      simdgroup_load(b[j], W + (n0 + col0 + j * 8u) * K + k, K, ulong2(0, 0), true);
+      simdgroup_load(b[j], W + k * N + n0 + col0 + j * 8u, N);
     for (uint i = 0u; i < 4u; i++)
       for (uint j = 0u; j < 4u; j++)
         simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
@@ -293,6 +293,11 @@ kernel void gn_tok_h(device const float *X [[buffer(0)]], device const float *Ga
   }
 }
 
+kernel void cvt32h_t(device const float *S [[buffer(0)]], device half *H [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint N = P[0]; uint K = P[1];
+  uint n = i / K; uint k = i % K;
+  H[k * N + n] = half(S[i]);
+}
 kernel void conv(device const half *X [[buffer(0)]], device const half *Wt [[buffer(1)]], device const float *Bias [[buffer(2)]],
                  device const float *Res [[buffer(3)]], device float *C [[buffer(4)]], device const uint *P [[buffer(5)]],
                  uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
@@ -1077,6 +1082,14 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         u (emit! S (vector-i64 (vector-at S 3) hb) (vector-i64 (toff f R S name) 0) 0 0 n 1 64)]
     hb))
 ;; float -> half (a slice of a float buffer at byte offset off)
+
+;; a Linear weight stored [N, K] (out, in) in the file -> half, TRANSPOSED to [K, N] on the GPU: linear_t reads its weight as [K, N] (an untransposed 8x8 load is faster)
+(defn- cvl! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string N :i64 K :i64] :i64
+  (let [hb (hbuf f R S (* N K))
+        p (pu f R S N K 0 0 0 0 0 0 0 0)
+        u (emit! S (vector-i64 (vector-at S 3) hb p) (vector-i64 (toff f R S name) 0 0) 32 0 (* N K) 1 64)]
+    hb))
+
 (defn- cvfh! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 src :i64 off :i64 n :i64] :i64
   (let [hb (hbuf f R S n)
         u (emit! S (vector-i64 src hb) (vector-i64 off 0) 1 0 n 1 64)]
@@ -1182,21 +1195,21 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ln-h (hbuf f R S (* hw C))
         q-h (hbuf f R S (* rows C)) k-h (hbuf f R S (* rows C)) v-h (hbuf f R S (* rows C)) at-h (hbuf f R S (* hw C))
         n1 (ln! f R S tin 0 (nm b "norm1.weight") (nm b "norm1.bias") ln-h hw C)
-        wq (cv32! f R S (nm b "attn1.to_q.weight")) wk (cv32! f R S (nm b "attn1.to_k.weight"))
-        wv (cv32! f R S (nm b "attn1.to_v.weight")) wo (cv32! f R S (nm b "attn1.to_out.0.weight"))
+        wq (cvl! f R S (nm b "attn1.to_q.weight") C C) wk (cvl! f R S (nm b "attn1.to_k.weight") C C)
+        wv (cvl! f R S (nm b "attn1.to_v.weight") C C) wo (cvl! f R S (nm b "attn1.to_out.0.weight") C C)
         q1 (linH! f R S ln-h wq z 0 q-h hw C C) k1 (linH! f R S ln-h wk z 0 k-h hw C C) v1 (linH! f R S ln-h wv z 0 v-h hw C C)
         a1 (attn! f R S q-h k-h v-h at-h hw nh hw)
         t1 (fbuf f R S (* hw C))
         o1 (linF! f R S at-h wo d (toff f R S (nm b "attn1.to_out.0.bias")) tin 0 t1 0 hw C C 1)
         n2 (ln! f R S t1 0 (nm b "norm2.weight") (nm b "norm2.bias") ln-h hw C)
-        wq2 (cv32! f R S (nm b "attn2.to_q.weight")) wk2 (cv32! f R S (nm b "attn2.to_k.weight"))
-        wv2 (cv32! f R S (nm b "attn2.to_v.weight")) wo2 (cv32! f R S (nm b "attn2.to_out.0.weight"))
+        wq2 (cvl! f R S (nm b "attn2.to_q.weight") C C) wk2 (cvl! f R S (nm b "attn2.to_k.weight") C 2048)
+        wv2 (cvl! f R S (nm b "attn2.to_v.weight") C 2048) wo2 (cvl! f R S (nm b "attn2.to_out.0.weight") C C)
         q2 (linH! f R S ln-h wq2 z 0 q-h hw C C) k2 (linH! f R S ctxh wk2 z 0 k-h 128 2048 C) v2 (linH! f R S ctxh wv2 z 0 v-h 128 2048 C)
         a2 (attn! f R S q-h k-h v-h at-h 77 nh hw)
         t2 (fbuf f R S (* hw C))
         o2 (linF! f R S at-h wo2 d (toff f R S (nm b "attn2.to_out.0.bias")) t1 0 t2 0 hw C C 1)
         n3 (ln! f R S t2 0 (nm b "norm3.weight") (nm b "norm3.bias") ln-h hw C)
-        wf1 (cv32! f R S (nm b "ff.net.0.proj.weight")) wf2 (cv32! f R S (nm b "ff.net.2.weight"))
+        wf1 (cvl! f R S (nm b "ff.net.0.proj.weight") (* 2 fi) C) wf2 (cvl! f R S (nm b "ff.net.2.weight") C fi)
         ff1 (fbuf f R S (* hw (* 2 fi)))
         f1 (linF! f R S ln-h wf1 d (toff f R S (nm b "ff.net.0.proj.bias")) (vector-at S 7) 0 ff1 0 hw C (* 2 fi) 0)
         gg-h (hbuf f R S (* hw fi))
@@ -1215,13 +1228,13 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         gt-h (hbuf f R S (* hw C))
         g0 (gn! f R S 3 xf xoff (nm pre "norm.weight") (nm pre "norm.bias") gt-h C hw 32 897988541)
         t0 (fbuf f R S (* hw C))
-        wi (cv32! f R S (nm pre "proj_in.weight"))
+        wi (cvl! f R S (nm pre "proj_in.weight") C C)
         l0 (linF! f R S gt-h wi d (toff f R S (nm pre "proj_in.bias")) (vector-at S 7) 0 t0 0 hw C C 0)
         last (loop [j 0 cur t0]
                (if (= j depth) cur
                  (recur (+ j 1) (blk! f R S (nm pre (nm "transformer_blocks." (nm (string-from-i64 j) "."))) cur C hw nh ctxh))))
         t3h (cvfh! f R S last 0 (* hw C))
-        wout (cv32! f R S (nm pre "proj_out.weight"))
+        wout (cvl! f R S (nm pre "proj_out.weight") C C)
         pf (fbuf f R S (* hw C))
         fo (linF! f R S t3h wout d (toff f R S (nm pre "proj_out.bias")) (vector-at S 7) 0 pf 0 hw C C 0)
         pun (pu f R S C hw 0 0 0 0 0 0 0 0)]
@@ -1264,7 +1277,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
   (let [d (vector-at S 3)
         dummy (vector-at S 7)
         g0 (gn! f R S 3 xf 0 (nm pre "norm.weight") (nm pre "norm.bias") TG C hw 32 897988541)
-        wq (cv32! f R S (nm pre "q.weight")) wk (cv32! f R S (nm pre "k.weight")) wv (cv32! f R S (nm pre "v.weight")) wo (cv32! f R S (nm pre "proj_out.weight"))
+        wq (cvl! f R S (nm pre "q.weight") C C) wk (cvl! f R S (nm pre "k.weight") C C) wv (cvl! f R S (nm pre "v.weight") C C) wo (cvl! f R S (nm pre "proj_out.weight") C C)
         q1 (linH! f R S TG wq d (toff f R S (nm pre "q.bias")) TQ hw C C)
         k1 (linH! f R S TG wk d (toff f R S (nm pre "k.bias")) TK hw C C)
         v1 (linH! f R S TG wv d (toff f R S (nm pre "v.bias")) TV hw C C)
@@ -1551,15 +1564,15 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         w (loop [l 0]
             (if (= l NL) 0
               (let [n1 (ln! f R S xa 0 (lname2 pre l "layer_norm1.weight") (lname2 pre l "layer_norm1.bias") lnh 128 HID)
-                    wq (cv32! f R S (lname2 pre l "self_attn.q_proj.weight")) wk (cv32! f R S (lname2 pre l "self_attn.k_proj.weight"))
-                    wv (cv32! f R S (lname2 pre l "self_attn.v_proj.weight")) wo (cv32! f R S (lname2 pre l "self_attn.out_proj.weight"))
+                    wq (cvl! f R S (lname2 pre l "self_attn.q_proj.weight") HID HID) wk (cvl! f R S (lname2 pre l "self_attn.k_proj.weight") HID HID)
+                    wv (cvl! f R S (lname2 pre l "self_attn.v_proj.weight") HID HID) wo (cvl! f R S (lname2 pre l "self_attn.out_proj.weight") HID HID)
                     q1 (linH! f R S lnh wq d (toff f R S (lname2 pre l "self_attn.q_proj.bias")) qh 128 HID HID)
                     k1 (linH! f R S lnh wk d (toff f R S (lname2 pre l "self_attn.k_proj.bias")) kh 128 HID HID)
                     v1 (linH! f R S lnh wv d (toff f R S (lname2 pre l "self_attn.v_proj.bias")) vh 128 HID HID)
                     a1 (emit! S (vector-i64 qh kh vh ath pat) (vector-i64 0 0 0 0 0) 8 1 4 HEADS 128)
                     o1 (linF! f R S ath wo d (toff f R S (lname2 pre l "self_attn.out_proj.bias")) xa 0 xb 0 128 HID HID 1)
                     n2 (ln! f R S xb 0 (lname2 pre l "layer_norm2.weight") (lname2 pre l "layer_norm2.bias") lnh 128 HID)
-                    w1 (cv32! f R S (lname2 pre l "mlp.fc1.weight")) w2 (cv32! f R S (lname2 pre l "mlp.fc2.weight"))
+                    w1 (cvl! f R S (lname2 pre l "mlp.fc1.weight") INTER HID) w2 (cvl! f R S (lname2 pre l "mlp.fc2.weight") HID INTER)
                     m1 (emit! S (vector-i64 lnh w1 d dummy dummy f1h pl1) (vector-i64 0 0 (toff f R S (lname2 pre l "mlp.fc1.bias")) 0 0 0 0)
                                6 1 (quot INTER 64) 2 128)
                     m2 (linF! f R S f1h w2 d (toff f R S (lname2 pre l "mlp.fc2.bias")) xb 0 xa 0 128 INTER HID 1)
@@ -1567,7 +1580,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
                 (recur (+ l 1)))))]
     (if (= proj 0) 0
       (let [fl (ln! f R S xa 0 (nm pre "text_model.final_layer_norm.weight") (nm pre "text_model.final_layer_norm.bias") lnh 128 HID)
-            wp (cv32! f R S (nm pre "text_projection.weight"))
+            wp (cvl! f R S (nm pre "text_projection.weight") HID HID)
             pj (fbuf f R S A)
             pl (linF! f R S lnh wp (vector-at S 6) 0 dummy 0 pj 0 128 HID HID 0)
             ppo (pu f R S HID 0 0 0 0 0 0 0 0 0)]
@@ -1637,11 +1650,11 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         S (zeros 140000)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 32) 0
+             (if (= i 33) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
                           (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
-                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" "conv_k3s1")))))))))))))))))))))))))))))))
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" "cvt32h_t"))))))))))))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))

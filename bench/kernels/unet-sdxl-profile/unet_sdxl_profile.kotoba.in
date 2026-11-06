@@ -92,7 +92,7 @@ kernel void linear_t(device const half *A [[buffer(0)]], device const half *W [[
     for (uint i = 0u; i < 4u; i++)
       simdgroup_load(a[i], A + (m0 + row0 + i * 8u) * K + k, K);
     for (uint j = 0u; j < 4u; j++)
-      simdgroup_load(b[j], W + (n0 + col0 + j * 8u) * K + k, K, ulong2(0, 0), true);
+      simdgroup_load(b[j], W + k * N + n0 + col0 + j * 8u, N);
     for (uint i = 0u; i < 4u; i++)
       for (uint j = 0u; j < 4u; j++)
         simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
