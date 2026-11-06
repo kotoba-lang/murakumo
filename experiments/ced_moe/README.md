@@ -5,6 +5,15 @@ Experimental training code, explicitly requested in Hy by the owner on
 Hy's Python runtime and MLX dependency are authorized for this experiment;
 this does not establish a production runtime or fleet qualification.
 
+**Training is currently blocked before allocation.** The approved fleet
+sequence256 trial exceeded its requested10GiB ceiling: MLX allocator peak
+11.36GiB and system swap rose by1,212.13MiB. Sequence512 was not started.
+MLX0.32.4 [`set_memory_limit`](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html)
+is a guideline that may be exceeded, not a hard limit. `memory_policy.hy`
+refuses every training preset until a hard memory enforcer is qualified;
+there is no override flag. Existing result files are historical measurements,
+not proof of enforcement. See the [fleet assessment](../../bench/results/2026-11-06-hy-ced-moe/README.md).
+
 ## Model implemented
 
 Text-only, random initialization; tied token embedding / output head;
@@ -74,6 +83,8 @@ Owner correction on 2026-11-06: do not run training or GPU benchmarks on the
 developer's current Mac. The examples below are for designated fleet training
 hosts only, after admission. The local pilot figures below are historical
 controls completed before that instruction, not permission for further local runs.
+The training command currently refuses before model initialization. Neither
+manual admission nor the time supervisor bypasses the memory-policy refusal.
 
 ```sh
 hy experiments/ced_moe/data.hy --output /path/to/task-data
@@ -92,13 +103,28 @@ CC-BY-SA-3.0 / GFDL as listed in its card. No corpus text or checkpoints are
 committed. FineWeb-Edu is a larger follow-up corpus, not a downloaded prerequisite.
 
 The runner uses FP32 optimizer/master state and BF16 or FP32 model weights,
-finite gradient/loss checks, clipping, an explicit MLX memory cap, maximum
+finite gradient/loss checks, clipping, an advisory MLX memory setting, maximum
 steps, a wall-clock budget checked between steps, and a task-output lock.
-These are experiment limits, not qualification of the shared resource governor.
+The advisory setting does not enforce the requested ceiling; the current
+pre-allocation refusal supersedes execution until that gap is resolved.
+These controls do not qualify the shared resource governor.
 `bounded_trial.hy` supervises only its explicitly launched child process group
 with a wall deadline. It requires an already admitted trial and is not an
 alternative reservation or admission authority. The CLI's between-step budget
 alone does not enforce a hard deadline during a long kernel or initialization.
+It also enforces no memory limit. A reactive peak/RSS watchdog cannot prove
+that a limit was never exceeded. CPU-only refusal controls (designated fleet
+host, no training or model allocation) are:
+
+```sh
+hy experiments/ced_moe/check_memory_policy.hy --data /path/to/task-data \
+  --output /path/to/fresh-control-name
+```
+
+They replace model initialization, graph evaluation, memory setting and
+distributed initialization with failure sentinels, verify the refusal reason,
+and assert that no run directory was created.
+
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 

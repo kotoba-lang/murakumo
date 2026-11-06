@@ -8,6 +8,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
 (import mlx.core :as mx)
 (import model :as m)
 (import data [digest])
+(import memory_policy [require-hard-memory-enforcer])
 
 (defn sample-batch [tokens batch seq rng]
   (setv starts (.integers rng 0 (- (len tokens) seq 1) :size batch)
@@ -119,6 +120,10 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (when (or (<= args.steps 0) (<= args.max_seconds 0) (< args.seq 4)
             (<= args.batch 0) (< args.world_size 1))
     (raise (ValueError "invalid bounded run options")))
+  ;; set_memory_limit below is an advisory graph-evaluation setting. It is not
+  ;; the requested hard ceiling. Refuse every training preset until an actual
+  ;; host/runtime enforcer is qualified; a watchdog cannot prevent overshoot.
+  (require-hard-memory-enforcer budget)
   (for [split ["train" "validation"]]
     (assert (= (digest (/ corpus (+ split ".bin")))
                (get (get (get manifest "splits") split) "token_file_sha256"))
@@ -218,6 +223,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
                 "communication_wire_bytes_note" "requires dedicated interface/counter measurement"
                 "mlx_peak_bytes" (mx.get-peak-memory)
                 "memory_limit_bytes" budget "trace" trace
+                "memory_limit_semantics" "requested ceiling; MLX setting alone is advisory"
                 "architecture" "reduced CSA2-style CED/SWA/Sparse MoE; see README"
                 "distributed_mode" (if world "replicated-ddp" "single-host")})
   (.write_text (/ output f"result-rank-{rank}.json") (json.dumps result :indent 2)
@@ -236,7 +242,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (.add_argument parser "--lr" :type float :default 0.001)
   (.add_argument parser "--weight-decay" :type float :default 0.01)
   (.add_argument parser "--clip" :type float :default 1.0)
-  (.add_argument parser "--memory-limit-gib" :type float :default 2.0)
+  (.add_argument parser "--memory-limit-gib" :type float :default 2.0
+                 :help "Requested hard ceiling; training refuses until a qualified enforcer exists. MLX alone is advisory.")
   (.add_argument parser "--max-seconds" :type float :default 300.0)
   (for [[name default] [["steps" 100] ["seq" 128] ["batch" 1] ["seed" 936]
                         ["eval-every" 20] ["eval-batches" 4] ["world-size" 1]]]

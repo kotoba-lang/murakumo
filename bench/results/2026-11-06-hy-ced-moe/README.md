@@ -1,7 +1,53 @@
-# JUN-936: first M4 from-scratch 1.044B capacity/update trial
+# JUN-936: M4 from-scratch 1.044B trials and memory-limit failure
 
 2026-11-06 JST. This is four optimizer steps, not convergence or a useful
 pretrained model. No 3B training or 30B time prediction is established here.
+
+## Stop condition: sequence256 exceeded the requested ceiling
+
+The owner authorized sequence256 then512, each four SGD steps, requested10GiB,
+120s outer deadline, serial, no checkpoints, no increase on failure. Only the
+first trial ran. Sequence512 was **not started**. The developer Mac ran no
+training or GPU benchmark.
+
+| Sequence256 metric | Observation |
+| --- | ---: |
+| Steps / processed training tokens | 4 / 1,024 |
+| Requested ceiling | 10,737,418,240 bytes (10GiB) |
+| MLX allocator peak | 12,192,859,180 bytes (11.36GiB) |
+| Excess over requested ceiling | 1,455,440,940 bytes (13.55%) |
+| System swap before / after | 621.75MiB / 1,833.88MiB |
+| System swap increase | 1,212.13MiB |
+| Training-phase wall / observed rate | 25.5915s / 40.0133 tokens/s |
+| Supervisor wall / exit / child reaped | 27.1879s / 0 / true |
+| Held-out256-token sample CE | 10.474244 -> 10.476707 |
+
+The process completed but **resource compliance failed**. This rate is an
+over-budget observation, unsuitable for an admitted10GiB performance claim
+or30B extrapolation. Validation did not improve in this short trial. The
+sequence exceeds window128 and executes local-window truncation, but without
+a matched control it does not measure SWA savings.
+
+Raw `m4-16gb-1b-s256*.json` and before/after snapshots are unchanged. The
+separate assessment preserves source digests, conditions and failure status.
+Other options, corpus and runtime match the sequence64 trial below; the outer
+deadline changed to120s and the between-step budget to110s. The peak is MLX
+allocator memory, not total process/OS RAM. Swap snapshots are system-wide;
+the trial coincided with their increase, without attribution to individual
+processes or measurement of other applications' latency. The owned child is
+reaped; no other process was stopped and swap was not cleared.
+
+Root cause: MLX0.32.4 [`set_memory_limit`](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html)
+is only a guideline and can be exceeded, including by using swap. Earlier
+wording calling it a cap was incorrect. Earlier peaks below the setting did
+not qualify enforcement. No qualified hard memory enforcer exists here.
+
+The trainer now refuses before model initialization, distributed startup or
+output creation for every preset, with no override flag. Fleet CPU-only
+refusal controls for tiny/sequence16/world1,1B/256/world1 and1B/512/world2
+passed, with allocation/evaluation/collective sentinels and no output created.
+These controls ran no training. Sequence512 and all further training remain
+blocked pending a qualified memory enforcer; no ceiling increase is planned.
 
 ## Conditions
 
@@ -16,7 +62,7 @@ pretrained model. No 3B training or 30B time prediction is established here.
   manifest SHA256 `abbeeeac4e69931808c7a93774f346710a22dfd5d3977136ed49b7198264f82a`.
 - BF16 model/gradients, FP32 master weights, SGD without momentum, LR0.001,
   weight decay0.01, norm clip1.0, batch1, sequence64, seed936.
-- Explicit admitted first trial: four steps, MLX cap10GiB, outer child
+- Explicit admitted first trial: four steps, requested10GiB (MLX advisory setting), outer child
   deadline60s, no checkpoint. This does not qualify a shared governor or a
   subsequent long/distributed run. The developer Mac performs no model execution.
 
@@ -64,7 +110,8 @@ are0.17509s and0.15455s (raw samples in the JSONs). Interface TX deltas were
 background/control traffic and are not exclusive per-job wire-byte counts.
 
 The 2,807,616-parameter DDP control uses different per-rank data RNG streams,
-BF16 gradients, FP32 AdamW, batch1/sequence16, two steps and a1GiB cap per rank.
+BF16 gradients, FP32 AdamW, batch1/sequence16, two steps and a requested1GiB
+MLX advisory setting per rank. This did not qualify hard memory enforcement.
 Both ranks finish with the same validation CE10.40366 and the same saved
 weights SHA256:
 
