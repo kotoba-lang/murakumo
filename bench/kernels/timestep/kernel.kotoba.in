@@ -1,0 +1,102 @@
+(ns murakumo.timestep (:export [main]))
+
+;; Sinusoidal timestep embedding in f32, the first stage of an SDXL UNet's time
+;; conditioning. For t = @TS@ * i (i < @NT@) and half = @DIM@ / 2:
+;; freq_k = exp(-ln(10000) * k / half), arg = t * freq_k, and the embedding is
+;; [cos(arg_0..), sin(arg_0..)]. The language has no sin, cos or exp, so cos and
+;; sin come from a quadrant reduction by pi/2 in three exactly-representable
+;; parts plus cephes polynomials, and exp is the fixed Cody-Waite polynomial.
+;; Each step is one binary32 operation, in the order kernel.c uses.
+
+(defn- dim [] :i64 @DIM@)
+(defn- half [] :i64 (quot (dim) 2))
+(defn- nt [] :i64 @NT@)
+(defn- ts [] :i64 @TS@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+(defn- expb [xb :i64] :i64
+  (let [lim (fb 1118699520)
+        x (f32-max (f32-min (fb xb) lim) (f32-neg lim))
+        fx (f32-add (f32-mul x (fb 1069066811)) (fb 1262485504))
+        k (- (bit-and (f32-to-bits fx) 8388607) 4194304)
+        kf (f32-sub fx (fb 1262485504))
+        r (f32-sub (f32-sub x (f32-mul kf (fb 1060208640))) (f32-mul kf (fb 3109978243)))
+        y0 (f32-add (f32-mul (fb 961571175) r) (fb 985088974))
+        y1 (f32-add (f32-mul y0 r) (fb 1007192328))
+        y2 (f32-add (f32-mul y1 r) (fb 1026206145))
+        y3 (f32-add (f32-mul y2 r) (fb 1042983594))
+        y4 (f32-add (f32-mul y3 r) (fb 1056964608))
+        p (f32-add (f32-add (f32-mul (f32-mul y4 r) r) r) (fb 1065353216))]
+    (bf (f32-mul p (f32-from-bits (i32-wrap (i64-shift-left (+ k 127) 23)))))))
+
+;; quadrant of x (0..3) from the mantissa of x * 2/pi + 1.5 * 2^23
+(defn- quad [xb :i64] :i64
+  (let [fx (f32-add (f32-mul (fb xb) (fb 1059256707)) (fb 1262485504))]
+    (bit-and (- (bit-and (f32-to-bits fx) 8388607) 4194304) 3)))
+
+;; reduced argument r in [-pi/4, pi/4]
+(defn- redb [xb :i64] :i64
+  (let [x (fb xb)
+        fx (f32-add (f32-mul x (fb 1059256707)) (fb 1262485504))
+        kf (f32-sub fx (fb 1262485504))
+        r0 (f32-sub x (f32-mul kf (fb 1070139392)))
+        r1 (f32-sub r0 (f32-mul kf (fb 964378624)))
+        r2 (f32-sub r1 (f32-mul kf (fb 866263401)))]
+    (bf r2)))
+
+(defn- sinp [rb :i64] :i64
+  (let [r (fb rb)
+        z (f32-mul r r)
+        p0 (f32-add (f32-mul (fb 3108807161) z) (fb 1007190942))
+        p1 (f32-add (f32-mul p0 z) (fb 3190467235))
+        p (f32-mul (f32-mul p1 z) r)]
+    (bf (f32-add p r))))
+
+(defn- cosp [rb :i64] :i64
+  (let [r (fb rb)
+        z (f32-mul r r)
+        q0 (f32-add (f32-mul (fb 936179150) z) (fb 3132491290))
+        q1 (f32-add (f32-mul q0 z) (fb 1026206373))
+        q (f32-mul (f32-mul z z) q1)
+        hz (f32-mul (fb 1056964608) z)]
+    (bf (f32-add (f32-sub (fb 1065353216) hz) q))))
+
+(defn- cosb [xb :i64] :i64
+  (let [q (quad xb)
+        r (redb xb)]
+    (if (= q 0) (cosp r)
+      (if (= q 1) (bf (f32-neg (fb (sinp r))))
+        (if (= q 2) (bf (f32-neg (fb (cosp r)))) (sinp r))))))
+
+(defn- sinb [xb :i64] :i64
+  (let [q (quad xb)
+        r (redb xb)]
+    (if (= q 0) (sinp r)
+      (if (= q 1) (cosp r)
+        (if (= q 2) (bf (f32-neg (fb (sinp r)))) (bf (f32-neg (fb (cosp r)))))))))
+
+(defn- arg-at [ti :i64 k :i64] :i64
+  (let [freq (fb (expb (bf (f32-mul (fb 3239271822)
+                                     (f32-div (i64-to-f32-rounded k) (i64-to-f32-rounded (half)))))))]
+    (bf (f32-mul (i64-to-f32-rounded (* (ts) ti)) freq))))
+
+(defn- pass [c0 :i64] :i64
+  (loop [ti 0 c c0]
+    (if (= ti (nt)) c
+      (recur (+ ti 1)
+             (loop [k 0 cs (loop [k0 0 c0s c]
+                             (if (= k0 (half)) c0s
+                               (recur (+ k0 1)
+                                      (bit-and (+ (* c0s 31) (bit-and (cosb (arg-at ti k0)) 4294967295)) (mask48)))))]
+               (if (= k (half)) cs
+                 (recur (+ k 1)
+                        (bit-and (+ (* cs 31) (bit-and (sinb (arg-at ti k)) 4294967295)) (mask48)))))))))
+
+(defn main [] :i64
+  (loop [i 0 c (bit-and 12345 (mask48))]
+    (if (= i (reps)) c
+      (recur (+ i 1) (pass c)))))

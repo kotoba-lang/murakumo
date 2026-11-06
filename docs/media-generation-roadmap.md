@@ -116,8 +116,12 @@ Slice 2, conv2d 3 × 3 (stride 1, pad 1, bias) in `bench/kernels/conv2d-3x3/`, p
 gate on a square and a non-square shape ([record](../bench/results/2026-11-06-conv2d-3x3/README.md)); about
 10x slower than `cc -O2`, diagnostic on a busy host. Slice 3, non-causal multi-head attention (self and cross) in `bench/kernels/attention/`, passes it on three
 shapes ([record](../bench/results/2026-11-06-attention/README.md)); 15 to 50x slower than `cc -O2`, diagnostic.
-Still open in I1: stride-2 and 1 × 1 conv, LayerNorm, GEGLU, upsample, timestep embedding, and the QKV/out
-projections (plain matmul). The reference here is the twin's own math in double, not yet
+Slice 4 adds the rest of the SDXL block set under `bench/kernels/` with a shared `gate.sh`: LayerNorm, matmul (linear), GEGLU
+(erf by Abramowitz-Stegun), nearest 2x upsample, sinusoidal timestep embedding (own sin/cos reduction) and a general
+conv2d (1 × 1, 3 × 3, stride 1 or 2); every one is bit-exact against its twin with a detected mutant
+([record](../bench/results/2026-11-06-i1-rest/README.md)). I1's kernel list is now covered at the
+single-kernel level; what is not: f16 storage, GPU, the label-embedding MLP and ResBlock/SpatialTransformer wiring (I2), and
+speed (roughly 6 to 15 times slower than `cc -O2`, diagnostic). The reference here is the twin's own math in double, not yet
 comfyui-clj or ComfyUI output.
 
 ## Audio stages
