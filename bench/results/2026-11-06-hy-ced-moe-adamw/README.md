@@ -42,3 +42,22 @@ footprint. Physical3B capacity and global m/v restart are pending at this unit.
 Future inference reference is pinned to HF revision839bd570…; model-card weights
 PTQ1_0 5.95GB/PQ2_0 7.21GB are distinct from whole-process8GB acceptance and
 publisher intelligence metrics are distinct from our own measurements.
+
+## Physical optimizer and global checkpoint unit
+
+Three distinct M4 owners execute a small F32 full-model oracle comparison for
+three updates. All owned gradients and weights/master/m/v pass the pre-existing
+2e-5 absolute bound (gradients also rtol1e-4). Maximum gradient error2.414e-6,
+weight/master1.193e-7. A separate2+new-process2 restart vs continuous4 restores
+all four kinds exactly at boundary, sampler and MLXRNG exactly; continuation
+maxweights/master3.316e-7,m3.598e-8,v1.921e-9 (below2e-5, not bitwise parity).
+Nine cooperative refusal cases include missingm/v, corrupt tensors, wrongbeta,
+missingcommit, mixedgenerations and partialsnapshots, all before tensor loading
+or OptimizerStore allocation. Failed prepare never produces globalCOMMITTED.
+All small controls exit0/reaped under requested2/fatal1GiB. Actual3B capacity,
+held-out quality, m/v long checkpoint and64update study remain pending.
+
+New modules preserve legacy source-bound SGD checkpoints. Full FP32 optimizer
+states are owner-local NVMe files; only one parameter's master/m/v is streamed
+for update. Checkpoint certificates require all owners and same-layout reload.
+The `rank*/` files retain raw result/supervisor evidence.
