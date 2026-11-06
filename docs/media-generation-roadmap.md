@@ -135,6 +135,12 @@ PyTorch `ResBlock` and `SpatialTransformer` on the same parameters (one-off loca
 `bench/oracle/comfyui/`). The comparison with comfyui-clj named in the I2 gate has still not been done; the owner has since also
 approved ComfyUI's Python as an oracle, and that is what ran.
 
+**Stage M, slice 1 (2026-11-06).** The owner chose to build the f16 matrix tier (decision D2 of the I3 design, PR #607). An
+f16 `simdgroup_matrix` GEMM reached from Amu selfhost through dyld (`bench/kernels/gemm-metal/`): bit-exact against an integer
+C twin on four shapes, 3.1 to 3.6 TMAC/s on an M1 Max under load
+([record](../bench/results/2026-11-06-gemm-metal/README.md)). A GEMM only: convolution, attention, norms and dispatch batching
+are the rest of M.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
