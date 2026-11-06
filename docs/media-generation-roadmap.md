@@ -211,6 +211,8 @@ At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI
 
 **Stage M, slice 14: the sampler on the GPU (2026-11-06).** The sigma table, ComfyUI's `simple` schedule and the Euler loop with EPS input scaling and classifier-free guidance run on the GPU around toy stand-in models and agree with ComfyUI's own `ModelSamplingDiscrete` / `simple_scheduler` / `sample_euler` to 1e-6 (sigmas) and 8e-6 (a 4,000-fold-cancelling final latent); four mutants are detected ([record](../bench/results/2026-11-06-sampler-metal/README.md)). Not the UNet inside it, only Euler.
 
+**Stage M, slice 15: the two SDXL text towers at full size (2026-11-06).** The CLIP tower program is now parametric and also outputs the penultimate hidden state and the projected end-token embedding. At OpenAI CLIP-L (12 layers, 768) and OpenCLIP bigG (32 layers, 1,280; a 2.8 GB random-weight file) it agrees with transformers' own `CLIPTextModelWithProjection` to 2.7e-3 / 4.8e-3 / 1.5e-3 (L: last, penultimate, projected) and 3.4e-3 / 1.0e-2 / 1.8e-3 (G), in 12.5 ms and 69 ms ([record](../bench/results/2026-11-06-clip-full-metal/README.md)). Random weights, Hugging Face tensor names only (SDXL's OpenCLIP checkpoint naming is not mapped), no L+G concatenation or conditioning embeddings.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
