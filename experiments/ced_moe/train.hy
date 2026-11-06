@@ -11,6 +11,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
 (import memory_policy [require-hard-memory-enforcer])
 (import process_memory [counters])
 (import nvme_master [MasterStore])
+(import stream_checkpoint :as checkpoints)
 
 (defn sample-batch [tokens batch seq rng]
   (setv starts (.integers rng 0 (- (len tokens) seq 1) :size batch)
@@ -33,6 +34,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
 
 (defn save-checkpoint [root p state meta]
   "Publish a directory only after all component files are written and hashed."
+  (when (isinstance (get state "master") MasterStore)
+    (return (checkpoints.save root p state meta)))
   (setv root (pathlib.Path root) temporary (.with_name root (+ root.name ".partial")))
   (when (or (.exists root) (.exists temporary))
     (raise (FileExistsError (+ "checkpoint already exists: " (str root)))))
@@ -44,7 +47,10 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (.write_text (/ temporary "state.json") (json.dumps meta :indent 2) :encoding "utf-8")
   (.rename temporary root))
 
-(defn load-checkpoint [root cfg provenance args]
+(defn load-checkpoint [root cfg provenance args [parent None]]
+  (when (= args.master_offload "nvme")
+    (return (checkpoints.load root cfg provenance (training-options args)
+                              (evaluation-options args) parent)))
   (setv root (pathlib.Path root) meta (json.loads (.read_text (/ root "state.json"))))
   (assert (= (get meta "config") cfg) "resume model config mismatch")
   (assert (= (get meta "data_manifest_sha256") provenance) "resume corpus mismatch")
@@ -72,8 +78,17 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
 
 (defn training-options [args]
   (dfor key ["optimizer" "lr" "weight_decay" "clip" "seq" "batch" "seed" "world_size" "dtype"
-             "master_offload" "activation_checkpoint"]
+             "master_offload" "activation_checkpoint" "expert_token_chunk"]
         key (getattr args key)))
+
+(defn evaluation-options [args]
+  {"sequence" args.seq "batches" args.eval_batches "seed" args.seed})
+
+(defn checkpoint-meta [cfg step seen args rng provenance rank]
+  {"config" cfg "step" step "tokens_seen" seen "optimizer" args.optimizer
+   "lr" args.lr "weight_decay" args.weight_decay "rng_state" rng.bit_generator.state
+   "training_options" (training-options args) "evaluation_options" (evaluation-options args)
+   "data_manifest_sha256" provenance "world_size" args.world_size "rank" rank})
 
 (defn step-update [p grads state step args]
   ;; Per-parameter materialization bounds old/new optimizer state overlap.
@@ -130,11 +145,12 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
                            "use fewer parameters or a verified sharded learner. "
                            (str minimum) " > " (str budget)))))
   (when (or (<= args.steps 0) (<= args.max_seconds 0) (< args.seq 4)
-            (<= args.batch 0) (< args.world_size 1))
+            (<= args.batch 0) (< args.world_size 1) (<= args.expert_token_chunk 0)
+            (< args.checkpoint_every 0))
     (raise (ValueError "invalid bounded run options")))
   (when (and (= args.master_offload "nvme")
-             (or (!= args.optimizer "sgd") args.checkpoint args.resume))
-    (raise (ValueError "NVMe master mode currently supports SGD without checkpoint/resume only")))
+             (or (!= args.optimizer "sgd") (> args.world_size 1)))
+    (raise (ValueError "NVMe master mode supports single-rank SGD; global checkpoint is unqualified")))
   ;; Qualify the one-shot kernel setter on this exact host/source first. Its
   ;; fatal process-footprint threshold is 1GiB below the requested ceiling.
   (setv memory-enforcer (require-hard-memory-enforcer budget))
@@ -142,6 +158,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
     (raise (MemoryError "state-only minimum exceeds the lower kernel fatal threshold")))
   (print (json.dumps {"phase" "before_model_initialization"
                       "memory_enforcer" memory-enforcer "process_memory" (counters)}) :flush True)
+  (setv process-at-start (counters))
   (for [split ["train" "validation"]]
     (assert (= (digest (/ corpus (+ split ".bin")))
                (get (get (get manifest "splits") split) "token_file_sha256"))
@@ -159,12 +176,17 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (setv train (np.memmap (/ corpus "train.bin") :dtype np.uint16 :mode "r")
         validation (np.memmap (/ corpus "validation.bin") :dtype np.uint16 :mode "r")
         rng (np.random.default_rng (+ args.seed rank))
-        step 0 seen 0 comm-logical 0 comm-ring-estimate 0)
+        step 0 seen 0 comm-logical 0 comm-ring-estimate 0
+        load-seconds 0.0 checkpoint-events [] saved-steps (set) evaluation-events [])
   (if args.resume
     (do
-      (setv [p state old] (load-checkpoint args.resume cfg provenance args)
+      (setv load-start (time.monotonic)
+            [p state old] (load-checkpoint args.resume cfg provenance args output)
             step (get old "step") seen (get old "tokens_seen")
-            rng.bit_generator.state (get old "rng_state")))
+            rng.bit_generator.state (get old "rng_state")
+            load-seconds (- (time.monotonic) load-start))
+      (print (json.dumps {"phase" "checkpoint_loaded" "step" step "tokens_seen" seen
+                          "load_seconds" load-seconds "source" args.resume}) :flush True))
     (do
       (setv p (m.init-parameters cfg args.seed dtype :materialize True)
             state {"master" (if (= args.master_offload "nvme") (MasterStore output) {})})
@@ -187,6 +209,18 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
         initial-val (ce-value p validation cfg args.seq args.eval_batches args.seed)
         trace [] grad-fn (mx.value-and-grad m.loss)
         phase-start (time.monotonic))
+  (print (json.dumps {"phase" "initial_validation" "step" step "validation_ce" initial-val
+                      "evaluation_options" (evaluation-options args)}) :flush True)
+  (defn checkpoint-now []
+    (when (in step saved-steps) (return))
+    (setv tick (time.monotonic) target (/ output f"checkpoint-{step}-rank-{rank}")
+          receipt (save-checkpoint target p state
+                    (checkpoint-meta cfg step seen args rng provenance rank)))
+    (when (is receipt None)
+      (setv receipt {"path" (str target) "step" step "seconds" (- (time.monotonic) tick)}))
+    (.append checkpoint-events receipt)
+    (.add saved-steps step)
+    (print (json.dumps {"phase" "checkpoint_saved" "receipt" receipt}) :flush True))
   (while (and (< (- step initial-step) args.steps)
               (< (- (time.monotonic) started) args.max_seconds))
     (setv [x y] (sample-batch train args.batch args.seq rng)
@@ -225,26 +259,26 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
     (del grads value)
     (mx.clear-cache)
     (when (= (% step args.eval_every) 0)
-      (setv val (ce-value p validation cfg args.seq args.eval_batches args.seed))
-      (print (json.dumps {"step" step "validation_ce" val}) :flush True)))
+      (setv tick (time.monotonic)
+            val (ce-value p validation cfg args.seq args.eval_batches args.seed)
+            event {"step" step "validation_ce" val "seconds" (- (time.monotonic) tick)})
+      (.append evaluation-events event)
+      (print (json.dumps event) :flush True))
+    (when (and (> args.checkpoint_every 0) (= (% step args.checkpoint_every) 0))
+      (checkpoint-now)))
   (mx.synchronize)
   (when (not trace) (raise (TimeoutError "no optimizer step completed within the run budget")))
   (setv training-seconds (- (time.monotonic) phase-start)
-        final-val (ce-value p validation cfg args.seq args.eval_batches args.seed)
-        meta {"config" cfg "step" step "tokens_seen" seen
-              "optimizer" args.optimizer "lr" args.lr
-              "weight_decay" args.weight_decay "rng_state" rng.bit_generator.state
-              "training_options" (training-options args)
-              "data_manifest_sha256" provenance
-              "world_size" args.world_size "rank" rank})
+        final-val (ce-value p validation cfg args.seq args.eval_batches args.seed))
   (when args.checkpoint
-    (save-checkpoint (/ output f"checkpoint-{step}-rank-{rank}") p state meta))
+    (checkpoint-now))
   (setv offload-report (when (= args.master_offload "nvme")
           {"logical_read_bytes" (. (get state "master") bytes_read)
            "logical_write_bytes" (. (get state "master") bytes_written)
-           "checkpoint" False}))
+           "restore_copied_file_bytes" (. (get state "master") restore_file_bytes)}))
   (when (= args.master_offload "nvme") (.close (get state "master")))
-  (setv result {"schema" "ced-moe-training-pilot/v1" "config" cfg
+  (setv all-in-seconds (- (time.monotonic) started) final-memory (counters)
+        result {"schema" "ced-moe-training-pilot/v1" "config" cfg
                 "parameters" report "optimizer" args.optimizer
                 "dtype" args.dtype "master_offload" args.master_offload "offload_io" offload-report
                 "host" (mx.device-info) "platform" (platform.platform)
@@ -252,9 +286,19 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
                 "world_size" args.world_size "rank" rank
                 "data_manifest_sha256" provenance
                 "steps" (- step initial-step) "tokens" (- seen initial-seen)
+                "initial_step" initial-step "final_step" step "total_tokens_seen" seen
+                "resume_from" args.resume "checkpoint_load_seconds" load-seconds
+                "checkpoint_events" checkpoint-events "evaluation_events" evaluation-events
+                "evaluation_options" (evaluation-options args)
                 "initial_validation_ce" initial-val "final_validation_ce" final-val
                 "training_phase_wall_seconds" training-seconds
-                "wall_seconds_including_setup_eval_checkpoint" (- (time.monotonic) started)
+                "wall_seconds_including_setup_eval_checkpoint" all-in-seconds
+                "end_to_end_tokens_per_second" (/ (- seen initial-seen) all-in-seconds)
+                "optimizer_step_seconds_sum" (sum (gfor row trace (get row "step_seconds")))
+                "checkpoint_seconds_sum" (sum (gfor event checkpoint-events (get event "seconds")))
+                "physical_process_io_delta"
+                  {"read_bytes" (- (get final-memory "disk_read_bytes") (get process-at-start "disk_read_bytes"))
+                   "write_bytes" (- (get final-memory "disk_write_bytes") (get process-at-start "disk_write_bytes"))}
                 "training_phase_tokens_per_second" (/ (- seen initial-seen) training-seconds)
                 "communication_logical_gradient_bytes" comm-logical
                 "communication_ring_tx_estimated_bytes" comm-ring-estimate
@@ -262,7 +306,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
                 "communication_wire_bytes_note" "requires dedicated interface/counter measurement"
                 "mlx_peak_bytes" (mx.get-peak-memory)
                 "memory_limit_bytes" budget "trace" trace
-                "memory_enforcer" memory-enforcer "process_memory" (counters)
+                "memory_enforcer" memory-enforcer "process_memory" final-memory
+                "source_sha256" (checkpoints.source-fingerprint)
                 "memory_limit_semantics" "kernel fatal process footprint with1GiB headroom; MLX advisory only"
                 "architecture" "reduced CSA2-style CED/SWA/Sparse MoE; see README"
                 "distributed_mode" (if world "replicated-ddp" "single-host")})
@@ -293,6 +338,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
     (.add_argument parser (+ "--" name) :type int :default default))
   (.add_argument parser "--resume")
   (.add_argument parser "--checkpoint" :action "store_true")
+  (.add_argument parser "--checkpoint-every" :type int :default 0)
   (.parse_args parser))
 
 (when (= __name__ "__main__") (run (arguments)))

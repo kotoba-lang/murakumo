@@ -157,7 +157,8 @@ during initialization. `--optimizer sgd --master-offload nvme` instead keeps
 one FP32 master tensor in memory at a time. Its safetensor files are temporary
 optimizer working state, removed after normal completion, not model checkpoints.
 Killed runs can leave their own temporary directories for inspection. This
-mode refuses checkpoint/resume and AdamW, which are not qualified for offload.
+mode supports single-rank SGD checkpoint/resume in the v2 format below;
+AdamW offload and global multi-rank checkpoints remain unqualified.
 It preserves FP32 masters and BF16 weights/gradients. Logical offload bytes and
 OS physical disk counters are separate; page-cache hits are not SSD reads.
 `check_offload.hy` compares three updates under identical gradient inputs and
@@ -180,6 +181,51 @@ and8.9626GiB, training-phase34.4091/38.9712tokens/s including NVMe work and
 periodic validation. Before/after swap is unchanged. These are one short run
 per context with uncontrolled OS page-cache state, not convergence or sustained
 performance. See the raw guarded evidence before using either measurement.
+
+## NVMe checkpoint save/restart
+
+`--checkpoint` saves at normal exit; `--checkpoint-every N` also saves after
+each global Nth update. A v2 checkpoint contains one shard per parameter for
+weights and FP32 masters, sampler and MLX RNG state, step/token count, canonical
+parameter order, training/evaluation options, data digest, exact source digests
+and runtime versions. Shards and metadata are hashed; COMPLETE seals metadata.
+All files/directories are fsynced before publishing by rename. A partial save
+is retained for inspection and is not loadable. No mutable-workspace hard links
+are used, and temporary optimizer files can be removed after normal exit.
+
+Resume verifies the seal, exact component set, hashes, safetensor headers,
+shape/dtype, source/runtime/data/options and rank before loading tensors. It
+loads weights sequentially and copies FP32 master shards to a fresh workspace;
+it never materializes all masters on the GPU. `--steps` means additional updates
+after the saved global step. Checkpoint source changes require a separate
+migration, rather than silently accepting a different implementation.
+
+Fleet-only examples, after kernel qualification:
+
+```sh
+hy experiments/ced_moe/train.hy --data /path/to/data --output /path/to/part-a \
+  --preset 1b --optimizer sgd --master-offload nvme --seq 256 --steps 32 \
+  --eval-every 8 --eval-batches 8 --checkpoint --checkpoint-every 16 \
+  --memory-limit-gib 10 --max-seconds 540
+hy experiments/ced_moe/train.hy --data /path/to/data --output /path/to/part-b \
+  --preset 1b --optimizer sgd --master-offload nvme --seq 256 --steps 32 \
+  --eval-every 8 --eval-batches 8 --checkpoint --checkpoint-every 16 \
+  --memory-limit-gib 10 --max-seconds 540 \
+  --resume /path/to/part-a/checkpoint-32-rank-0
+```
+
+Use the outer supervisor as well; these commands do not replace admission or
+the kernel limit. Results separate optimizer-step time, training phase including
+periodic evaluation/checkpoint, total run time including init/load/final save,
+and physical process I/O from logical master traffic. Checkpoint payload/file
+bytes and save/load durations are recorded separately.
+
+`check_checkpoint.hy` compares separate processes (4 vs2+restart+2) and exact
+boundary weight/master/RNG recovery, plus six corruption/compatibility refusals.
+FP32 maximum continuation weight/master difference is2.98e-8. BF16 boundaries
+are exact, but continued runs differ (weight1.2207e-4/master6.1020e-6 in the small
+control); BF16 bitwise end-to-end reproduction is not qualified. See
+[checkpoint evidence](../../bench/results/2026-11-06-hy-ced-moe-checkpoint/README.md).
 
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
