@@ -1,0 +1,130 @@
+{
+  "schema": "ced-moe-coscientist-study/v1",
+  "status": "qualification",
+  "method": "local adaptation of generate/critique/rank/evolve/meta-review; not execution of Google Co-Scientist service; no invented Elo",
+  "sources": [
+    "https://research.google/blog/accelerating-scientific-breakthroughs-with-an-ai-co-scientist/",
+    "https://deepmind.google/blog/co-scientist-a-multi-agent-ai-partner-to-accelerate-research/",
+    "https://arxiv.org/abs/1711.05101"
+  ],
+  "constraints": {
+    "training_final_nodes": 10,
+    "node_memory_bytes": 17179869184,
+    "pilot_nodes": 3,
+    "training_envelope_bytes": 10737418240,
+    "kernel_fatal_bytes": 9663676416,
+    "inference_nodes": 1,
+    "inference_host_bytes": 17179869184,
+    "target_inference_process_bytes": 8000000000,
+    "developer_mac_model_execution": false
+  },
+  "hypotheses": [
+    {
+      "id": "H1",
+      "claim": "A qualified AdamW candidate improves development CE over matched SGD configuration",
+      "falsifiers": [
+        "memory/numerical/restart gate fails",
+        "fixed-development CE does not improve"
+      ],
+      "status": "proposed"
+    },
+    {
+      "id": "H2",
+      "claim": "streaming owner-local FP32 master/m/v fits within the qualified9GiB fatal limit for actual3B",
+      "falsifiers": [
+        "fatal limit breach",
+        "full-state materialization",
+        "unsupported state dtype"
+      ],
+      "status": "optimizer-equations-qualified-capacity-pending",
+      "evidence": "optimizer-oracle.json"
+    },
+    {
+      "id": "H3",
+      "claim": "saving/restoring master/m/v plus global optimizer step/warmup/sampler preserves continuation",
+      "falsifiers": [
+        "moment/step missing",
+        "boundary mismatch",
+        "continuation exceeds predetermined control tolerance"
+      ],
+      "status": "proposed"
+    },
+    {
+      "id": "H4",
+      "claim": "fixed independent confirmation CE improves after longer training",
+      "falsifiers": [
+        "CE reduction <0.02",
+        "fewer than12/16 paired evaluation batches improve"
+      ],
+      "status": "proposed"
+    }
+  ],
+  "critique": [
+    "four-step sampled objective is not held-out quality",
+    "MLX AdamW default bias_correction=False must be overridden",
+    "BF16 trajectory bitwise parity is not qualified",
+    "candidate choice uses development split only",
+    "Bonsai weight bytes are not whole-process memory",
+    "3-node pilot is not final10-node qualification",
+    "legacy checkpoints/source must remain intact"
+  ],
+  "screen": {
+    "updates": 8,
+    "global_tokens": 512,
+    "sequence": 64,
+    "global_batch": 1,
+    "seed": 936,
+    "warmup_steps": 4,
+    "validation_batches": 8,
+    "validation_seed": 936,
+    "candidates": [
+      {
+        "id": "sgd-control",
+        "optimizer": "sgd",
+        "lr": 0.001
+      },
+      {
+        "id": "adam-low",
+        "optimizer": "adamw",
+        "lr": 0.0001
+      },
+      {
+        "id": "adam-high",
+        "optimizer": "adamw",
+        "lr": 0.0003
+      }
+    ],
+    "rank_rule": "hard gates first; lowest final fixed-development CE; efficiency reported separately; no claim causal optimizer-only effect across tuned LR bundles",
+    "checkpoint": false
+  },
+  "long_run": {
+    "optimizer": "selected-qualified-adamw",
+    "updates": 64,
+    "global_tokens": 4096,
+    "phases": [
+      32,
+      32
+    ],
+    "checkpoint_steps": [
+      32,
+      64
+    ],
+    "evaluation_every": 8,
+    "confirmation": {
+      "split": "test",
+      "seed": 2027,
+      "batches": 16,
+      "tokens": 1024,
+      "min_ce_improvement": 0.02,
+      "min_improving_batches": 12
+    },
+    "initialization": "fresh per-key seed936; confirmation only after screen winner preregistered"
+  },
+  "target_model": {
+    "repo": "prism-ml/Ternary-Bonsai-2-27B-gguf",
+    "revision": "839bd57023c1558945afea70a74fa83c054f35f9",
+    "source": "publisher model card; not our fleet inference measurement",
+    "native_issue": "JUN-187"
+  },
+  "decision": null
+}
