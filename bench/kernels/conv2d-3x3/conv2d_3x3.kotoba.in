@@ -1,0 +1,75 @@
+(ns murakumo.conv2d-3x3 (:export [main]))
+
+;; 3x3 convolution, stride 1, zero padding 1, NCHW, batch 1, with bias, f32:
+;; the workhorse of an SDXL UNet and VAE. Shape from run.sh (@CI@ in, @CO@ out
+;; channels, @H@ x @W@ positions, @REPS@ repetitions). The accumulator starts at
+;; the bias and adds one product per in-bounds tap in (ci, ky, kx) order, each
+;; multiply and add rounded on its own, exactly as conv2d_3x3.c does; a padded
+;; tap is skipped, not multiplied by zero. Values travel as i64 bit patterns
+;; and are read back with f32-from-bits after i32-wrap.
+
+(defn- nci [] :i64 @CI@)
+(defn- nco [] :i64 @CO@)
+(defn- hh [] :i64 @H@)
+(defn- ww [] :i64 @W@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+;; scale is the bit pattern of 2^-14 (947912704) or 2^-16 (931135488).
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-mul (i64-to-f32-rounded iv) (fb scale))))]
+        (recur (+ i 1) t)))))
+
+;; One tap of the 3x3 window: ci channel, position k in 0..8 (ky = k/3, kx = k%3),
+;; output position (y, xx). Returns the new accumulator bits.
+(defn- tap [x :vector-i64 w :vector-i64 acc :i64 wi :i64 xi :i64] :i64
+  (bf (f32-add (fb acc) (f32-mul (fb (vector-at w wi)) (fb (vector-at x xi))))))
+
+(defn- conv-at [x :vector-i64 w :vector-i64 b :vector-i64 co :i64 pos :i64] :i64
+  (let [y (quot pos (ww))
+        xx (- pos (* y (ww)))
+        taps (* (nci) 9)]
+    (loop [t 0 acc (vector-at b co)]
+      (if (= t taps) acc
+        (let [ci (quot t 9)
+              k (- t (* ci 9))
+              ky (quot k 3)
+              kx (- k (* ky 3))
+              yy (- (+ y ky) 1)
+              xp (- (+ xx kx) 1)]
+          (if (or (or (< yy 0) (>= yy (hh))) (or (< xp 0) (>= xp (ww))))
+            (recur (+ t 1) acc)
+            (recur (+ t 1)
+                   (tap x w acc (+ (* (+ (* co (nci)) ci) 9) k)
+                        (+ (* (+ (* ci (hh)) yy) (ww)) xp)))))))))
+
+(defn- pass [x :vector-i64 w :vector-i64 b :vector-i64 c0 :i64] :i64
+  (let [plane (* (hh) (ww))]
+    (loop [co 0 c c0]
+      (if (= co (nco)) c
+        (recur (+ co 1)
+               (loop [pos 0 cc c]
+                 (if (= pos plane) cc
+                   (recur (+ pos 1)
+                          (bit-and (+ (* cc 31) (bit-and (conv-at x w b co pos) 4294967295)) (mask48))))))))))
+
+(defn main [] :i64
+  (let [x (vector-alloc (* (nci) (* (hh) (ww))))
+        w (vector-alloc (* (* (nco) (nci)) 9))
+        b (vector-alloc (nco))
+        s1 (fill x (* (nci) (* (hh) (ww))) 12345 947912704)
+        s2 (fill w (* (* (nco) (nci)) 9) s1 931135488)
+        s3 (fill b (nco) s2 947912704)]
+    (loop [i 0 c (bit-and s3 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (pass x w b c))))))

@@ -1,0 +1,112 @@
+(ns murakumo.attention (:export [main]))
+
+;; Non-causal multi-head scaled dot-product attention in f32: the block inside
+;; every SpatialTransformer (self-attention when @LQ@ = @LK@, cross-attention
+;; when they differ). Q is [@LQ@, @NH@*@D@], K and V are [@LK@, @NH@*@D@]. Per (head,
+;; query): scores = (q . k) * (1/sqrt(D)), summed over d in order; softmax with the
+;; row maximum subtracted; p = e / sum; o[c] = sum_j p[j] * v[j][c] in j order.
+;; Same steps and order as attention.c, no contraction, so checksums must match
+;; bit for bit. exp is the fixed Cody-Waite + degree-5 polynomial used by
+;; groupnorm_silu (the language has no exp). Values travel as i64 bit patterns.
+
+(defn- nh [] :i64 @NH@)
+(defn- dd [] :i64 @D@)
+(defn- lq [] :i64 @LQ@)
+(defn- lk [] :i64 @LK@)
+(defn- reps [] :i64 @REPS@)
+(defn- hd [] :i64 (* (nh) (dd)))
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+;; scale is the bit pattern of 2^-12 (964689920) or 2^-14 (947912704).
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-mul (i64-to-f32-rounded iv) (fb scale))))]
+        (recur (+ i 1) t)))))
+
+(defn- expb [xb :i64] :i64
+  (let [lim (fb 1118699520)
+        x (f32-max (f32-min (fb xb) lim) (f32-neg lim))
+        fx (f32-add (f32-mul x (fb 1069066811)) (fb 1262485504))
+        k (- (bit-and (f32-to-bits fx) 8388607) 4194304)
+        kf (f32-sub fx (fb 1262485504))
+        r (f32-sub (f32-sub x (f32-mul kf (fb 1060208640))) (f32-mul kf (fb 3109978243)))
+        y0 (f32-add (f32-mul (fb 961571175) r) (fb 985088974))
+        y1 (f32-add (f32-mul y0 r) (fb 1007192328))
+        y2 (f32-add (f32-mul y1 r) (fb 1026206145))
+        y3 (f32-add (f32-mul y2 r) (fb 1042983594))
+        y4 (f32-add (f32-mul y3 r) (fb 1056964608))
+        p (f32-add (f32-add (f32-mul (f32-mul y4 r) r) r) (fb 1065353216))]
+    (bf (f32-mul p (f32-from-bits (i32-wrap (i64-shift-left (+ k 127) 23)))))))
+
+;; (q_i . k_j) for head h, summed over d in order.
+(defn- dotqk [q :vector-i64 k :vector-i64 qo :i64 ko :i64] :i64
+  (loop [c 0 acc 0]
+    (if (= c (dd)) acc
+      (recur (+ c 1)
+             (bf (f32-add (fb acc) (f32-mul (fb (vector-at q (+ qo c))) (fb (vector-at k (+ ko c))))))))))
+
+;; Scaled scores of query i, head h into sc[0..LK); returns the row maximum.
+(defn- scores [q :vector-i64 k :vector-i64 sc :vector-i64 h :i64 i :i64] :i64
+  (let [scale (f32-div (fb 1065353216) (f32-sqrt (i64-to-f32-rounded (dd))))
+        qo (+ (* i (hd)) (* h (dd)))]
+    (loop [j 0 m 0]
+      (if (= j (lk)) m
+        (let [s (bf (f32-mul (fb (dotqk q k qo (+ (* j (hd)) (* h (dd))))) scale))
+              u (vector-assoc! sc j s)]
+          (recur (+ j 1) (if (or (= j 0) (f32-gt (fb s) (fb m))) s m)))))))
+
+;; sc[j] <- exp(sc[j] - m); returns the sum in order.
+(defn- exps [sc :vector-i64 m :i64] :i64
+  (loop [j 0 sum 0]
+    (if (= j (lk)) sum
+      (let [e (expb (bf (f32-sub (fb (vector-at sc j)) (fb m))))
+            u (vector-assoc! sc j e)]
+        (recur (+ j 1) (bf (f32-add (fb sum) (fb e))))))))
+
+(defn- normalize [sc :vector-i64 sum :i64] :i64
+  (loop [j 0 z 0]
+    (if (= j (lk)) z
+      (let [u (vector-assoc! sc j (bf (f32-div (fb (vector-at sc j)) (fb sum))))]
+        (recur (+ j 1) z)))))
+
+(defn- out-at [sc :vector-i64 v :vector-i64 h :i64 c :i64] :i64
+  (loop [j 0 o 0]
+    (if (= j (lk)) o
+      (recur (+ j 1)
+             (bf (f32-add (fb o) (f32-mul (fb (vector-at sc j)) (fb (vector-at v (+ (+ (* j (hd)) (* h (dd))) c))))))))))
+
+(defn- pass [q :vector-i64 k :vector-i64 v :vector-i64 sc :vector-i64 c0 :i64] :i64
+  (loop [h 0 c c0]
+    (if (= h (nh)) c
+      (recur (+ h 1)
+             (loop [i 0 ci c]
+               (if (= i (lq)) ci
+                 (let [m (scores q k sc h i)
+                       sum (exps sc m)
+                       z (normalize sc sum)]
+                   (recur (+ i 1)
+                          (loop [cc 0 cz ci]
+                            (if (= cc (dd)) cz
+                              (recur (+ cc 1)
+                                     (bit-and (+ (* cz 31) (bit-and (out-at sc v h cc) 4294967295)) (mask48)))))))))))))
+
+(defn main [] :i64
+  (let [q (vector-alloc (* (lq) (hd)))
+        k (vector-alloc (* (lk) (hd)))
+        v (vector-alloc (* (lk) (hd)))
+        sc (vector-alloc (lk))
+        s1 (fill q (* (lq) (hd)) 12345 964689920)
+        s2 (fill k (* (lk) (hd)) s1 964689920)
+        s3 (fill v (* (lk) (hd)) s2 947912704)]
+    (loop [i 0 c (bit-and s3 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (pass q k v sc c))))))

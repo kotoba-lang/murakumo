@@ -1,0 +1,115 @@
+(ns murakumo.groupnorm-silu (:export [main]))
+
+;; GroupNorm (affine) followed by SiLU on one [C, HW] f32 tensor: the op that
+;; opens every SDXL UNet and VAE ResBlock. Shape and group count come from
+;; run.py (@C@ channels, @HW@ positions, @G@ groups, @REPS@ repetitions).
+;; Every f32 step is one named operation, rounded on its own, in the same order
+;; as groupnorm_silu.c; there is no contraction, so the checksum must equal the
+;; C twin's bit for bit. Values travel as i64 bit patterns (the guest ABI has
+;; no f32 vector), read back with f32-from-bits after i32-wrap.
+;; exp comes from a fixed Cody-Waite reduction and a degree-5 polynomial in
+;; plain f32 steps, because the language has no exp and f32-to-i64-truncating is
+;; refused on native: k is read out of the mantissa of x*log2(e) + 1.5*2^23.
+
+(defn- nc [] :i64 @C@)
+(defn- hw [] :i64 @HW@)
+(defn- ng [] :i64 @G@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+(defn- fill-x [v :vector-i64 n :i64 seed :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-mul (i64-to-f32-rounded iv) (fb 956301312))))]
+        (recur (+ i 1) t)))))
+
+(defn- fill-gamma [v :vector-i64 n :i64 seed :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (bit-and (i64-shift-right t 8) 1023)
+            u (vector-assoc! v i (bf (f32-add (f32-mul (i64-to-f32-rounded iv) (fb 981467136)) (fb 1056964608))))]
+        (recur (+ i 1) t)))))
+
+(defn- fill-beta [v :vector-i64 n :i64 seed :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-mul (i64-to-f32-rounded iv) (fb 947912704))))]
+        (recur (+ i 1) t)))))
+
+;; exp(x) for |x| clamped to 87, as a bit pattern.
+(defn- expb [xb :i64] :i64
+  (let [lim (fb 1118699520)
+        x (f32-max (f32-min (fb xb) lim) (f32-neg lim))
+        fx (f32-add (f32-mul x (fb 1069066811)) (fb 1262485504))
+        k (- (bit-and (f32-to-bits fx) 8388607) 4194304)
+        kf (f32-sub fx (fb 1262485504))
+        r (f32-sub (f32-sub x (f32-mul kf (fb 1060208640))) (f32-mul kf (fb 3109978243)))
+        y0 (f32-add (f32-mul (fb 961571175) r) (fb 985088974))
+        y1 (f32-add (f32-mul y0 r) (fb 1007192328))
+        y2 (f32-add (f32-mul y1 r) (fb 1026206145))
+        y3 (f32-add (f32-mul y2 r) (fb 1042983594))
+        y4 (f32-add (f32-mul y3 r) (fb 1056964608))
+        p (f32-add (f32-add (f32-mul (f32-mul y4 r) r) r) (fb 1065353216))]
+    (bf (f32-mul p (f32-from-bits (i32-wrap (i64-shift-left (+ k 127) 23)))))))
+
+(defn- grp-sum [x :vector-i64 base :i64 n :i64] :i64
+  (loop [i 0 acc 0]
+    (if (= i n) acc
+      (recur (+ i 1) (bf (f32-add (fb acc) (fb (vector-at x (+ base i)))))))))
+
+(defn- grp-sq [x :vector-i64 base :i64 n :i64 meanb :i64] :i64
+  (loop [i 0 acc 0]
+    (if (= i n) acc
+      (let [d (f32-sub (fb (vector-at x (+ base i))) (fb meanb))]
+        (recur (+ i 1) (bf (f32-add (fb acc) (f32-mul d d))))))))
+
+;; Normalise, scale, shift, SiLU; fold each output's bits into the checksum.
+(defn- grp-out [x :vector-i64 ga :vector-i64 be :vector-i64 base :i64 n :i64 c0 :i64 st :vector-i64] :i64
+  (let [meanb (vector-at st 0)
+        invb (vector-at st 1)
+        ch0 (quot base (hw))]
+    (loop [i 0 c c0]
+      (if (= i n) c
+        (let [ch (+ ch0 (quot i (hw)))
+              y0 (f32-mul (f32-sub (fb (vector-at x (+ base i))) (fb meanb)) (fb invb))
+              y (f32-add (f32-mul y0 (fb (vector-at ga ch))) (fb (vector-at be ch)))
+              e (f32-add (fb (expb (bf (f32-neg y)))) (fb 1065353216))
+              o (f32-div y e)]
+          (recur (+ i 1) (bit-and (+ (* c 31) (bit-and (bf o) 4294967295)) (mask48))))))))
+
+(defn- pass [x :vector-i64 ga :vector-i64 be :vector-i64 st :vector-i64 c0 :i64] :i64
+  (let [n (* (quot (nc) (ng)) (hw))
+        invn (f32-div (fb 1065353216) (i64-to-f32-rounded n))
+        eps (f64-to-f32-rounded 0.00001)]
+    (loop [g 0 c c0]
+      (if (= g (ng)) c
+        (let [base (* g n)
+              meanb (bf (f32-mul (fb (grp-sum x base n)) invn))
+              var (f32-mul (fb (grp-sq x base n meanb)) invn)
+              invb (bf (f32-div (fb 1065353216) (f32-sqrt (f32-add var eps))))
+              u0 (vector-assoc! st 0 meanb)
+              u1 (vector-assoc! st 1 invb)]
+          (recur (+ g 1) (grp-out x ga be base n c st)))))))
+
+(defn main [] :i64
+  (let [x (vector-alloc (* (nc) (hw)))
+        ga (vector-alloc (nc))
+        be (vector-alloc (nc))
+        st (vector-alloc 2)
+        s1 (fill-x x (* (nc) (hw)) 12345)
+        s2 (fill-gamma ga (nc) s1)
+        s3 (fill-beta be (nc) s2)]
+    (loop [i 0 c (bit-and s3 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (pass x ga be st c))))))
