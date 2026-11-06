@@ -213,6 +213,8 @@ At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI
 
 **Stage M, slice 15: the two SDXL text towers at full size (2026-11-06).** The CLIP tower program is now parametric and also outputs the penultimate hidden state and the projected end-token embedding. At OpenAI CLIP-L (12 layers, 768) and OpenCLIP bigG (32 layers, 1,280; a 2.8 GB random-weight file) it agrees with transformers' own `CLIPTextModelWithProjection` to 2.7e-3 / 4.8e-3 / 1.5e-3 (L: last, penultimate, projected) and 3.4e-3 / 1.0e-2 / 1.8e-3 (G), in about 12 ms and 70 ms ([record](../bench/results/2026-11-06-clip-full-metal/README.md)). Random weights, Hugging Face tensor names only (SDXL's OpenCLIP checkpoint naming is not mapped), no L+G concatenation or conditioning embeddings.
 
+**Stage M, slice 16: the VAE decoder (2026-11-06).** SDXL's decoder architecture (post_quant_conv, mid block with a 512-wide single-head attention over all pixels, four up levels) runs on the GPU in ~120 dispatches and agrees with ComfyUI's own `Decoder` (random weights, f32 CPU) to 6.2e-3 at 512 px and 6.3e-3 at 1024 px (the real SDXL decoder shape, 49.5 M parameters), 4.8e-3 on the small config with every stage inside 1.1e-2; 1.75 s at 512 px and 7.8 s at 1024 px under host load ([record](../bench/results/2026-11-06-vae-metal/README.md)). A long command buffer is killed by the GPU watchdog at 1024 px, so the program commits in small ones. With this, every stage of an SDXL render has a gated GPU implementation on the Metal route (text towers, UNet at SDXL shape for timing, sampler, VAE), but the pieces are not joined, the UNet is not gated at SDXL scale, and nothing used a trained checkpoint.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
