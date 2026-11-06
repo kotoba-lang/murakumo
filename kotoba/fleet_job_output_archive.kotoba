@@ -56,7 +56,8 @@
 
 (defn- jo-restored-file? [path :string cid :string b :vector-i64] :bool
   (let [size (cp-size path)]
-    (and (cp-raw? cid) (>= size 0) (<= size 16384) (= size (vector-count b)) (= (cp-cid b) cid))))
+    (and (cp-raw? cid) (>= size 0) (<= size 16384) (= size (vector-count b))
+         (or (> size 0) (cp-empty-readable? path)) (= (cp-cid b) cid))))
 
 (defn- jo-restore-fetch-result? [result :string cid :string] :bool
   (let [tree (jn-field result 2)]

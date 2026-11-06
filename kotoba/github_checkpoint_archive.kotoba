@@ -25,13 +25,19 @@
     (and (cp-ok? answer) (= (cp-out answer) (str repo "\ttrue\n")))))
 
 ;; Reject effective Git configuration that can redirect transport, weaken TLS,
-;; load external helpers, or expand configuration. --name-only avoids emitting
+;; load external helpers/hooks/filters, or expand configuration. --name-only avoids emitting
 ;; configured values. Exit 1 with no output means no matching keys; any other
 ;; outcome is a refusal. The host must still restrict the child environment and
 ;; network/credential authority; Git configuration is not the whole boundary.
 (defn- ga-config-safe? [repo-dir :string] :bool
-  (= (cp-git repo-dir (str "config" (cp-a) "--name-only" (cp-a) "--get-regexp" (cp-a)
-    "^(url[.].*[.](insteadof|pushinsteadof)|http([.].*)?[.](proxy|sslverify|sslcainfo|followredirects)|remote[.].*[.]proxy|credential([.].*)?[.]helper|include([.].*)?[.]path)$")) "1\n"))
+  ;; Inspect configuration without cp-git's own -c overrides: those include
+  ;; core.hooksPath and similar safe values and would reject every repository.
+  ;; Disable config includes while inspecting; include directives themselves
+  ;; remain visible and are refused by the expression. The trusted host must
+  ;; still restrict the child environment, Git binary and configuration scope.
+  (= (cp-spawn (str "/usr/bin/git" (cp-a) "--no-pager" (cp-a) "-C" (cp-a) repo-dir
+    (cp-a) "config" (cp-a) "--no-includes" (cp-a) "--name-only" (cp-a) "--get-regexp" (cp-a)
+    "^(url[.].*[.](insteadof|pushinsteadof)|http([.].*)?[.](proxy|sslverify|sslcainfo|followredirects)|remote[.].*[.]proxy|credential([.].*)?[.]helper|(include|includeif)([.].*)?[.]path|core[.](hookspath|fsmonitor|attributesfile|sshcommand)|filter[.].*|commit[.]gpgsign|gpg[.].*)$")) "1\n"))
 
 ;; Transport explicitly enforces TLS verification and disables redirects. The
 ;; config check above also rejects URL-scoped settings that could override them.
@@ -50,15 +56,18 @@
 ;; quiescent and the private task directory exclusively owned throughout.
 (defn- ga-copy [store :string out :string cid :string] :bool
   (if (not (cp-block? store cid)) false
-    (let [path (str out "/" cid) data (cp-load store cid) status (cp-fs "D" path "")]
-      (cond (= status "1") (cp-block? out cid)
-            (= status "0") (and (cp-write path data) (cp-block? out cid))
-            :else false))))
+    (let [path (str out "/" cid) data (cp-capture-read (str store "/" cid)) status (cp-fs "D" path "")]
+      (and (cp-reloaded-block-valid? store cid data)
+           (cond (= status "1") (cp-block? out cid)
+                 (= status "0") (and (cp-write path data) (cp-block? out cid))
+                 :else false)))))
 
 (defn- ga-copy-closure [store :string out :string cid :string b :vector-i64] :bool
-  (let [p (cp-payload b) bundle (cp-str b p "bundle") index (cp-load store bundle)
-        chunks (json-member index 0 "chunks") us (json-member b p "untracked")]
-    (and (ga-copy store out cid) (ga-copy store out bundle)
+  (let [p (cp-payload b) bundle (cp-str b p "bundle")
+        index (if (cp-raw? bundle) (cp-capture-read (str store "/" bundle)) (vector-alloc 0))
+        chunks (if (json-canonical? index) (json-member index 0 "chunks") -1) us (json-member b p "untracked")]
+    (and (cp-reloaded-block-valid? store cid b) (cp-reloaded-block-valid? store bundle index)
+         (cp-bundle-index? index) (ga-copy store out cid) (ga-copy store out bundle)
          (ga-copy store out (cp-str b p "policy")) (ga-copy store out (cp-str b p "environment"))
          (ga-copy store out (cp-str b p "summary"))
          (ga-copy store out (digest-cid (cp-str b p "profile") 85))
@@ -70,9 +79,24 @@
 (defn- ga-verified? [store :string cid :string author :string profile :string policy :string environment :string
                      epoch :i64 parent :string task :string] :bool
   (and (cp-block? store cid)
-       (let [b (cp-load store cid)]
-         (and (= (checkpoint-problem b author profile policy environment epoch parent task) "checkpoint/ok")
+       (let [b (cp-capture-read (str store "/" cid))]
+         (and (cp-reloaded-block-valid? store cid b)
+              (= (checkpoint-problem b author profile policy environment epoch parent task) "checkpoint/ok")
               (cp-closure? store b)))))
+
+;; The remote manifest is untrusted. The provider must enforce the range
+;; bound, and the private host must exclude aliases and concurrent writes.
+;; Only legacy restores allow one trailing newline.
+(defn- ga-manifest-size? [actual :i64 expected :i64 legacy :bool] :bool
+  (and (> expected 0) (<= expected 8192)
+       (or (= actual expected) (and legacy (= actual (+ expected 1))))))
+(defn- ga-manifest-file-matches? [path :string expected :vector-i64 legacy :bool] :bool
+  (let [n (vector-count expected) size (cp-size path)]
+    (if (not (ga-manifest-size? size n legacy)) false
+      (let [actual (cp-range path 0 size)]
+        (and (= (vector-count actual) size) (= (cp-size path) size)
+             (or (= (cp-cid actual) (cp-cid expected))
+                 (and legacy (= (cp-cid actual) (cp-cid (cp-bytes (str (cp-text expected) "\n")))))))))))
 
 ;; A fixed private repository, non-force ref and independent fetch are
 ;; mandatory. A push acknowledgement alone is never success. Work is a fresh,
@@ -89,7 +113,7 @@
         (not (= (cp-fs "H" work "700") "1")) "archive/work-permissions"
         :else
         (let [repo-dir (str work "/repo") blocks (str repo-dir "/blocks") readback (str work "/readback")
-              b (cp-load store cid) remote (str "https://github.com/" repo ".git")
+              b (cp-capture-read (str store "/" cid)) remote (str "https://github.com/" repo ".git")
               ref (str "refs/heads/itonami/archive/" cid)
               manifest (cp-bytes (str "{\"author\":\"" author "\",\"environment\":\"" environment
                 "\",\"epoch\":" epoch ",\"kind\":\"itonami.github-checkpoint-archive/1\",\"parent\":\"" parent
@@ -113,7 +137,7 @@
                   got (if (cp-ok? fetch) (cp-git readback "rev-parseARG_SEPFETCH_HEAD^{tree}") "refused")
                   check (if (and (cp-ok? got) (= (cp-line (cp-out got)) tree)) (cp-git readback "fsckARG_SEP--fullARG_SEP--strict") "refused")
                   checkout (if (cp-ok? check) (cp-git readback "checkoutARG_SEP--quietARG_SEPFETCH_HEADARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
-                  verified (and (cp-ok? checkout) (= (cp-cid (cp-read (str readback "/manifest.json"))) (cp-cid manifest))
+                  verified (and (cp-ok? checkout) (ga-manifest-file-matches? (str readback "/manifest.json") manifest false)
                                 (ga-verified? (str readback "/blocks") cid author profile policy environment epoch parent task))]
               (if verified (str "archive/stored " cid " " tree " " (if (cp-ok? push) "acknowledged" "unacknowledged"))
                 "archive/readback-unknown-or-conflict")))))))
@@ -156,7 +180,7 @@
               tree (cp-line (cp-out tree-result))
               check (if (and (cp-ok? tree-result) (cp-hex? tree 40)) (cp-git readback "fsckARG_SEP--fullARG_SEP--strict") "refused")
               checkout (if (cp-ok? check) (cp-git readback "checkoutARG_SEP--quietARG_SEPFETCH_HEADARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
-              verified (and (cp-ok? checkout) (ga-manifest-matches? (cp-read (str readback "/manifest.json")) manifest)
+              verified (and (cp-ok? checkout) (ga-manifest-file-matches? (str readback "/manifest.json") manifest true)
                             (ga-verified? blocks cid author profile policy environment epoch parent task))]
           (if verified (str "archive-restore/fetched " cid " " tree) "archive-restore/readback-refused"))))
 
@@ -167,9 +191,11 @@
   (let [fetched (ga-restore-fetch work dest cid author profile policy environment epoch parent task repo gh)
         tree (cp-meta-field fetched 2) blocks (str work "/readback/blocks")]
     (if (not (and (cp-hex? tree 40) (= fetched (str "archive-restore/fetched " cid " " tree)))) fetched
-      (if (= (cp-materialize blocks (cp-load blocks cid) dest) "checkpoint/restored")
-        (str "archive-restore/restored " cid " " tree)
-        "archive-restore/materialize-unknown"))))
+      (let [b (cp-capture-read (str blocks "/" cid))]
+        (if (and (cp-reloaded-block-valid? blocks cid b)
+                 (= (cp-materialize blocks b dest) "checkpoint/restored"))
+          (str "archive-restore/restored " cid " " tree)
+          "archive-restore/materialize-unknown")))))
 
 (defn github-checkpoint-restore-main [] :i64
   (let [result (ga-restore (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)

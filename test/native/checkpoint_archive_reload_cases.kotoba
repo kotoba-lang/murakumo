@@ -1,0 +1,8 @@
+;; These definitions need a qualified, private FS2 fault fixture. The host
+;; supplies a previously verified checkpoint and injects a failed or changed
+;; root/index read after verification; it must also check that no push or
+;; destination publication occurred.
+(ns murakumo.checkpoint-archive-reload-cases (:export [test-archive-closure-reload-refuses]))
+
+(defn test-archive-closure-reload-refuses [store :string out :string cid :string checkpoint :vector-i64] :bool
+  (not (ga-copy-closure store out cid checkpoint)))
