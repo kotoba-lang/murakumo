@@ -167,6 +167,12 @@ Selected attention uses batched matrix products instead of broadcast
 also compares the prior source digest: worst gradient difference9.8944e-6.
 BF16 end-to-end bitwise reproducibility remains unqualified.
 
+`--expert-token-chunk` (default64) bounds routed-expert gather/backward
+temporaries. Routing and the balancing loss use all tokens; chunk outputs are
+concatenated and every parameter gradient is summed. Context is not truncated.
+The numerical control uses11 tokens/chunk4 to cross boundaries and compares
+all155 gradients against unchunked execution, rematerialization and prior source.
+
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 

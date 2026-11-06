@@ -19,6 +19,7 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
    "ff" ff "heads" heads "head_dim" head-dim "vocab" vocab
    "top_k" (cond (= name "tiny") 2 (= name "30b-target") 9 True 4) "index_dim" 32
    "index_top_k" 16 "window" 128 "encoder_compression" 2
+   "expert_token_chunk" 64
    "index_loss_weight" 0.01 "balance_loss_weight" 0.01})
 
 (defn modes [cfg]
@@ -137,13 +138,24 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
         ids (mx.stop-gradient (get (mx.argsort probs :axis -1) #(... (slice (- k) None))))
         weights (mx.take-along-axis probs ids :axis -1)
         weights (/ weights (mx.sum weights :axis -1 :keepdims True))
-        expanded (mx.expand_dims (mx.expand_dims flat -2) -2)
-        gate (mx.gather-mm expanded (get p (+ prefix "expert_gate")) :rhs_indices ids)
-        up (mx.gather-mm expanded (get p (+ prefix "expert_up")) :rhs_indices ids)
-        hidden (* gate (mx.sigmoid gate) up)
-        down (mx.gather-mm hidden (get p (+ prefix "expert_down")) :rhs_indices ids)
-        selected (mx.sum (* (mx.squeeze down :axis -2)
-                            (mx.expand_dims (.astype weights down.dtype) -1)) :axis 1)
+        parts [] chunk (get cfg "expert_token_chunk"))
+  (when (<= chunk 0) (raise (ValueError "expert token chunk must be positive")))
+  ;; Bound gather_mm's per-token weight-gradient temporaries. The router,
+  ;; normalized weights and global balancing are computed once for all tokens;
+  ;; chunk outputs are concatenated, so this is neither truncated context nor
+  ;; independently averaged minibatch losses. Every expert gradient is summed.
+  (for [start (range 0 (get flat.shape 0) chunk)]
+    (setv section (slice start (+ start chunk))
+          expanded (mx.expand_dims (mx.expand_dims (get flat section) -2) -2)
+          selected-ids (get ids section)
+          gate (mx.gather-mm expanded (get p (+ prefix "expert_gate")) :rhs_indices selected-ids)
+          up (mx.gather-mm expanded (get p (+ prefix "expert_up")) :rhs_indices selected-ids)
+          hidden (* gate (mx.sigmoid gate) up)
+          down (mx.gather-mm hidden (get p (+ prefix "expert_down")) :rhs_indices selected-ids)
+          selected (mx.sum (* (mx.squeeze down :axis -2)
+                              (mx.expand_dims (.astype (get weights section) down.dtype) -1)) :axis 1))
+    (.append parts selected))
+  (setv selected (mx.concatenate parts :axis 0)
         sg (@ flat (get p (+ prefix "shared_gate")))
         shared (@ (* sg (mx.sigmoid sg) (@ flat (get p (+ prefix "shared_up"))))
                     (get p (+ prefix "shared_down")))

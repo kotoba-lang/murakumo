@@ -117,6 +117,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
         cfg (m.config args.preset)
         (get cfg "vocab") (get manifest "vocab_size")
         (get cfg "activation_checkpoint") args.activation_checkpoint
+        (get cfg "expert_token_chunk") args.expert_token_chunk
         report (m.parameter-report cfg)
         budget (int (* args.memory_limit_gib (** 1024 3)))
         dtype (if (= args.dtype "float32") mx.float32 mx.bfloat16)
@@ -277,6 +278,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (.add_argument parser "--preset" :choices ["tiny" "small" "1b" "3b"] :default "tiny")
   (.add_argument parser "--optimizer" :choices ["adamw" "sgd"] :default "adamw")
   (.add_argument parser "--master-offload" :choices ["none" "nvme"] :default "none")
+  (.add_argument parser "--expert-token-chunk" :type int :default 64)
   (.add_argument parser "--dtype" :choices ["bfloat16" "float32"] :default "bfloat16")
   (.add_argument parser "--backend" :choices ["ring" "mpi"] :default "ring")
   (.add_argument parser "--lr" :type float :default 0.001)

@@ -10,10 +10,11 @@
 (defn check [output]
   (setv guard (require-hard-memory-enforcer (* 2 (** 1024 3)))
         cfg (m.config "tiny") (get cfg "vocab") 97
-        (get cfg "window") 4 (get cfg "activation_checkpoint") True
+        (get cfg "window") 4 (get cfg "activation_checkpoint") True (get cfg "expert_token_chunk") 4
         p (m.init-parameters cfg 936 mx.bfloat16 :materialize True) q (dict p)
         state {"master" (dfor [k v] (.items p) k (.astype v mx.float32))}
-        temp (tempfile.TemporaryDirectory) store (MasterStore temp.name)
+        temp (tempfile.TemporaryDirectory :dir (getattr (pathlib.Path output) "parent"))
+        store (MasterStore temp.name)
         disk {"master" store}
         x (.reshape (mx.arange 11) [1 11]) y (+ x 1)
         diff (mx.value-and-grad m.loss)

@@ -8,7 +8,7 @@
 (defn check [output [reference-source None]]
   (setv guard (require-hard-memory-enforcer (* 2 (** 1024 3)))
         cfg (m.config "tiny")
-        (get cfg "vocab") 97 (get cfg "window") 4
+        (get cfg "vocab") 97 (get cfg "window") 4 (get cfg "expert_token_chunk") 4
         p (m.init-parameters cfg 936 mx.float32 :materialize True)
         x (.reshape (% (mx.arange 11) 97) [1 11])
         y (% (+ x 1) 97) diff (mx.value-and-grad m.loss)
@@ -28,6 +28,13 @@
           (float (mx.max (mx.abs (- (- (get master0 k) (* 0.001 (get grad0 k)))
                                     (- (get master0 k) (* 0.001 (get grad1 k))))))))))
   (assert (< update-error 1e-6))
+  (setv unchunked (dict cfg) (get unchunked "expert_token_chunk") 64
+        [whole-loss whole-grad] (diff p x y unchunked))
+  (mx.eval whole-loss whole-grad)
+  (setv chunk-only-error (max (gfor k p
+    (float (mx.max (mx.abs (- (get whole-grad k) (get grad0 k))))))))
+  (assert (< chunk-only-error 1e-5) (str chunk-only-error))
+  (assert (< (abs (- (float whole-loss) (float loss0))) 1e-6))
   (setv reference-error None)
   (when reference-source
     (setv path (pathlib.Path reference-source)
@@ -39,12 +46,19 @@
     (setv reference-error (max (gfor k p
       (float (mx.max (mx.abs (- (get old-grad k) (get grad0 k))))))))
     (assert (< (abs (- (float old-loss) (float loss0))) 1e-6))
-    (assert (< reference-error 1e-5) (str reference-error)))
+    ;; Batched products and chunked gradient sums change FP32 reduction order.
+    ;; Check each element with absolute+relative bounds, including near-zero
+    ;; gradients, as well as retaining the observed maximum absolute error.
+    (for [k p]
+      (assert (bool (mx.allclose (get old-grad k) (get grad0 k) :rtol 1e-4 :atol 2e-5)) k))
+    (assert (< reference-error 2e-5) (str reference-error)))
   (setv result {"ok" True "dtype" "float32" "loss_absolute_error" loss-error
                "max_gradient_absolute_error" worst "max_update_absolute_error" update-error
                "gradient_keys_compared" (len errors) "gradient_errors" errors
                "kernel_limit" guard "process_memory" (counters)
-               "prior_source_gradient_error" reference-error
+               "prior_source_gradient_error" reference-error "expert_token_chunk" 4 "sequence" 11
+               "prior_source_elementwise_rtol" 1e-4 "prior_source_elementwise_atol" 2e-5
+               "chunk_only_gradient_error" chunk-only-error
                "scope" "all layer/source/shared-KV/tied-embedding gradients; no detach"})
   (.write_text (pathlib.Path output) (json.dumps result :indent 2))
   (print (json.dumps {"ok" True "loss_error" loss-error "gradient_error" worst
