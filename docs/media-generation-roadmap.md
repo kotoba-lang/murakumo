@@ -124,6 +124,11 @@ single-kernel level; what is not: f16 storage, GPU, the label-embedding MLP and 
 speed (roughly 6 to 15 times slower than `cc -O2`, diagnostic). The reference here is the twin's own math in double, not yet
 comfyui-clj or ComfyUI output.
 
+**I2 progress (2026-11-06).** Step 1, a full ResBlock composed from the I1 kernels, is in
+`bench/kernels/resblock/`: bit-exact against its twin on two shapes, within 7.2e-6 of an f64 reference, a dropped skip
+connection is detected ([record](../bench/results/2026-11-06-resblock/README.md)). The comfyui-clj comparison named in
+the I2 gate has not been done.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
