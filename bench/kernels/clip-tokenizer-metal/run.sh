@@ -10,7 +10,9 @@
 # supported ranges plus every letter + combining mark pair that NFC composes into a supported letter, and mixed lines), must also equal the
 # oracle (it NFC-normalizes: a letter plus one combining mark is composed here with a generated table); characters outside the supported set,
 # and marks that do not compose, must be refused with a message, not tokenized differently; more mutants cover the Unicode logic.
-# Not covered: HTML entities, the special-token spellings, ComfyUI's prompt weighting and chunking of prompts longer than 75 tokens (the
+# The special-token spellings <|startoftext|> / <|endoftext|> in a prompt (case-insensitive, splitting the text) and HTML entities (which this tokenizer
+# does not unescape either) are covered by prompts.txt.
+# Not covered: ComfyUI's prompt weighting and chunking of prompts longer than 75 tokens (the
 # program truncates, as the Hugging Face call does), scripts outside the supported set (Cyrillic, Greek, Arabic, Indic ...).
 #
 #   sh run.sh /path/to/amu-checkout /path/to/comfy/sd1_tokenizer [python3]
@@ -44,6 +46,7 @@ mut() { # label from to [corpus: a|u]
 }
 mut rank '(if (and (>= r 0) (< r br))' '(if (and (>= r 0) (> r br))'
 mut lowercase '(< c 128) (if (within c 65 90) (+ c 32) c)' '(< c 128) c'
+mut special-token '(if (= (match-lit f p i e "<|startoftext|>") 1) 1' '(if (= (match-lit f p i e "<|startoftext|>") 7) 1'
 mut contraction '(or (= n1 115) (or (= n1 116) (or (= n1 109) (= n1 100)))) 2' '(= n1 1000) 2'
 # the Unicode logic, against the unicode corpus
 PROMPTS="$WK/prompts_unicode.txt" build tku
