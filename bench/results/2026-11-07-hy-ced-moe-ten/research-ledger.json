@@ -1,0 +1,70 @@
+{
+  "schema": "ced-moe-ten-placement-study/v1",
+  "status": "ten-owner-small-controls-qualified-actual3b-pending",
+  "constraints": {
+    "nodes": 10,
+    "physical_memory_per_node": 17179869184,
+    "requested_limit_bytes": 10737418240,
+    "fatal_limit_bytes": 9663676416,
+    "developer_mac_model_execution": false
+  },
+  "layout": "rank0joseph owns tiedembedding/head only,9 contiguous layerowners; all10 own trainable parameters",
+  "preserve": "existing joseph inference server and allprior checkpoints/services/keys remain",
+  "hypothesis": "ownerstate RAM placement reduces optimizer diskIO/time at fixed tokens without changing equations or globalrestart",
+  "controls": [
+    "physical10rank F32 vsfullmodel AdamW ineachbackend",
+    "tiny2+newprocess2 vscontinuous4 ineachbackend; corrupt/missing/mismatched state refuses before allocation"
+  ],
+  "actual_comparison": {
+    "placements_in_order": [
+      "nvme",
+      "ram"
+    ],
+    "parameters": 3003341824,
+    "updates_per_placement": 32,
+    "global_tokens_per_placement": 2048,
+    "phases": [
+      16,
+      16
+    ],
+    "sequence": 64,
+    "global_batch": 1,
+    "seed": 936,
+    "lr": 0.0003,
+    "warmup_steps": 4,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "eps": 1e-08,
+    "weight_decay": 0.01,
+    "global_clip": 1,
+    "validation_batches": 8,
+    "validation_seed": 936,
+    "validation_every": 8,
+    "checkpoints": [
+      16,
+      32
+    ]
+  },
+  "acceptance": [
+    "everyactualrank belowfatal9GiB withverifiedkernelguard",
+    "sameinputhashes/options exceptplacement andidenticalglobalinitialization",
+    "eachbackendnewprocessglobalresume matches boundaryCE/state/sampler/step/warmup",
+    "allcheckpoint fileheaders/hashes/source/runtime/data/options/ownership/generation pass",
+    "finite losses and rates/traffic/diskIO reported honestly; BF16crossrun bitwise equivalence not prequalified"
+  ],
+  "limits": [
+    "1trial/backend, fixedorder,no cacheflush",
+    "existingbackgroundjobs retained; resource/SSD/NICcounter scopes recorded",
+    "serialpipeline,nopipelineoverlap/EP/elasticreshard",
+    "validation quality comparison smallcorpus, not Bonsai intelligence"
+  ],
+  "qualification": {
+    "physical_gradient_max_abs": 3.129243850708008e-06,
+    "physical_weight_master_max_abs": 5.960464477539063e-08,
+    "restart_continuation_max_abs": 7.82310962677002e-07,
+    "predeclared_abs_tolerance": 2e-05,
+    "both_placements_all_ten_hosts_pass": true,
+    "boundary_states_exact": true,
+    "preallocation_refusal_cases_per_backend": 10
+  }
+}
