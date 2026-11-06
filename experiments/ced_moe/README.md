@@ -262,6 +262,23 @@ result. Missing rank/hostfile refuses before output creation. These are bounded
 failure controls, not elastic recovery. See
 [distributed evidence](../../bench/results/2026-11-06-hy-ced-moe-distributed/README.md).
 
+The actual1B trial completes four updates/512 global tokens on two M4s at
+context64/globalbatch2. Weight and FP32-master hashes match exactly across
+ranks; peak kernel footprint4.971GiB/rank (requested10GiB/fatal9GiB).
+Matched sequential reference:11.627 phase tokens/s; DDP:5.287 global tokens/s
+(9.060 vs4.731 supervisor-inclusive). Both Ethernet links negotiate1Gb/s.
+Each update averages2.087GB logical gradients/rank; rank0 median steps2-4
+spends18.485s communicating vs1.218s computing. DDP replicates full gradients
+despite sparse expert execution. Whole-interface counters are recorded with
+background/control included, without exclusive wire-byte claims.
+
+`verify_distributed_inputs.hy` reconstructs all global/rank-local input hashes
+without model execution. Fleet-only `compare_weight_exports.hy` compares all
+203 weight tensors of the1B model: sequential BF16 vsDDP differs by max0.000244140625 over
+72,411 coefficients; no BF16 tolerance/bitwise qualification is inferred.
+Four updates are an operational synchronization observation, not sustained
+scaling, convergence, global checkpoint/recovery or30B time calibration.
+
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 
