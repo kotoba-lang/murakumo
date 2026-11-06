@@ -28,7 +28,9 @@ fail=0
 MC=64; LAT=32; CH=32; STEPS=4
 LAYOUT=${LAYOUT:-hf}
 # the conditional prompt mixes ASCII, Japanese, accented Latin, fullwidth forms and an emoji, so the whole path (tokenizer, towers, render) is exercised on non-ASCII text
-export PROMPT_C=${PROMPT_C:-"桜の花が咲く夜景、a photo of a cat ÀÉ Straße ＡＢＣ１２３ 😀 école が"}
+# ComfyUI prompt weighting in both prompts: nested and explicit weights, an escaped parenthesis, a weighted special token
+export PROMPT_C=${PROMPT_C:-"(桜の花:1.3) が咲く夜景、a ((photo)) of a (cat:0.7) \\(x\\) ÀÉ (Straße:1.15) ＡＢＣ１２３ 😀 école が"}
+export PROMPT_U=${PROMPT_U:-"(blurry:1.4), ugly, (bad hands:0.6)"}
 if [ "$LAYOUT" = single ]; then PRE_L=conditioner.embedders.0.transformer.; PRE_G=conditioner.embedders.1.model.; SCH_G=1; else PRE_L=clip_l.; PRE_G=clip_g.; SCH_G=0; fi
 PYTHONPATH="$STUBS" "$PYC" "$HERE/make_fixture.py" write "$WK/fx" "$COMFY" "$MC" "$LAT" "$CH" "$STEPS" "$TOKDIR" "$LAYOUT" > "$WK/fx.log" 2>&1
 # the pinned digest the program must find in the checkpoint before reading it (here taken from the fixture just written; for a real
@@ -63,6 +65,13 @@ mutant() { # label from to
   bad=$(awk -v e="$worst" 'BEGIN{print (e+0 > 0.2 || e != e+0) ? 1 : 0}')
   [ "$bad" = 1 ] && echo "mutant [$1]: worst error $worst (detected)" || { echo "mutant [$1]: worst error $worst NOT detected"; fail=1; }
 }
+mutant weights-off-L 'uint r = i / 768u; if (r >= 77u) return; int wi = W[r]; if (wi == 65536) return;' 'uint r = i / 768u; if (r >= 77u) return; int wi = W[r]; return;'
+mutant weights-off-G 'uint r = i / 1280u; if (r >= 77u) return; int wi = W[r]; if (wi == 65536) return;' 'uint r = i / 1280u; if (r >= 77u) return; int wi = W[r]; return;'
+mutant weight-scale 'float w = float(wi) / 65536.0f; Z[i] = (Z[i] - E[i]) * w + E[i];
+}
+kernel void blend_g' 'float w = float(wi) / 32768.0f; Z[i] = (Z[i] - E[i]) * w + E[i];
+}
+kernel void blend_g'
 mutant guidance 'float den = du + (dc - du) * cfg;' 'float den = dc;'
 mutant timestep-reversed '  Tb[0] = float(bj);' '  Tb[0] = float(999u - bj);'
 mutant uncond-context '(vector-i64 ctxhu ctxh) (vector-i64 0 0) 24' '(vector-i64 ctxhc ctxh) (vector-i64 0 0) 24'

@@ -130,22 +130,36 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
     fs = FakeSDXL(); fs.embedder = Timestep(256); fs.noise_augmentor = None
     sizes = dict(height=256, width=384, crop_h=16, crop_w=32, target_height=512, target_width=640)
     tok = CLIPTokenizer.from_pretrained(tokdir)
+    # ComfyUI's own tokenizers (escape_important / token_weights / the Hugging Face tokenizer per segment): ids and one weight per position
+    from comfy.sd1_clip import SDTokenizer
+    tk_l = SDTokenizer(tokenizer_path=tokdir, max_length=77, pad_with_end=True, embedding_directory=None, embedding_size=768, embedding_key="clip_l", has_start_token=True, pad_to_max_length=True)
+    tk_g = SDTokenizer(tokenizer_path=tokdir, max_length=77, pad_with_end=False, embedding_directory=None, embedding_size=1280, embedding_key="clip_g", has_start_token=True, pad_to_max_length=True)
     def ids_for(prompt):
-        ids = tok(prompt, padding="max_length", max_length=77, truncation=True)["input_ids"]
-        e = ids.index(49407)
-        return ids, ids[:e + 1] + [0] * (77 - e - 1)          # L pads with the end token, G with 0 (ComfyUI pad_with_end=False)
+        bl = tk_l.tokenize_with_weights(prompt)[0]; bg = tk_g.tokenize_with_weights(prompt)[0]
+        return [x[0] for x in bl], [x[0] for x in bg], [x[1] for x in bl]
+    def blend(z, ze, wts):
+        # ClipTokenWeightEncoder.encode_token_weights: z[j] = (z[j] - z_empty[j]) * weight + z_empty[j] where weight != 1.0
+        z = z.clone()
+        for j, w in enumerate(wts):
+            if w != 1.0: z[0][j] = (z[0][j] - ze[0][j]) * w + ze[0][j]
+        return z
     def cond(tag, prompt):
-        il, ig = ids_for(prompt)
+        il, ig, wts = ids_for(prompt)
         open(os.path.join(d, "prompt_" + tag + ".txt"), "w", encoding="utf-8").write(prompt + "\n")
         np.array(il + [0], dtype=np.int32).tofile(os.path.join(d, "ids_l_" + tag + ".i32")); np.array(ig + [0], dtype=np.int32).tofile(os.path.join(d, "ids_g_" + tag + ".i32"))
         with torch.no_grad():
             ol = clip_l(input_ids=torch.tensor([il]), output_hidden_states=True); og = clip_g(input_ids=torch.tensor([ig]), output_hidden_states=True)
         lpen = ol.hidden_states[-2]; gpen = og.hidden_states[-2]; gpool = og.text_embeds
+        if any(w != 1.0 for w in wts):
+            with torch.no_grad():
+                el = clip_l(input_ids=torch.tensor([[49406, 49407] + [49407] * 75]), output_hidden_states=True)
+                eg = clip_g(input_ids=torch.tensor([[49406, 49407] + [0] * 75]), output_hidden_states=True)
+            lpen = blend(lpen, el.hidden_states[-2], wts); gpen = blend(gpen, eg.hidden_states[-2], wts)
         ctx = torch.cat([lpen, gpen], dim=-1)
         y = ns2["encode_adm_fn"](fs, pooled_output=gpool, **sizes)
         for n, v in (("ctx_" + tag, ctx[0]), ("y_" + tag, y[0])): v.numpy().astype(np.float32).tofile(os.path.join(d, n + ".f32"))
         return ctx, y
-    ctx_c, y_c = cond("c", os.environ.get("PROMPT_C", "a photo of a cat sitting on a red sofa")); ctx_u, y_u = cond("u", "")
+    ctx_c, y_c = cond("c", os.environ.get("PROMPT_C", "a photo of a cat sitting on a red sofa")); ctx_u, y_u = cond("u", os.environ.get("PROMPT_U", ""))
     torch.tensor([sizes[k] for k in ("height", "width", "crop_h", "crop_w", "target_height", "target_width")], dtype=torch.float32).numpy().tofile(os.path.join(d, "sz.f32"))
     x0 = torch.randn(1, 4, lat, lat) * sigmas[0]; x0.numpy().astype(np.float32).tofile(os.path.join(d, "x.f32"))
     cfg_scale = 4.0
