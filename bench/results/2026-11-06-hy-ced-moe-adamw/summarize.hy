@@ -26,6 +26,15 @@
           kinds (if (= (get opts "optimizer") "adamw") ["master" "m" "v"] ["master"]))
     (assert (= (get part "optimizer_state_kinds") kinds))
     (assert (= (get part "optimizer_state_bytes") (* 4 (len kinds) (get part "parameters"))))
+    (setv updates (- (get r "end_step") (get r "start_step")) io (get r "logical_optimizer_io")
+          state-bytes (* 4 (get part "parameters")))
+    (for [kind kinds]
+      (assert (= (get (get io "read_bytes") kind) (* updates state-bytes)))
+      (assert (= (get (get io "write_bytes") kind)
+                 (* (+ updates (if (= (get r "start_step") 0) 1 0)) state-bytes)))
+      (if (get r "start_step")
+        (assert (> (get (get io "restore_file_bytes") kind) state-bytes))
+        (assert (= (get (get io "restore_file_bytes") kind) 0))))
     (for [row (get r "trace")]
       (assert (math.isfinite (get row "objective")))
       (assert (math.isfinite (get row "global_gradient_norm")))

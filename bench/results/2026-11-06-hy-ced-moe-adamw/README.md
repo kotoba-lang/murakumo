@@ -88,3 +88,19 @@ Hy interpreter on the managementMac (no MLX/model import/execution). This dated
 measurement arithmetic is not a CI gate or product runtime. Phase includes
 periodic dev evaluation; update-only rate excludes it; all-in uses maxrank
 supervisor including init/eval/cleanup. Confirmation/actual3B checkpoints pending.
+
+## Long-run first phase (32/64 updates)
+
+Fresh selectedAdamWlr.0003 completes32updates/2048tokens on all3 owners,
+exit0/reaped/no timeout, maxfootprint6.63083GiB, observed swap0. Fixed devCE
+10.625805→8.894307. Phase including4periodicdev evaluations2.57624tok/s;
+maxrank total supervisor831.714s, save20.920s. All ranks agree on global
+checkpoint32 generation4ad49037… includingBF16 weights andFP32 master/m/v.
+Full3B resume/independent confirmation/all-file readback remain pending.
+
+The extra confirmation-only forward evaluations before step1 leave model
+inputs unchanged (first8input hashes equal screen), but separateBF16 VJPs
+show gradient/trajectory differences. No bitwise cross-run parity or repeated
+trial confidence is claimed. Final confirmation uses its own fresh initialCE.
+`prefix-io-window-start.txt` samples SSD disk0 after step2; it is a partial-phase
+device-wide window, not full-phase or exclusivelearner/NAND I/O.
