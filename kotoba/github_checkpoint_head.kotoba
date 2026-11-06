@@ -8,10 +8,25 @@
 (defn- gh-head-text [task :string cid :string] :string
   (str "{\"checkpoint\":\"" cid "\",\"kind\":\"itonami.github-head/1\",\"task\":\"" task "\"}"))
 
+;; Only read a Git object after an exact, bounded size response. The host
+;; owns the repository throughout these calls and the process provider must
+;; itself bound outputs; Git fetch, fsck and corrupt-object diagnostics are
+;; not bounded by this preflight.
+(defn- gh-size-response [r :string maximum :i64] :i64
+  (let [out (cp-out r) n (cp-int (cp-line out))]
+    (if (and (cp-ok? r) (> n 0) (<= n maximum) (= out (str n "\n"))) n -1)))
+(defn- gh-object-size [dir :string object :string maximum :i64] :i64
+  (gh-size-response (cp-git dir (str "cat-file" (cp-a) "-s" (cp-a) object)) maximum))
+(defn- gh-small-show [dir :string object :string maximum :i64] :string
+  (let [n (gh-object-size dir object maximum)
+        r (if (> n 0) (cp-git dir (str "show" (cp-a) object)) "refused")]
+    (if (and (cp-ok? r) (= (string-byte-length (cp-out r)) n)) r "refused")))
+
 ;; Refuse unexpected files, modes and symlinks in the independently pinned
 ;; head. This does not replace the host's protection against path aliases.
 (defn- gh-head-tree? [dir :string rev :string] :bool
-  (let [r (cp-git dir (str "ls-tree" (cp-a) "-r" (cp-a) rev))
+  (let [size (gh-object-size dir (str rev "^{tree}") 512)
+        r (if (> size 0) (cp-git dir (str "ls-tree" (cp-a) rev)) "refused")
         out (cp-out r) n (string-length out)
         blob (if (= n 63) (string-substring out 12 52) "")]
     (and (cp-ok? r) (cp-hex? blob 40)
@@ -54,7 +69,7 @@
                             (ga-git dir (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
                   previous (if (cp-ok? fetched) (cp-git dir "rev-parseARG_SEPFETCH_HEAD") "refused")
                   shape (and (cp-ok? previous) (= (cp-line (cp-out previous)) expected) (gh-head-tree? dir "FETCH_HEAD"))
-                  content (if shape (cp-git dir "showARG_SEPFETCH_HEAD:head.json") "refused")
+                  content (if shape (gh-small-show dir "FETCH_HEAD:head.json" 8192) "refused")
                   checkout (if (and (cp-ok? content) (= (cp-out content) old))
                              (cp-git dir "checkoutARG_SEP--quietARG_SEP--detachARG_SEPFETCH_HEAD") "refused")
                   written (and (cp-ok? checkout) (cp-write (str dir "/head.json") (cp-bytes new)))
@@ -74,7 +89,7 @@
                       fsck (if (and (cp-ok? got) (= (cp-line (cp-out got)) tip))
                              (cp-git check "fsckARG_SEP--fullARG_SEP--strict") "refused")
                       readback (if (and (cp-ok? fsck) (gh-head-tree? check "FETCH_HEAD"))
-                                 (cp-git check "showARG_SEPFETCH_HEAD:head.json") "refused")
+                                 (gh-small-show check "FETCH_HEAD:head.json" 8192) "refused")
                       back-parent (and (cp-ok? readback) (gh-single-parent? check "FETCH_HEAD" tip expected))]
                   (if (and back-parent (= (cp-out readback) new))
                     (str "head/advanced " cid " " tip " " (if (cp-ok? push) "acknowledged" "unacknowledged"))
@@ -112,7 +127,7 @@
               id (if (cp-ok? fetch) (cp-git head "rev-parseARG_SEPFETCH_HEAD") "refused")
               fsck (if (and (cp-ok? id) (= (cp-line (cp-out id)) expected) (gh-head-tree? head "FETCH_HEAD"))
                      (cp-git head "fsckARG_SEP--fullARG_SEP--strict") "refused")
-              content (if (cp-ok? fsck) (cp-git head "showARG_SEPFETCH_HEAD:head.json") "refused")
+              content (if (cp-ok? fsck) (gh-small-show head "FETCH_HEAD:head.json" 8192) "refused")
               h (if (cp-ok? content) (cp-bytes (cp-out content)) (vector-alloc 0))
               cid (if (and (json-valid? h) (json-canonical? h) (= (json-kind h 0) 1) (= (json-count h 0) 3))
                     (cp-str h 0 "checkpoint") "")]
@@ -123,7 +138,7 @@
                   mf (if (and (cp-ok? mi) (ga-config-safe? meta))
                        (ga-git meta (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) aref)) "refused")
                   mc (if (cp-ok? mf) (cp-git meta "fsckARG_SEP--fullARG_SEP--strict") "refused")
-                  show (if (cp-ok? mc) (cp-git meta "showARG_SEPFETCH_HEAD:manifest.json") "refused")
+                  show (if (cp-ok? mc) (gh-small-show meta "FETCH_HEAD:manifest.json" 8192) "refused")
                   m (if (cp-ok? show) (cp-bytes (cp-out show)) (vector-alloc 0))
                   valid (and (<= (vector-count m) 8192) (json-valid? m) (= (json-kind m 0) 1))
                   epoch (if valid (cp-num m 0 "epoch") -1)

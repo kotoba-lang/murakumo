@@ -4,7 +4,20 @@
 (defn test-job-output-archive [] :bool
   (let [cid "bafkreibuoymhi5lbxktszxduuzmekq2qpbqd7mz66w2cowz4memgb4dna"
         tree "0123456789abcdef0123456789abcdef01234567"]
-    (and (jo-archive-result? (str "archive/stored " cid " " tree " acknowledged") cid)
+    (and (= (gh-size-response "0\n512\n" 512) 512)
+         (= (gh-size-response "0\n513\n" 512) -1)
+         (= (gh-size-response "0\n01\n" 512) -1)
+         (= (gh-size-response "0\n1\nextra" 512) -1)
+         (= (gh-size-response "1\n1\n" 512) -1)
+         (= (gh-size-response "0\n0\n" 512) -1)
+         (ga-manifest-size? 10 10 false)
+         (not (ga-manifest-size? 11 10 false))
+         (ga-manifest-size? 11 10 true)
+         (not (ga-manifest-size? 12 10 true))
+         (not (ga-manifest-size? -1 10 true))
+         (not (ga-manifest-size? 0 0 true))
+         (not (ga-manifest-size? 8193 8193 true))
+         (jo-archive-result? (str "archive/stored " cid " " tree " acknowledged") cid)
          (jo-archive-result? (str "archive/stored " cid " " tree " unacknowledged") cid)
          (not (jo-archive-result? (str "archive/stored " cid " " tree " acknowledged extra") cid))
          (not (jo-archive-result? (str "archive/stored other " tree " acknowledged") cid))
