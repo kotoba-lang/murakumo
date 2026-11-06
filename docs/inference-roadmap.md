@@ -111,6 +111,24 @@ S2 and S3 can run in parallel. The Linux route shares the spec and the checker,
 but its plain emitter (amu `seed/80`) needs its own lowering of each stage;
 kotoba-lang/amu#1667 (inline vector access) removes gap 8 first.
 
+## Not in the stages yet
+
+The engines in [benchmarks.md](benchmarks.md#other-engines-as-published), read on 2026-11-06, use techniques that S0–S8
+do not plan. None of these has a stage, a gate or a target; whether to add them is an owner decision.
+
+| Technique | Published by | What it would take here |
+| --- | --- | --- |
+| Speculative decoding: a drafter proposes tokens and one pass of the large model checks them | Kapitsa (KFlash, a tree of drafts), TensorFold (MTP heads, DFlash2) | a drafter on top of S5, and a gate that the output equals plain decoding, the rule both projects state; S5's greedy continuation gives that gate a reference |
+| Several requests in shared rounds | TensorFold (`--parallel`), vLLM, SGLang | a scheduler above S5 for S8 to serve through; S6 covers threads inside one request only |
+| Prefix cache | TensorFold (`--prompt-cache-gib`), vLLM, SGLang (RadixAttention) | reusing S5's KV cache across requests that share a prompt prefix |
+
+Two more bear on existing stages, as places to look rather than plans:
+
+- S7's batching: Flare captures CUDA graphs before serving starts. Capturing a decode step's dispatches ahead of time
+  might lower the command-buffer cost in "Measured since"; nobody here has measured that on Metal.
+- S4's model access: Strata and Kapitsa stream MoE experts from the SSD on Macs with too little memory to hold them. S4
+  as written maps one file and does not address this.
+
 ## Spec deltas, in one place
 
 | Area | Change | Lives in |
@@ -122,7 +140,7 @@ kotoba-lang/amu#1667 (inline vector access) removes gap 8 first.
 | Capabilities | `:model/read` (file + digest, read-only map) and a deadline exemption for granted engines | kotoba-lang/kotoba-lang `lang/capability-catalog.edn`; amu `seed/macos-cli.kotoba` and the Mac runtime |
 | Parallelism | `parallel-rows` with a fixed reduction order | language spec; Mac runtime |
 | Limits | source and vector-item limits sized for model graphs | `lang/limits.edn`; Mac CLI |
-| GPU | Mach-O loader, Metal dispatch of KIR v2 → MSL | amu ADR 0375 route B |
+| GPU | dyld, Metal dispatch of KIR v2 → MSL | amu ADR 0375 route B, ADR 0405 |
 
 ## Related work
 
