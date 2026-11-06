@@ -305,7 +305,7 @@ kernel void conv(device const half *X [[buffer(0)]], device const half *Wt [[buf
   uint KDP = ((KD + 63u) / 64u) * 64u;
   bool vec4 = (KD & 3u) == 0u;
   uint m0 = tg.y * 64u;
-  uint n0 = tg.x * 64u;
+  uint n0 = (tg.x + P[10]) * 64u;
   uint row0 = (sg / 2u) * 32u;
   uint col0 = (sg % 2u) * 32u;
   simdgroup_float8x8 acc[4][4];
@@ -420,7 +420,7 @@ kernel void matvec(device const float *In [[buffer(0)]], device const float *Wt 
 kernel void cpy_f(device const float *S [[buffer(0)]], device float *D [[buffer(1)]], uint i [[thread_position_in_grid]]) {
   D[i] = S[i];
 }
-// single-head attention, head dim HD = @NDC@ * 64 (the VAE's mid block: 512), no mask, LK a multiple of 32. P = {LK, bits of 1/sqrt(HD)}; grid (LQ/32, 1)
+// single-head attention, head dim HD = @NDC@ * 64 (the VAE's mid block: 512), no mask, LK a multiple of 32. P = {LK, bits of 1/sqrt(HD), first query block}; grid (query blocks in this piece, 1)
 kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [[buffer(1)]], device const half *V [[buffer(2)]],
                       device half *O [[buffer(3)]], device const uint *P [[buffer(4)]],
                       uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
@@ -435,7 +435,7 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
   uint LK = P[0];
   float SCALE = as_type<float>(P[1]);
   uint NB = LK / 32u;
-  uint q0 = tg.x * 32u;
+  uint q0 = (tg.x + P[2]) * 32u;
   float m = -INFINITY;
   float l = 0.0f;
   for (uint kb = 0u; kb < NB; kb++) {
@@ -828,21 +828,21 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
       (msg f R en "dispatchThreads:threadsPerThreadgroup:" grid group 0))))
 
 (defn- run-all [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 queue :i64 S :vector-i64] :i64
-  ;; many command buffers of a few dispatches each, committed in order on one queue: one long command buffer can be killed by the GPU watchdog
-  ;; (kIOGPUCommandBufferCallbackErrorImpactingInteractivity) when a decode at 1024 px runs for seconds on a busy host
-  (let [n (vector-at S 1)
-        last (loop [i 0 lastcb 0]
-               (if (>= i n) lastcb
-                 (let [cb (msg f R queue "commandBuffer" 0 0 0)
-                       en (msg f R cb "computeCommandEncoder" 0 0 0)
-                       hi (if (> (+ i 4) n) n (+ i 4))
-                       w (loop [j i] (if (= j hi) 0 (let [u (enc4 f R en S j)] (recur (+ j 1)))))
-                       e (msg f R en "endEncoding" 0 0 0)
-                       y (msg f R cb "commit" 0 0 0)]
-                   (recur hi cb))))
-        z (msg f R last "waitUntilCompleted" 0 0 0)
-        st (msg f R last "status" 0 0 0)]
-    (if (= st 4) 0 (refuse f R (msg f R last "error" 0 0 0)))))
+  ;; many small command buffers, each waited for and its status checked (one long command buffer can be killed by the GPU watchdog,
+  ;; kIOGPUCommandBufferCallbackErrorImpactingInteractivity, on a busy host; checking only the last one let an earlier failure pass silently)
+  (let [n (vector-at S 1)]
+    (loop [i 0]
+      (if (>= i n) 0
+        (let [cb (msg f R queue "commandBuffer" 0 0 0)
+              en (msg f R cb "computeCommandEncoder" 0 0 0)
+              hi (if (> (+ i 2) n) n (+ i 2))
+              w (loop [j i] (if (= j hi) 0 (let [u (enc4 f R en S j)] (recur (+ j 1)))))
+              e (msg f R en "endEncoding" 0 0 0)
+              y (msg f R cb "commit" 0 0 0)
+              z (msg f R cb "waitUntilCompleted" 0 0 0)
+              st (msg f R cb "status" 0 0 0)
+              ok (if (= st 4) 0 (refuse f R (msg f R cb "error" 0 0 0)))]
+          (recur hi))))))
 
 (defn- tfind [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
   (let [q (cstr f (vector-at R 3) name)
@@ -890,13 +890,27 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
 ;; conv: P = {cin, cout, ih, iw, ks, str, ow, np, npp, mode}
 (defn- conv! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 xh :i64 wh :i64 bias :i64 boff :i64 res :i64 roff :i64 out :i64 ooff :i64
               G :vector-i64] :i64
+  ;; issued as several dispatches of about 60 GMAC each (pixel-tile ranges through P[10]): a 600 GMAC convolution at 1024 px is a
+  ;; single dispatch of ~0.8 s, and the GPU watchdog kills long command buffers on a busy host
   (let [cin (vector-at G 0) cout (vector-at G 1) ih (vector-at G 2) iw (vector-at G 3) ks (vector-at G 4) str (vector-at G 5) mode (vector-at G 6)
         pad (quot ks 2)
         oh (+ (quot (- (+ ih (* 2 pad)) ks) str) 1)
         ow (+ (quot (- (+ iw (* 2 pad)) ks) str) 1)
         np (* oh ow)
-        p (pu f R S cin cout ih iw ks str ow np np mode)]
-    (emit! S (vector-i64 xh wh bias res out p) (vector-i64 0 0 boff roff ooff 0) 5 1 (quot (+ np 63) 64) (quot (+ cout 63) 64) 128)))
+        tx (quot (+ np 63) 64)
+        ty (quot (+ cout 63) 64)
+        work (* (* cin cout) (* (* ks ks) np))
+        want (quot work 60000000000)
+        parts (if (< want 1) 1 (if (> want tx) tx want))
+        sz (quot (+ tx (- parts 1)) parts)]
+    (loop [k 0]
+      (if (>= (* k sz) tx) 0
+        (let [off (* k sz)
+              cnt (if (> (+ off sz) tx) (- tx off) sz)
+              p (pu f R S cin cout ih iw ks str ow np np mode)
+              u (poke f (+ (contents f R p) 40) off)
+              e (emit! S (vector-i64 xh wh bias res out p) (vector-i64 0 0 boff roff ooff 0) 5 1 cnt ty 128)]
+          (recur (+ k 1)))))))
 
 ;; linear_t: P = {M, K, N, OUTH, RES, ACT}
 (defn- lin! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 a :i64 wh :i64 bias :i64 boff :i64 res :i64 roff :i64
@@ -975,8 +989,16 @@ kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [
         q1 (linH! f R S TG wq d (toff f R S (nm pre "q.bias")) TQ hw C C)
         k1 (linH! f R S TG wk d (toff f R S (nm pre "k.bias")) TK hw C C)
         v1 (linH! f R S TG wv d (toff f R S (nm pre "v.bias")) TV hw C C)
-        pa (pu f R S hw scalebits 0 0 0 0 0 0 0 0)
-        a1 (emit! S (vector-i64 TQ TK TV TA pa) (vector-i64 0 0 0 0 0) 14 1 (quot hw 32) 1 128)
+        nblk (quot hw 32)
+        pieces (let [p (quot hw 2048)] (if (< p 1) 1 p))
+        psz (quot (+ nblk (- pieces 1)) pieces)
+        a1 (loop [k 0]
+             (if (>= (* k psz) nblk) 0
+               (let [off (* k psz)
+                     cnt (if (> (+ off psz) nblk) (- nblk off) psz)
+                     pk (pu f R S hw scalebits off 0 0 0 0 0 0 0)
+                     e (emit! S (vector-i64 TQ TK TV TA pk) (vector-i64 0 0 0 0 0) 14 1 cnt 1 128)]
+                 (recur (+ k 1)))))
         o1 (linF! f R S TA wo d (toff f R S (nm pre "proj_out.bias")) dummy 0 FT 0 hw C C 0)
         pun (pu f R S C hw 0 0 0 0 0 0 0 0)]
     (emit! S (vector-i64 xf FT of pun) (vector-i64 0 0 0 0) 10 0 (* C hw) 1 64)))

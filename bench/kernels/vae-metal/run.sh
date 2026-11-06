@@ -4,7 +4,7 @@
 # mid.attn_1, mid.block_2, up.3 .. up.0 with three residual blocks and an Upsample each, norm_out, conv_out), and decodes a latent to an image
 # with GroupNorm(32, eps 1e-6)+SiLU, 3x3 implicit-GEMM convolutions, the 1x1 shortcut convolution where the width changes, nearest-neighbour
 # 2x Upsample + conv, and the middle block's single-head attention over all pixels (head dim = mid width: 128 in the small config, 512 in
-# SDXL's), in ~120 dispatches committed as command buffers of 4 (one long command buffer is killed by the GPU watchdog at 1024 px).
+# SDXL's), in 125 to 169 dispatches, each command buffer of 2 dispatches waited for and its status checked (a long command buffer or a long dispatch is killed by the GPU watchdog at 1024 px).
 # make_fixture.py builds the same Decoder with ComfyUI v0.44.0's own PyTorch classes (random weights, float32, CPU: a local oracle only) at
 # ch 32 (small, with the activation after every stage) and ch 128 (SDXL's VAE decoder: 49.5 M parameters) at 512 and 1024 px.
 # Limits (the f16 scale fixed in slice 10, before any VAE run): final image 1e-2, each stage 2e-2 (|gpu - ref| / max(1, |ref|)).
