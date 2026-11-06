@@ -1,6 +1,7 @@
 # ADR-261106: I3, a real SDXL render on Kotoba / Amu selfhost, designed
 
-- Status: **design** (nothing in it is implemented). Linear JUN-927.
+- Status: **design**, with one decision made and one slice built since it was merged (amended 2026-11-06): D2 is decided
+  and stage M's first slice (an f16 matrix-unit GEMM) is implemented. Nothing else in it is implemented. Linear JUN-927.
 - Date: 2026-11-06
 - Owner direction: 2026-11-06, "I3 の設計を実施"; image first, native on the fleet's nodes; comfyui-clj stays an
   oracle, and ComfyUI's Python may be run as a one-off oracle (see [media-generation-roadmap.md](../media-generation-roadmap.md)).
@@ -17,7 +18,7 @@ not fit any CPU tier the inference roadmap plans.**
 
 Measured 2026-11-06 on ComfyUI v0.44.0's SDXL UNet, built on the meta device and run with attention replaced by a
 shape-recording stub (`bench/oracle/comfyui/sdxl_budget.py`, record
-[2026-11-06-sdxl-budget](../bench/results/2026-11-06-sdxl-budget/README.md)):
+[2026-11-06-sdxl-budget](../../bench/results/2026-11-06-sdxl-budget/README.md)):
 
 | Latent (image) | Conv | Linear | Attention | One UNet call |
 | --- | ---: | ---: | ---: | ---: |
@@ -65,7 +66,7 @@ State read 2026-11-06 from amu `origin/main` (`f6c6ea215`) and JUN-804.
 | Threads | not started (S6) | JUN-804 |
 | GPU: one hand-written MSL kernel through dyld | merged (S7 slice 1, ADR 0405) | amu#1822 |
 | GPU: Amu KIR v2 -> MSL, batching a step's dispatches | not started (rest of S7) | JUN-804 |
-| GPU: simdgroup *matrix* multiply (f16 MMA) | **absent from every plan** | this ADR, stage M |
+| GPU: simdgroup *matrix* multiply (f16 MMA) | **GEMM only, merged** (stage M slice 1: bit-exact against an integer twin, 3.1 to 3.6 TMAC/s on an M1 Max under load). Implicit-GEMM convolution, fused attention, per-UNet-call batching and KIR v2 emission: not started | this ADR, stage M; `bench/kernels/gemm-metal/` |
 | Kernels | conv, GroupNorm, LayerNorm, attention, GEGLU, upsample, timestep embedding, matmul, ResBlock, SpatialTransformer: done on CPU (I1/I2) | `bench/kernels/` |
 | CLIP BPE tokenizer | not written in Kotoba (comfyui-clj has one in `.cljk`, as an oracle) | I3b |
 | Label-embedding MLP, input/output block wiring with skip concat, middle block, sampler, tiled VAE, PNG writer | not written | I3c-I3e |
@@ -100,15 +101,25 @@ scheduled; the stages are independent enough that M and I3a-I3b can proceed in p
 - The I2 gate numbers (7.6e-6 and 3.6e-6 at C = 32-64) do not transfer to depth-10 transformers at 1,280 channels; I3c
   measures the real figure.
 
-## Decisions for the owner
+## Decisions
+
+- **D2 · the compute tier: decided 2026-11-06 (owner): build the matrix tier (M).** Slice 1 is merged
+  (`bench/kernels/gemm-metal/`, [record](../../bench/results/2026-11-06-gemm-metal/README.md)): an f16 `simdgroup_matrix` GEMM reached
+  from Amu selfhost through dyld, checksum equal to an integer C twin's on four shapes up to 4096 x 1024 x 4096, a wrong B
+  stride detected, and best-of-20 rates of 3.1 to 3.6 TMAC/s on an M1 Max at load average 17 to 20 (command-buffer floor
+  included). That is 2.4 to 2.8 times the 1.3 TMAC/s derived above from ComfyUI's 72 s, so the matrix tier looks
+  sufficient *for the GEMM share*. Not yet measured, and what decides whether I3f takes minutes or an hour: convolution as
+  implicit GEMM, attention (a softmax between two GEMMs), norms and activations, and the roughly 275 us command-buffer
+  floor of each unbatched dispatch. The slice uses integer-valued f16 data, so f16 rounding on model data, f16 storage as
+  a language type, and the 16 GiB M4 minis are untouched. Next in M: implicit-GEMM convolution, a fused attention kernel,
+  batching a whole UNet call, emission from KIR v2.
+
+### Still open for the owner
 
 - **D1 · which checkpoint.** A pinned SDXL file must exist locally for I3a, with revision and sha256, and a licence that
   allows the use. Candidates: SDXL base 1.0 (about 6.9 GB; CreativeML OpenRAIL++-M), or the fleet's own
   animagine-xl-4.0 / waiREALMIX (on offline nodes; their licences and provenance are not recorded in this repository). A
   download needs your explicit approval (file, source, size).
-- **D2 · the compute tier.** Build the f16 matrix tier (M) on the Metal route, or accept CPU-only kernels as
-  references and stop I3 at I3c's 64 x 64 correctness gate. Without M a render takes days; with M it is a new body of
-  work on top of S7.
 - **D3 · more than one file into a guest.** The checkpoint plus the CLIP vocabulary and merges are at least two inputs;
   S4 maps one. Options: extend `:model/read` to a small set of named, digest-pinned files, or embed the tokenizer tables
   in the program (the 1 MiB source limit forbids it today).
@@ -117,6 +128,7 @@ scheduled; the stages are independent enough that M and I3a-I3b can proceed in p
 
 ## Not claimed
 
-No render, no checkpoint read and no Metal kernel for these ops exists. The MAC table counts Conv2d, Linear and attention
+No render and no checkpoint read exists, and the only Metal kernel is the GEMM of stage M slice 1 (no convolution,
+attention, norm or activation on the GPU yet). The MAC table counts Conv2d, Linear and attention
 products only; the times are arithmetic on those counts and on rates measured for other operations, not forecasts.
 The 72 s ComfyUI figure is a 2026-09 measurement on another model (waiREALMIX_v11) and assumes two UNet calls per step.
