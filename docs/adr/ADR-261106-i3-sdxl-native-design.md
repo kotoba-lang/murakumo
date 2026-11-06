@@ -41,6 +41,10 @@ render without it is half).
 | 108 GMAC/s | llama.cpp Metal on a whole Q8 model (a different op mix) | 14 min |
 | about 1,260 GMAC/s | ComfyUI, M4 16 GiB, 768 x 768, 25 steps, warm, 72 s (`image_job.cljk`), if it ran CFG | 72 s |
 
+**Measured since (2026-11-06, [record](../../bench/results/2026-11-06-unet-sdxl-metal/README.md)).** One SDXL-shaped UNet call (synthetic weights, ~2,100 kernels in one command buffer, an M1 Max with a load average of 10 to 13) took 1.67 s at 768 px
+at best (up to 2.4 s under contention), 0.84 s at 512 px and about 4.1 s at 1024 px. That is about 1.1 TMAC/s overall at 768 px and about 84 s for the 50 UNet calls of a 25-step guided render, before the text encoders and the VAE:
+the same order as the 72 s ComfyUI took on a 16 GiB M4 mini, not faster. The matrix tier is sufficient to reach that order; beating it needs the convolution (0.7 to 0.85 TMAC/s today, slower than slice 2's 1.7 to 1.9) and the non-matrix kernels brought up.
+
 Consequences:
 
 1. The Kotoba CPU kernels of I1/I2 are correctness references, not a render route. Even S3's target leaves a render at
