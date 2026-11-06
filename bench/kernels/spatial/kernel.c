@@ -31,6 +31,9 @@
 #ifndef REPS
 #define REPS 1
 #endif
+#ifndef GNEPS
+#define GNEPS 0.00001
+#endif
 #define REAL float
 #define SUF _f
 #define IS_DOUBLE 0
@@ -78,6 +81,17 @@ int main(void){
     run_f();
     for(int i=0;i<SC*NPOS;i++) c=(c*31+(int64_t)B(out_[i]))&MASK48;
   }
-  printf("%lld\n",(long long)c); return 0;
+  printf("%lld\n",(long long)c);
+  /* DUMP_OUT order: x, ctx, gng, gnb, wi, bi, l1g, l1b, wq1, wk1, wv1, wo1, bo1, l2g, l2b, wq2, wk2, wv2, wo2, bo2,
+   * l3g, l3b, wf1, bf1, wf2, bf2, wout, bout, out */
+  FILE* df=dump_open();
+  if(df){
+    dump_f32(df,x_,SC*NPOS); dump_f32(df,ctx_,SLC*SCC); dump_f32(df,gng_,SC); dump_f32(df,gnb_,SC); dump_f32(df,wi_,SC*SC); dump_f32(df,bi_,SC);
+    dump_f32(df,l1g_,SC); dump_f32(df,l1b_,SC); dump_f32(df,wq1_,SC*SC); dump_f32(df,wk1_,SC*SC); dump_f32(df,wv1_,SC*SC); dump_f32(df,wo1_,SC*SC); dump_f32(df,bo1_,SC);
+    dump_f32(df,l2g_,SC); dump_f32(df,l2b_,SC); dump_f32(df,wq2_,SC*SC); dump_f32(df,wk2_,SCC*SC); dump_f32(df,wv2_,SCC*SC); dump_f32(df,wo2_,SC*SC); dump_f32(df,bo2_,SC);
+    dump_f32(df,l3g_,SC); dump_f32(df,l3b_,SC); dump_f32(df,wf1_,SC*2*SFI); dump_f32(df,bf1_,2*SFI); dump_f32(df,wf2_,SFI*SC); dump_f32(df,bf2_,SC);
+    dump_f32(df,wout_,SC*SC); dump_f32(df,bout_,SC); dump_f32(df,out_,SC*NPOS); fclose(df);
+  }
+  return 0;
 }
 #endif

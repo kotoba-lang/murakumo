@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 #define MASK48 281474976710655LL
 static float F(uint32_t u){float f;memcpy(&f,&u,4);return f;}
 static uint32_t B(float f){uint32_t u;memcpy(&u,&f,4);return u;}
@@ -33,4 +34,9 @@ static float expf_k(float x){
   float p=y*r; p=p*r; p=p+r; p=p+F(0x3F800000u);
   return p*F((uint32_t)(k+127)<<23);
 }
+/* Oracle support: when DUMP_OUT names a file, a twin's main writes its inputs and
+ * output there as raw native-endian float32, in the order documented in the
+ * kernel's main(). Not used by the gates. */
+static FILE* dump_open(void){ const char* p=getenv("DUMP_OUT"); return p?fopen(p,"wb"):NULL; }
+static void dump_f32(FILE* f,const float* a,int n){ if(f) fwrite(a,sizeof(float),(size_t)n,f); }
 #endif
