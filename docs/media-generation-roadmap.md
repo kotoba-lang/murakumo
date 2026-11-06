@@ -221,6 +221,8 @@ At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI
 
 **Stage M, slice 19: SDXL's conditioning on the GPU (2026-11-06).** The render program now builds its context and label vector itself from the two towers' penultimate states and the pooled vector: the L+G concatenation (L first) and `SDXL.encode_adm` (pooled, then Timestep(256) of height, width, crop_h, crop_w, target_height, target_width) agree with ComfyUI's own code to 0 and 3.1e-5 (limit 1e-4, widened from an initial 1e-5 for the float32 sin/cos reason), six mutants detected ([record](../bench/results/2026-11-06-pipeline-conditioning/README.md)). The towers are still separate programs; running tokenizer, both towers and the render in one process is the remaining code gap on the text path.
 
+**Stage M, slice 20: the UNet graph at wider widths (2026-11-06).** The slice-17 gate at model_channels 128 (494 M parameters) and 192 (1.007 B parameters, heads up to 12) agrees with ComfyUI's `UNetModel` at all 21 stages (worst 9.7e-3, final 1.0e-3), 134 and 187 ms at 256 px ([record](../bench/results/2026-11-06-unet-sdxl-named-widths/README.md)). SDXL's real 320 (2.57 B) was not run: the 10 GB fixture needs ~20 GB of RAM while the Mac's swap was nearly full; the gate scripts now remove their large weight files on success, because earlier slices' leftover build directories had filled the disk.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
