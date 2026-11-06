@@ -1,0 +1,97 @@
+"""Stdlib-only checks/arithmetic on dated raw fleet receipts; no model work."""
+(import hashlib json math pathlib)
+(setv root (. (pathlib.Path __file__) parent) source-root (/ root "../../../experiments/ced_moe"))
+(defn read [path] (json.loads (.read_text (/ root path))))
+(defn checked [name]
+  (setv reports (lfor rank (range 3) (read (+ "rank" (str rank) "/" name "/result.json")))
+        supervisors (lfor rank (range 3) (read (+ "rank" (str rank) "/" name "-supervisor.json")))
+        first (get reports 0))
+  (assert (= (len (set (lfor r reports (get r "host")))) 3))
+  (for [[rank r] (enumerate reports)]
+    (assert (= (get r "status") "complete"))
+    (assert (= (get r "rank") rank))
+    (assert (= (get r "world_size") 3))
+    (assert (= (get r "parameters") 3003341824))
+    (for [key ["options" "config" "partition" "source_sha256" "data_manifest_sha256" "input_sha256"
+               "initial_validation_ce" "final_validation_ce" "confirmation_initial" "confirmation_final"]]
+      (assert (= (get r key) (get first key)) key))
+    (for [[name sha] (.items (get r "source_sha256"))]
+      (assert (= sha (.hexdigest (hashlib.sha256 (.read_bytes (/ source-root name))))) name))
+    (setv guard (get r "memory_enforcer") mem (get r "process_memory"))
+    (assert (and (get guard "readback_verified") (get guard "active_fatal") (get guard "inactive_fatal")))
+    (assert (= (get guard "requested_bytes") (* 10 (** 1024 3))))
+    (assert (= (get guard "kernel_limit_bytes") (* 9 (** 1024 3))))
+    (assert (< (get mem "lifetime_peak_phys_footprint_bytes") (get guard "kernel_limit_bytes")))
+    (setv part (get (get r "partition") rank) opts (get r "options")
+          kinds (if (= (get opts "optimizer") "adamw") ["master" "m" "v"] ["master"]))
+    (assert (= (get part "optimizer_state_kinds") kinds))
+    (assert (= (get part "optimizer_state_bytes") (* 4 (len kinds) (get part "parameters"))))
+    (for [row (get r "trace")]
+      (assert (math.isfinite (get row "objective")))
+      (assert (math.isfinite (get row "global_gradient_norm")))
+      (assert (= (get row "learning_rate") (* (get opts "lr") (min 1.0 (/ (get row "step") 4)))))))
+  (for [sup supervisors]
+    (assert (and (= (get sup "exit_status") 0) (get sup "child_reaped") (not (get sup "timed_out")))))
+  (setv keys (sum (lfor p (get first "partition") (get p "keys")) []))
+  (assert (= (len keys) (len (set keys)) 304))
+  (assert (= (sum (lfor p (get first "partition") (get p "parameters"))) 3003341824))
+  #(reports supervisors))
+(defn measure [groups]
+  (setv reports (sum (lfor g groups (get g 0)) [])
+        tokens (sum (lfor g groups (get (get (get g 0) 0) "global_training_tokens_counted_once")))
+        phase (sum (lfor g groups (max (lfor r (get g 0) (get r "training_phase_seconds")))))
+        steps (sum (lfor g groups (max (lfor r (get g 0) (sum (gfor row (get r "trace") (get row "step_seconds")))))))
+        outer (sum (lfor g groups (max (lfor sup (get g 1) (get sup "wall_seconds"))))))
+  {"tokens_counted_globally_once" tokens "phase_with_periodic_dev_seconds" phase
+   "phase_with_periodic_dev_tok_s" (/ tokens phase) "update_seconds" steps "update_only_tok_s" (/ tokens steps)
+   "supervisor_seconds" outer "all_in_tok_s" (/ tokens outer)
+   "initial_dev_ce" (get (get reports 0) "initial_validation_ce")
+   "final_dev_ce" (get (get reports -1) "final_validation_ce")
+   "peak_footprint_gib" (/ (max (lfor r reports (get (get r "process_memory") "lifetime_peak_phys_footprint_bytes"))) (** 1024 3))
+   "global_logical_boundary_payload_bytes" (sum (gfor g groups value (.values (get (get (get g 0) 0) "mesh")) (get value "useful_owner_payload_bytes")))
+   "per_rank" (lfor rank (range 3)
+     (do (setv runs (lfor g groups (get (get g 0) rank)))
+       {"rank" rank
+        "whole_nic_tx_bytes" (sum (lfor r runs (get (get r "interface_delta") "tx")))
+        "whole_nic_rx_bytes" (sum (lfor r runs (get (get r "interface_delta") "rx")))
+        "process_disk_read_bytes" (sum (lfor r runs (get (get r "process_io") "read_bytes")))
+        "process_disk_write_bytes" (sum (lfor r runs (get (get r "process_io") "write_bytes")))
+        "logical_state_reads" (dfor kind (get (get (get runs 0) "logical_optimizer_io") "read_bytes")
+           kind (sum (lfor r runs (get (get (get r "logical_optimizer_io") "read_bytes") kind))))
+        "logical_state_writes" (dfor kind (get (get (get runs 0) "logical_optimizer_io") "write_bytes")
+           kind (sum (lfor r runs (get (get (get r "logical_optimizer_io") "write_bytes") kind))))}))})
+(setv screen {} inputs None)
+(for [[name opt lr] [["sgd" "sgd" 0.001] ["low" "adamw" 0.0001] ["high" "adamw" 0.0003]]]
+  (setv group (checked (+ "adam-screen-" name)) first (get (get group 0) 0))
+  (assert (= (get first "end_step") 8))
+  (assert (= (get (get first "options") "optimizer") opt))
+  (assert (= (get (get first "options") "lr") lr))
+  (assert (is (get first "checkpoint") None))
+  (assert (is (get first "confirmation_initial") None))
+  (when inputs (assert (= inputs (get first "input_sha256"))))
+  (setv inputs (get first "input_sha256") (get screen name) (measure [group])))
+(setv chosen (min ["low" "high"] :key (fn [name] (get (get screen name) "final_dev_ce")))
+      result {"schema" "ced-moe-adamw-summary/v1" "screen" screen "selected_adamw" chosen
+              "source_commit" "7229876e" "long_run" None "wire_bytes" None
+              "scope" "serial owner model parallel, actual1Gbps links, no EP/overlap/10node or inference qualification"
+              "timing_scope" "phase includes periodic dev, update-only sums step times, all-in includes init/eval/save/load; reporting gaps excluded"
+              "io_scope" "logical tensor bytes differ from process rusage physical I/O; cached reads may be absent; no device-exclusive NVMe attribution"
+              "network_scope" "logical boundary payload globally once; NIC includes background/control; ring estimates are not exclusive wire bytes"
+              "developer_mac_model_execution" False})
+(when (.exists (/ root "rank0/adam-long-suffix/result.json"))
+  (setv prefix (checked "adam-long-prefix") suffix (checked "adam-long-suffix")
+        p (get (get prefix 0) 0) f (get (get suffix 0) 0)
+        initial (get f "confirmation_initial") final (get f "confirmation_final")
+        delta (- (get initial "ce") (get final "ce"))
+        improved (sum (gfor [a b] (zip (get initial "per_batch_ce") (get final "per_batch_ce")) (< b a))))
+  (assert (= (get p "end_step") (get f "start_step") 32))
+  (assert (= (get f "end_step") 64))
+  (assert (= (get (get p "options") "lr") (if (= chosen "low") 0.0001 0.0003)))
+  (assert (= (get p "final_validation_ce") (get f "initial_validation_ce")))
+  (setv (get result "long_run") (| (measure [prefix suffix])
+          {"confirmation_initial_ce" (get initial "ce") "confirmation_final_ce" (get final "ce")
+           "confirmation_ce_improvement" delta "improving_paired_batches" improved
+           "confirmation_pass" (and (>= delta 0.02) (>= improved 12))
+           "checkpoint_manifest_sha256" [(get (get p "checkpoint") "global_manifest_sha256") (get (get f "checkpoint") "global_manifest_sha256")]})))
+(.write_text (/ root "summary.json") (+ (json.dumps result :indent 2) "\n"))
+(print (json.dumps result :indent 2))
