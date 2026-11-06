@@ -10,7 +10,8 @@ or model-state sharding is claimed. All actual model work belongs on fleet.
 (import model :as m)
 (import train)
 (import stream_checkpoint :as ckpt)
-(import ddp_ops [average-gradients sequential-mean])
+(import ddp_ops [average-gradients])
+(import accumulation_ops [accumulate mean-gradients])
 (import memory_policy [require-hard-memory-enforcer])
 (import nvme_master [MasterStore])
 (import process_memory [counters])
@@ -30,7 +31,7 @@ or model-state sharding is claimed. All actual model work belongs on fleet.
 (defn source-digest []
   (setv root (getattr (pathlib.Path __file__) "parent")
         files (ckpt.source-fingerprint))
-  (for [name ["distributed_trial.hy" "ddp_ops.hy"]]
+  (for [name ["distributed_trial.hy" "ddp_ops.hy" "accumulation_ops.hy"]]
     (setv (get files name) (ckpt.digest (/ root name))))
   files)
 
@@ -42,6 +43,10 @@ or model-state sharding is claimed. All actual model work belongs on fleet.
         io-start (counters) network-start (interface-bytes args.interface))
   (when (or (<= args.steps 0) (< args.seq 4) (> args.steps 4))
     (raise (ValueError "trial admits1..4 updates and sequence>=4")))
+  (when (or (not (in args.accumulation_steps [1 2 4]))
+            (and (= args.mode "reference") (!= args.sync_frequency "update"))
+            (> (* args.steps 2 args.accumulation_steps args.seq) 2048))
+    (raise (ValueError "admit accumulation1/2/4, reference update-only and <=2048 global tokens")))
   (when (and (= args.preset "1b") (or (not args.initialize_from_single) (>= args.fail_rank 0)))
     (raise (ValueError "1B requires explicit checkpoint initialization and no fault injection")))
   (for [split ["train" "validation"]]
@@ -60,7 +65,8 @@ or model-state sharding is claimed. All actual model work belongs on fleet.
         host-hash (.hexdigest (hashlib.sha256 (.encode (socket.gethostname))))
         spec-hash (.hexdigest (hashlib.sha256 (.encode (json.dumps
           {"preset" args.preset "steps" args.steps "seq" args.seq
-           "memory_limit_gib" args.memory_limit_gib "fail_rank" args.fail_rank} :sort_keys True)))))
+           "memory_limit_gib" args.memory_limit_gib "fail_rank" args.fail_rank
+           "accumulation_steps" args.accumulation_steps "sync_frequency" args.sync_frequency} :sort_keys True)))))
   (when group
     (setv peers (gather-digests [source-hash host-hash provenance spec-hash] group))
     (ckpt.ensure (= (get (get peers 0) 0) (get (get peers 1) 0)) "trial source differs")
@@ -107,33 +113,55 @@ or model-state sharding is claimed. All actual model work belongs on fleet.
   (setv phase-start (time.monotonic))
   (for [step (range 1 (+ args.steps 1))]
     (barrier group)
-    (setv tick (time.monotonic) [x y] (train.sample-batch tokens 2 args.seq rng)
-          local-section (slice rank (+ rank 1))
-          local-x (if group (get x local-section) x)
-          local-y (if group (get y local-section) y)
-          data-hash (.hexdigest (hashlib.sha256 (+ (.tobytes (np.array local-x)) (.tobytes (np.array local-y))))))
-    (.append input-hashes data-hash)
-    (if group
-      (do (setv [loss gradients] (gradient-fn p local-x local-y cfg))
-          (mx.eval loss gradients) (setv value (float loss)))
-      (setv [value gradients] (sequential-mean gradient-fn p x y cfg 2 1)))
-    (setv after-compute (time.monotonic) stats None)
+    (setv tick (time.monotonic) gradients None values [] comm-seconds 0.0
+          syncs 0 logical-step 0 buckets 0 ring-step 0.0)
+    (for [_ (range args.accumulation_steps)]
+      (setv [x y] (train.sample-batch tokens 2 args.seq rng)
+            local-section (slice rank (+ rank 1))
+            local-x (if group (get x local-section) x)
+            local-y (if group (get y local-section) y)
+            data-hash (.hexdigest (hashlib.sha256 (+ (.tobytes (np.array local-x)) (.tobytes (np.array local-y))))))
+      (.append input-hashes data-hash)
+      (for [micro (range (if group 1 2))]
+        (setv section (slice micro (+ micro 1))
+              [loss fresh] (gradient-fn p (get local-x section) (get local-y section) cfg))
+        (mx.eval loss fresh)
+        (.append values (float loss))
+        (when (and group (= args.sync_frequency "micro"))
+          (setv communication-start (time.monotonic)
+                stats (average-gradients fresh group))
+          (+= comm-seconds (- (time.monotonic) communication-start))
+          (+= syncs 1) (+= logical-step (get stats "logical_gradient_bytes"))
+          (+= buckets (get stats "collectives"))
+          (+= ring-step (get stats "ring_tx_estimated_bytes")))
+        (setv gradients (accumulate gradients fresh))
+        (del fresh)))
+    (setv gradients (mean-gradients gradients (len values))
+          value (/ (sum values) (len values)))
     (when group
-      (setv stats (average-gradients gradients group))
-      (+= logical (get stats "logical_gradient_bytes"))
-      (+= tx-estimate (get stats "ring_tx_estimated_bytes"))
-      (setv value (float (/ (mx.distributed.all-sum (mx.array value) :group group) 2))))
-    (setv after-comm (time.monotonic))
+      (setv communication-start (time.monotonic))
+      (when (= args.sync_frequency "update")
+        (setv stats (average-gradients gradients group))
+        (+= syncs 1) (+= logical-step (get stats "logical_gradient_bytes"))
+        (+= buckets (get stats "collectives"))
+        (+= ring-step (get stats "ring_tx_estimated_bytes")))
+      (setv value (float (/ (mx.distributed.all-sum (mx.array value) :group group) 2)))
+      (+= comm-seconds (- (time.monotonic) communication-start)))
+    (+= logical logical-step) (+= tx-estimate ring-step)
+    (setv after-comm (time.monotonic)
+          stats (when group {"logical_gradient_bytes" logical-step "collectives" buckets
+                             "gradient_synchronizations" syncs "ring_tx_estimated_bytes" ring-step
+                             "bucket_limit_bytes" (* 64 1024 1024)}))
     (when (and (= args.preset "tiny") (= step 1))
       (mx.save-safetensors (str (/ output "gradient-step1.safetensors")) gradients))
     (setv norm (train.step-update p gradients state (+ source-step step) update-args))
     (del gradients)
     (mx.clear-cache)
     (barrier group)
-    (setv row {"trial_step" step "global_tokens" (* step 2 args.seq)
+    (setv row {"trial_step" step "global_tokens" (* step 2 args.accumulation_steps args.seq)
                "mean_local_objective" value "gradient_norm" norm
-               "compute_seconds" (- after-compute tick)
-               "gradient_communication_seconds" (- after-comm after-compute)
+               "compute_seconds" (- after-comm tick comm-seconds)
+               "gradient_communication_seconds" comm-seconds
                "optimizer_and_finish_sync_seconds" (- (time.monotonic) after-comm)
                "step_seconds" (- (time.monotonic) tick) "collectives" stats
                "process_memory" (counters) "mlx_peak_bytes" (mx.get-peak-memory)})
@@ -157,15 +185,17 @@ or model-state sharding is claimed. All actual model work belongs on fleet.
                 "restore_file_bytes" (. (get state "master") restore_file_bytes)})
   (.close (get state "master"))
   (setv memory (counters) network-end (interface-bytes args.interface)
-        result {"schema" "ced-moe-replicated-trial/v1" "status" "complete"
+        result {"schema" "ced-moe-replicated-trial/v2" "status" "complete"
                 "mode" args.mode "preset" args.preset "rank" rank "world_size" (if group 2 1)
                 "host" (socket.gethostname) "device" (mx.device-info)
-                "global_microbatches" 2 "local_batch" 1 "sequence" args.seq "steps" args.steps
-                "objective_semantics" "mean of two rank-local objectives, including local balancing"
-                "global_training_tokens" (* args.steps 2 args.seq)
-                "local_tokens" (* args.steps (if group 1 2) args.seq)
+                "global_microbatches" (* 2 args.accumulation_steps) "local_batch" 1 "sequence" args.seq "steps" args.steps
+                "accumulation_steps" args.accumulation_steps "sync_frequency" args.sync_frequency
+                "gradient_accumulation_dtype" (if (= args.preset "tiny") "float32" "bfloat16")
+                "objective_semantics" "mean of 2*accumulation_steps rank-local objectives, including local balancing"
+                "global_training_tokens" (* args.steps 2 args.accumulation_steps args.seq)
+                "local_tokens" (* args.steps args.accumulation_steps (if group 1 2) args.seq)
                 "training_phase_seconds" phase-seconds
-                "training_global_tokens_per_second" (/ (* args.steps 2 args.seq) phase-seconds)
+                "training_global_tokens_per_second" (/ (* args.steps 2 args.accumulation_steps args.seq) phase-seconds)
                 "process_seconds_including_init_and_verification" (- (time.monotonic) start)
                 "lineage" lineage "source_sha256" sources "data_manifest_sha256" provenance
                 "input_hashes" input-hashes "trace" rows
@@ -194,6 +224,8 @@ or model-state sharding is claimed. All actual model work belongs on fleet.
   (.add_argument parser "--memory-limit-gib" :type int :required True)
   (.add_argument parser "--steps" :type int :default 2)
   (.add_argument parser "--seq" :type int :default 64)
+  (.add_argument parser "--accumulation-steps" :type int :default 1)
+  (.add_argument parser "--sync-frequency" :choices ["micro" "update"] :default "update")
   (.add_argument parser "--interface" :default "en0")
   (.add_argument parser "--fail-rank" :type int :default -1)
   (run (.parse_args parser)))

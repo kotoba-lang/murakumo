@@ -6,7 +6,11 @@
 
 (defn verify [reference replica output]
   (setv guard (require-hard-memory-enforcer (* 2 (** 1024 3)))
-        errors {})
+        errors {}
+        a-meta (json.loads (.read_text (/ (pathlib.Path reference) "result.json")))
+        b-meta (json.loads (.read_text (/ (pathlib.Path replica) "result.json"))))
+  (for [key ["preset" "sequence" "steps" "global_microbatches" "data_manifest_sha256" "source_sha256"]]
+    (assert (= (get a-meta key) (get b-meta key)) (+ "comparison configuration: " key)))
   (for [part ["gradient-step1" "weights" "masters"]]
     (setv left (mx.load (str (/ (pathlib.Path reference) (+ part ".safetensors"))))
           right (mx.load (str (/ (pathlib.Path replica) (+ part ".safetensors")))))
@@ -20,7 +24,8 @@
     (assert (< maximum 1e-4) (+ part ":" (str maximum)))
     (setv (get errors part) {"keys" (len left) "max_absolute_error" maximum}))
   (setv result {"ok" True "comparisons" errors "dtype" "float32"
-               "objective" "mean of same two local objectives; local MoE balance"
+               "objective" (.get a-meta "objective_semantics")
+               "global_microbatches" (get a-meta "global_microbatches")
                "kernel_limit" guard "process_memory" (counters)})
   (.write_text (pathlib.Path output) (json.dumps result :indent 2))
   (print (json.dumps result)))

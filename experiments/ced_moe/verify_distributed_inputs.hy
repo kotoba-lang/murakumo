@@ -14,7 +14,7 @@
         seq (get reference "sequence") hashes [])
   (assert (= (.hexdigest (hashlib.sha256 (.read_bytes (/ snapshot "state.json"))))
              (get (get reference "lineage") "source_state_sha256")))
-  (for [step (range (get reference "steps"))]
+  (for [step (range (* (get reference "steps") (.get reference "accumulation_steps" 1)))]
     (setv starts (.integers rng 0 (- (len tokens) seq 1) :size 2)
           rows (np.stack (lfor s starts (get tokens (slice s (+ s seq 1)))))
           x (.astype (get rows #(... (slice None -1))) np.int32)

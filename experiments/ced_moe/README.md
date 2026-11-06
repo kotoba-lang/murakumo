@@ -279,6 +279,17 @@ without model execution. Fleet-only `compare_weight_exports.hy` compares all
 Four updates are an operational synchronization observation, not sustained
 scaling, convergence, global checkpoint/recovery or30B time calibration.
 
+`--accumulation-steps 1|2|4` accumulates materialized same-dtype gradients with
+per-tensor consumption. `--sync-frequency micro|update` compares every-micro
+DDP averaging against one averaging call at the end of accumulation. Both
+normalize the complete mean before global clipping and one SGD update; master
+precision staysFP32/NVMe. Reference uses the same ordered local micro-objectives.
+The bounded trial admits at most4 updates/2048 global tokens. The fixed-token
+protocol keeps effectivebatch8 and2 optimizer updates/1024tokens across all
+three conditions, avoiding an update-count/globalbatch confound. Fleet F32
+all-gradient and weight/master controls pass;1B measurements are recorded in
+[accumulation evidence](../../bench/results/2026-11-06-hy-ced-moe-accumulation/README.md).
+
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 
