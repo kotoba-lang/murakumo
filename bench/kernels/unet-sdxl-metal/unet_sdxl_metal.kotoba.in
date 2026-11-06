@@ -1021,9 +1021,9 @@ kernel void vadd(device const float *A [[buffer(0)]], device const float *B [[bu
         c0 (conv! f R S xin-h wci small 0 dummy 0 cat8 (* 320 hw0 4) (vector-i64 4 320 lat lat 3 1 1))
         ;; input_blocks.1, .2 : ResBlock 320 (no transformer)
         r1 (res2! f R S 320 320 lat lat cat8 (* 320 hw0 4) 0 emb cat7 (* 320 hw0 4))
-        r2 (res2! f R S 320 320 lat lat cat7 (* 320 hw0 4) 0 emb cat6 (* 320 hw0 4))
+        r2 (res2! f R S 320 320 lat lat cat7 (* 320 hw0 4) 0 emb cat6 (* 640 hw0 4))
         ;; input_blocks.3 : Downsample
-        dn1 (down! f R S 320 lat lat cat6 (* 320 hw0 4) cat5 (* 640 hw1 4))
+        dn1 (down! f R S 320 lat lat cat6 (* 640 hw0 4) cat5 (* 640 hw1 4))
         ;; input_blocks.4, .5 : ResBlock + ST depth 2 at 640
         dh1 (cvfh! f R S cat5 (* 640 hw1 4) (* 320 hw1))
         t4 (fbuf f R S (* 640 hw1))
