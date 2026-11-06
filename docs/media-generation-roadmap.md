@@ -114,8 +114,10 @@ about 17x slower than `cc -O2` (diagnostic). Record:
 [bench/results/2026-11-06-groupnorm-silu](../bench/results/2026-11-06-groupnorm-silu/README.md).
 Slice 2, conv2d 3 × 3 (stride 1, pad 1, bias) in `bench/kernels/conv2d-3x3/`, passes the same
 gate on a square and a non-square shape ([record](../bench/results/2026-11-06-conv2d-3x3/README.md)); about
-10x slower than `cc -O2`, diagnostic on a busy host. Still open in I1: stride-2 and 1 × 1 conv, LayerNorm,
-GEGLU, attention, upsample, timestep embedding. The reference here is the twin's own math in double, not yet
+10x slower than `cc -O2`, diagnostic on a busy host. Slice 3, non-causal multi-head attention (self and cross) in `bench/kernels/attention/`, passes it on three
+shapes ([record](../bench/results/2026-11-06-attention/README.md)); 15 to 50x slower than `cc -O2`, diagnostic.
+Still open in I1: stride-2 and 1 × 1 conv, LayerNorm, GEGLU, upsample, timestep embedding, and the QKV/out
+projections (plain matmul). The reference here is the twin's own math in double, not yet
 comfyui-clj or ComfyUI output.
 
 ## Audio stages
