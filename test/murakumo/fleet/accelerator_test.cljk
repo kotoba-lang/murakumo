@@ -15,7 +15,8 @@
   GB aperture, an inference head at 41.2 GB, and a Hunyuan3D instance that had
   81.77 GB — more than the whole device."
   (:require [kotoba.test :refer [deftest testing is]]
-            [murakumo.fleet.accelerator :as accel]))
+            [murakumo.fleet.accelerator :as accel]
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private gib (* 1024 1024 1024))
 (defn- gb [x] (long (* x gib)))
@@ -30,6 +31,63 @@
     (is (= (+ (gb 48.0) (gb 23.3)) (accel/aperture-bytes gad)))
     (is (< 71.0 (/ (accel/aperture-bytes gad) (double gib)) 71.4))))
 
+(deftest aperture-rejects-inexact-or-malformed-measurements
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export args]
+                              (if (= export "aperture-bytes") (apply + args) -1))]
+    (is (= 9007199254740991 (accel/aperture-bytes {:vram-total 9007199254740990 :gtt-total 1})))
+    (doseq [probe [{:vram-total 9007199254740991 :gtt-total 1}
+                   {:vram-total 9007199254740992 :gtt-total 0}
+                   {:vram-total -1 :gtt-total 0}
+                   {:vram-total 1.5 :gtt-total 0}
+                   {:vram-total "1" :gtt-total 0}
+                   {:vram-total 0}]]
+      (is (= accel/unmeasured (accel/aperture-bytes probe))))))
+
+(deftest unknown-aperture-cannot-be-promoted-by-oracle
+  ;; This intentionally wrong oracle turns unknown into usable capacity.
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export args]
+                              (case export
+                                "usable-bytes" 100
+                                "admit-code" (if (= args [0 76 100 20 5]) 3 0)
+                                "granted-bytes" (if (= args [0 100 20 5]) 75 100)
+                                "code-name" "admitted"))]
+    (let [probe {:vram-total 9007199254740991 :gtt-total 1 :claims [] :unreadable-claims 0}
+          result (accel/admit probe {} :resident 1 0)]
+      (is (= :unmeasured (:reason result)))
+      (is (false? (:admitted? result)))
+      (is (= 0 (:granted result))))))
+
+(deftest oracle-cannot-invent-aperture-or-usable-capacity
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export _] (if (= export "aperture-bytes") 101 100))]
+    (is (= accel/unmeasured (accel/aperture-bytes {:vram-total 100 :gtt-total 0}))))
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export _] (if (= export "aperture-bytes") 100 101))]
+    (is (= accel/unmeasured (accel/usable-bytes {:vram-total 100 :gtt-total 0} 0))))
+  (with-redefs [oracle/require-ready! (fn [_] true)
+                oracle/call (fn [_ export _] (if (= export "aperture-bytes") 100 90))]
+    (is (= 90 (accel/usable-bytes {:vram-total 100 :gtt-total 0} 100)))
+    (is (= accel/unmeasured (accel/usable-bytes {:vram-total 100 :gtt-total 0} 0)))
+    (is (= accel/unmeasured (accel/usable-bytes {:vram-total 100 :gtt-total 0} 1001)))))
+
+#?(:cljs
+   (deftest bigint-oracle-results-are-normalized-exactly
+     (with-redefs [oracle/require-ready! (fn [_] true)
+                   oracle/call (fn [_ export args]
+                                 (case export
+                                   "aperture-bytes" (js/BigInt "100")
+                                   "usable-bytes" (js/BigInt "100")
+                                   "admit-code" (if (= args [0 76 100 20 5]) (js/BigInt "3") (js/BigInt "0"))
+                                   "granted-bytes" (if (= args [0 100 20 5]) (js/BigInt "75") (js/BigInt "100"))
+                                   "code-name" "admitted"))]
+       (let [probe {:vram-total 100 :gtt-total 0 :claims [] :unreadable-claims 0}
+             d (accel/admit probe {} :resident 1 0)]
+         (is (= 100 (accel/aperture-bytes probe)))
+         (is (:admitted? d))
+         (is (= 100 (:granted d)))))))
+
 (deftest unmeasured-refuses-and-never-admits
   (testing "a probe that read nothing yields an unmeasured aperture"
     (doseq [broken [{:vram-total accel/unmeasured :gtt-total (gb 23.3) :claims []}
@@ -43,7 +101,7 @@
   (testing "and an EMPTY device is a different, admitting answer"
     ;; The whole point: 0 bytes allocated is measured, -1 is not. If these two
     ;; ever return the same verdict, the check has stopped being one.
-    (let [empty-dev {:vram-total 0 :gtt-total 0 :claims []}]
+    (let [empty-dev {:vram-total 0 :gtt-total 0 :claims [] :unreadable-claims 0}]
       (is (zero? (accel/aperture-bytes empty-dev)))
       (is (= :over-aperture (:reason (accel/admit empty-dev {} :resident (gb 1))))
           "an empty aperture refuses for size, NOT for unmeasured"))))
@@ -96,6 +154,28 @@
   (doseq [r [0 -1 (- (gb 5))]]
     (is (= :non-positive-request (:reason (accel/admit gad {} :resident r))))))
 
+(deftest oracle-results-cannot-exceed-observed-remaining-capacity
+  (let [probe {:claims [{:pid "1" :comm "head" :bytes 20}
+                        {:pid "2" :comm "other" :bytes 10}]
+               :unreadable-claims 0}
+        grant (atom 100)]
+    (with-redefs [accel/usable-bytes (fn [& _] 100)
+                  oracle/require-ready! (fn [_] true)
+                  oracle/call (fn [_ export args]
+                                (case export
+                                  "admit-code" (if (= args [0 76 100 20 5]) 3 0)
+                                  "granted-bytes" (if (= args [0 100 20 5]) 75 @grant)
+                                  "code-name" "admitted"))]
+      (let [d (accel/admit probe {"1" :resident} :resident 70 0)]
+        (is (= :oracle-inconsistent (:reason d))) (is (= 0 (:granted d))))
+      (reset! grant 70)
+      (let [d (accel/admit probe {"1" :resident} :resident 71 0)]
+        (is (= :oracle-inconsistent (:reason d))) (is (= 0 (:granted d))))
+      (is (:admitted? (accel/admit probe {"1" :resident} :resident 70 0)))
+      (reset! grant 69)
+      (let [d (accel/admit probe {"1" :resident} :resident 70 0)]
+        (is (= :oracle-inconsistent (:reason d))) (is (= 0 (:granted d)))))))
+
 ;; ── the probe half: measuring must be able to say it could not ─────────
 
 (deftest probe-parsing-distinguishes-absent-from-zero
@@ -115,9 +195,44 @@
     ;; that does not fit.
     (let [p (accel/parse-probe (str "vram-total\t100\ngtt-total\t0\n"
                                     "claim\t7\t4096\tllama-server\n"
-                                    "claim\t8\tnot-a-number\tComfyUI\n"))]
+                                    "claim\t8\tnot-a-number\tComfyUI\n"
+                                    "claim\t9\t-50\tworker\n"
+                                    "claim\t10\t42garbage\tworker\n"
+                                    "claim\t11\t9007199254740992\tworker\n"))]
       (is (= 1 (count (:claims p))))
-      (is (= 1 (:unreadable-claims p))))))
+      (is (= 4 (:unreadable-claims p))))))
+
+(deftest admission-requires-current-oracle-and-readable-claims
+  (let [probe {:claims [] :unreadable-claims 0}
+        answer (fn [_ export args]
+                 (case export
+                   "admit-code" (if (= args [0 76 100 20 5]) 3 0)
+                   "granted-bytes" (if (= args [0 100 20 5]) 75 100)
+                   "code-name" "admitted"))]
+    (with-redefs [accel/usable-bytes (fn [& _] 100)
+                  oracle/require-ready! (fn [_] true)
+                  oracle/call answer]
+      (is (true? (:admitted? (accel/admit probe {} :resident 1 0))))
+      (doseq [invalid [(assoc probe :unreadable-claims 1)
+                       (dissoc probe :unreadable-claims)
+                       (assoc probe :claims [{:pid "1" :comm "worker" :bytes -50}])
+                       (assoc probe :claims [42])
+                       (assoc probe :claims [{:pid "1" :comm "worker" :bytes 9007199254740992}])
+                       (assoc probe :claims [{:pid "1" :comm "worker" :bytes 9007199254740991}
+                                             {:pid "2" :comm "worker" :bytes 1}])
+                       (dissoc probe :claims)]]
+        (let [d (accel/admit invalid {} :resident 1 0)]
+          (is (false? (:admitted? d)))
+          (is (= :invalid-observation (:reason d)))
+          (is (= 0 (:granted d))))))
+    (with-redefs [accel/usable-bytes (fn [& _] 100)
+                  oracle/require-ready! (fn [_] true)
+                  oracle/call (fn [_ export args]
+                                (if (= export "admit-code") 0 (answer nil export args)))]
+      (let [d (accel/admit probe {} :resident 1 0)]
+        (is (false? (:admitted? d)))
+        (is (= :oracle-unqualified (:reason d)))
+        (is (= 0 (:granted d)))))))
 
 (deftest unknown-holders-count-against-opportunistic-not-against-nothing
   (let [busy (assoc gad :claims [{:pid "99" :bytes (gb 30) :comm "some-unregistered-thing"}])
@@ -125,6 +240,12 @@
     (is (= 0 (:resident c)))
     (is (= (gb 30) (:opportunistic c))
         "an unknown holder must reduce what opportunistic work may take")))
+
+(deftest invalid-registry-class-still-counts-the-holder
+  (let [probe {:claims [{:pid "9" :bytes 80 :comm "worker"}]}]
+    (doseq [registry [{"9" :unknown} {"worker" :unknown}]]
+      (is (= {:resident 0 :opportunistic 80}
+             (accel/committed probe registry))))))
 
 ;; ── demand: who should be HOLDING the device, not just what fits ───────
 ;;
