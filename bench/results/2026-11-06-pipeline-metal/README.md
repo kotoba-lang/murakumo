@@ -17,7 +17,7 @@ mutant [vae-residual]: worst error 9.244 (detected)
 gate passed
 ```
 - The standalone UNet gate of slice 17 is accurate to ~1e-3. Here the latent differs from ComfyUI's by 2.7e-2 to 2.8e-2 after every step and the image by 2.0e-2 (|gpu - ref| / max(1, |ref|), worst element of 4,096 / 196,608), with the reference latent reaching 61 and the image 3.4. **The 5e-2 limit was set after seeing these numbers** (the other gates here fix limits first): a guided step multiplies an eps error by cfg + (cfg - 1) = 7 and by the step length (sigma_0 - sigma_1 = 10.5), so f16 UNet errors of 1e-3 cannot stay under 1e-2 after one step; the error does not grow over the later steps (the step lengths shrink).
-- Process wall time for the whole run (4 steps, 8 UNet passes, the decode, the load of 0.8 GB of weights) is about 1 to 2 s on this Mac under load; it is not a benchmark, and the model is the small one.
+- Process wall time for the whole run (4 steps, 8 UNet passes, the decode, the load of 0.65 GB of float32 weights) is about 1 to 2 s on this Mac under load; it is not a benchmark, and the model is the small one.
 - Four mutants (guidance dropped, the timestep reversed, the unconditional pass given the conditional context, the VAE residual dropped) are detected. A fifth idea, searching the nearest timestep in linear instead of log sigma, gave the same output on this schedule and is not a useful mutant.
 
 ## What it does not show
