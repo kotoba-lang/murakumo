@@ -113,10 +113,10 @@ kernel void linear_t(device const half *A [[buffer(0)]], device const half *W [[
 kernel void attn_hc(device const half *Q [[buffer(0)]], device const half *K [[buffer(1)]], device const half *V [[buffer(2)]],
                     device half *O [[buffer(3)]], device const uint *P [[buffer(4)]],
                     uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
-                    uint tid [[thread_index_in_threadgroup]]) {
+                    uint tid [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
   threadgroup float Ssm[32 * 32];
   threadgroup half Psm[32 * 32];
-  threadgroup float Msm[32];
+  threadgroup float Dsm[4 * 64];
   threadgroup float Lsm[32];
   threadgroup float Os[32 * 64];
   uint LK = P[0];
@@ -130,6 +130,12 @@ kernel void attn_hc(device const half *Q [[buffer(0)]], device const half *K [[b
   simdgroup_half8x8 qa[8];
   for (uint d = 0u; d < 8u; d++)
     simdgroup_load(qa[d], Q + (q0 + sg * 8u) * HD + hoff + d * 8u, HD);
+  simdgroup_float8x8 oacc[8];
+  for (uint dt = 0u; dt < 8u; dt++)
+    oacc[dt] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  uint rr = tid >> 2;
+  uint qq = tid & 3u;
+  uint qi = q0 + rr;
   float m = -INFINITY;
   float l = 0.0f;
   for (uint kb = 0u; kb < NB; kb++) {
@@ -142,51 +148,39 @@ kernel void attn_hc(device const half *Q [[buffer(0)]], device const half *K [[b
       }
       simdgroup_store(s, Ssm + sg * 8u * 32u + j * 8u, 32);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid < 32u) {
-      uint qi = q0 + tid;
-      float bm = -INFINITY;
-      for (uint c = 0u; c < 32u; c++) {
-        uint key = kb * 32u + c;
-        if (key < LK && (CAUSAL == 0u || key <= qi)) bm = max(bm, Ssm[tid * 32u + c] * SCALE);
-      }
-      float mn = max(m, bm);
-      float alpha = (m == -INFINITY) ? 0.0f : exp(m - mn);
-      float sum = 0.0f;
-      for (uint c = 0u; c < 32u; c++) {
-        uint key = kb * 32u + c;
-        if (key < LK && (CAUSAL == 0u || key <= qi)) sum += exp(Ssm[tid * 32u + c] * SCALE - mn);
-      }
-      l = l * alpha + sum;
-      m = mn;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-  }
-  if (tid < 32u) { Msm[tid] = m; Lsm[tid] = l; }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  simdgroup_float8x8 oacc[8];
-  for (uint dt = 0u; dt < 8u; dt++)
-    oacc[dt] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
-  for (uint kb = 0u; kb < NB; kb++) {
-    for (uint j = 0u; j < 4u; j++) {
-      simdgroup_float8x8 s = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
-      for (uint d = 0u; d < 8u; d++) {
-        simdgroup_half8x8 kt;
-        simdgroup_load(kt, K + (kb * 32u + j * 8u) * HD + hoff + d * 8u, HD, ulong2(0, 0), true);
-        simdgroup_multiply_accumulate(s, qa[d], kt, s);
-      }
-      simdgroup_store(s, Ssm + sg * 8u * 32u + j * 8u, 32);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint idx = tid; idx < 1024u; idx += 128u) {
-      uint r = idx / 32u;
-      uint c = idx % 32u;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    float bm = -INFINITY;
+    for (uint c = qq * 8u; c < qq * 8u + 8u; c++) {
       uint key = kb * 32u + c;
-      uint qi = q0 + r;
-      float p = (key < LK && (CAUSAL == 0u || key <= qi)) ? exp(Ssm[idx] * SCALE - Msm[r]) / Lsm[r] : 0.0f;
-      Psm[idx] = half(p);
+      if (key < LK && (CAUSAL == 0u || key <= qi)) bm = max(bm, Ssm[rr * 32u + c] * SCALE);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    bm = max(bm, simd_shuffle_xor(bm, 1u));
+    bm = max(bm, simd_shuffle_xor(bm, 2u));
+    float mn = max(m, bm);
+    float alpha = (m == -INFINITY) ? 0.0f : exp(m - mn);
+    float sum = 0.0f;
+    for (uint c = qq * 8u; c < qq * 8u + 8u; c++) {
+      uint key = kb * 32u + c;
+      float p = (key < LK && (CAUSAL == 0u || key <= qi)) ? exp(Ssm[rr * 32u + c] * SCALE - mn) : 0.0f;
+      Psm[rr * 32u + c] = half(p);
+      sum += p;
+    }
+    sum += simd_shuffle_xor(sum, 1u);
+    sum += simd_shuffle_xor(sum, 2u);
+    l = l * alpha + sum;
+    m = mn;
+    Dsm[sg * 64u + lane] = 0.0f;
+    Dsm[sg * 64u + 32u + lane] = 0.0f;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    if (qq == 0u) Dsm[sg * 64u + (lane >> 2) * 9u] = alpha;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    simdgroup_float8x8 D;
+    simdgroup_load(D, Dsm + sg * 64u, 8);
+    for (uint dt = 0u; dt < 8u; dt++) {
+      simdgroup_float8x8 z = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+      simdgroup_multiply_accumulate(z, D, oacc[dt], z);
+      oacc[dt] = z;
+    }
     for (uint ks = 0u; ks < 4u; ks++) {
       simdgroup_half8x8 pa;
       simdgroup_load(pa, Psm + sg * 8u * 32u + ks * 8u, 32);
@@ -196,15 +190,16 @@ kernel void attn_hc(device const half *Q [[buffer(0)]], device const half *K [[b
         simdgroup_multiply_accumulate(oacc[dt], pa, vt, oacc[dt]);
       }
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    simdgroup_barrier(mem_flags::mem_threadgroup);
   }
+  if (qq == 0u) Lsm[rr] = l;
   for (uint dt = 0u; dt < 8u; dt++)
     simdgroup_store(oacc[dt], Os + sg * 8u * 64u + dt * 8u, 64);
   threadgroup_barrier(mem_flags::mem_threadgroup);
   for (uint idx = tid; idx < 2048u; idx += 128u) {
     uint r = idx / 64u;
     uint c = idx % 64u;
-    O[(q0 + r) * HD + hoff + c] = half(Os[idx]);
+    O[(q0 + r) * HD + hoff + c] = half(Os[idx] / Lsm[r]);
   }
 }
 

@@ -10,7 +10,7 @@
 # widths 320 / 640 / 1280 is covered by the timing program in ../unet-sdxl-metal, whose output values are not checked).
 # Limits (the f16 scale of slice 10, set before any run of this program): final output 1e-2, every stage 2e-2 (|gpu - ref| / max(1, |ref|)).
 # Mutants must push the final error above 5e-2: a skip tensor stored at the wrong offset (the bug this slice found in the timing program),
-# the middle block one transformer layer short, the label embedding left out, the specialised 3x3 convolution's validity mask broken (proves that kernel is the one running), the transposing weight conversion made a plain copy (the linear kernel reads its weight as [K, N]), cross-attention keys taken from the value weights.
+# the middle block one transformer layer short, the label embedding left out, the specialised 3x3 convolution's validity mask broken (proves that kernel is the one running), the online-softmax attention's final normalisation by the running sum removed (its per-block rescale alone moves the final output by only 2e-2: below the bar), the transposing weight conversion made a plain copy (the linear kernel reads its weight as [K, N]), cross-attention keys taken from the value weights.
 # MUTANTS=0 skips the mutants (they use the first config's size; at MC 128 two of them are below the 5e-2 bar). ms is the best of 3 whole-graph runs on whatever load the host has: diagnostic. A GPU host is required (not a CI step).
 #
 #   sh run.sh /path/to/amu-checkout /path/to/ComfyUI-0.44.0 /path/to/stubs /path/to/python-with-torch [configs: "64:32 64:64"  (MC:LAT)]
@@ -61,6 +61,7 @@ mutant middle-depth '"middle_block.1." ma 0 mb 0 C2 l2 l2 10 ctxh' '"middle_bloc
 mutant label-embedding '(vector-i64 te le emb)' '(vector-i64 te te emb)'
 mutant conv-k3s1-padding 'vmask |= (1u << tap);' 'vmask |= 0u;'
 mutant weight-transpose 'H[k * N + n] = half(S[i]);' 'H[i] = half(S[i]);'
+mutant attn-online-normalise 'half(Os[idx] / Lsm[r])' 'half(Os[idx])'
 mutant cross-keys 'ctxh wk2 z 0 k-h 128 2048 C' 'ctxh wv2 z 0 k-h 128 2048 C'
 fi
 # the fixtures are large (0.6 GB at MC 64, 4 GB at MC 192): on success the weight files are removed from the build dir unless KEEP=1
