@@ -209,6 +209,8 @@ At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI
 
 **Stage M, slice 13 (negative result, 2026-11-06).** Staging the linear kernel through threadgroup memory kept the ComfyUI gate unchanged but gave no measurable speedup under host load, so it was not merged ([record](../bench/results/2026-11-06-linear-staging-negative/README.md)). Further tuning of the linear and conv kernels needs a quiet host and the Metal counters, not more guessing.
 
+**Stage M, slice 14: the sampler on the GPU (2026-11-06).** The sigma table, ComfyUI's `simple` schedule and the Euler loop with EPS input scaling and classifier-free guidance run on the GPU around toy stand-in models and agree with ComfyUI's own `ModelSamplingDiscrete` / `simple_scheduler` / `sample_euler` to 1e-6 (sigmas) and 8e-6 (a 4,000-fold-cancelling final latent); four mutants are detected ([record](../bench/results/2026-11-06-sampler-metal/README.md)). Not the UNet inside it, only Euler.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
