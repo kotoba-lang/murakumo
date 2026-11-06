@@ -439,7 +439,7 @@
                     nb (if (< (+ i 1) e) (byte-at f (+ p (+ i 1))) 0)
                     esc (if (and (= b 92) (or (= nb 40) (= nb 41))) 1 0)
                     w (if (= esc 1) 2 1)
-                    u0 (if (> (+ n 2) 80) (refuse-text f R "refused: more than 80 weighted pieces in a prompt\n") 0)]
+                    u0 (if (> (+ n 2) 300) (refuse-text f R "refused: more than 300 weighted pieces in a prompt\n") 0)]
                 (cond
                   (and (= esc 0) (= b 40))
                   (if (= level 0)
@@ -471,14 +471,14 @@
           (if (= tk 1)
             ;; an emit entry: the segment itself
             (let [a (vector-assoc! SEG (* n 3) ts) b (vector-assoc! SEG (+ (* n 3) 1) te) c (vector-assoc! SEG (+ (* n 3) 2) tw)
-                  u0 (if (>= n 200) (refuse-text f R "refused: more than 200 segments in a prompt\n") 0)]
+                  u0 (if (>= n 600) (refuse-text f R "refused: more than 600 segments in a prompt\n") 0)]
               (recur (- sp 1) (+ n 1)))
             ;; a parse entry: cut it into pieces and push them back to front
             (let [np (find-pieces f R p ts te PCS)
                   sp2 (loop [k (- np 1) q (- sp 1)]
                         (if (< k 0) q
                           (let [ps (vector-at PCS (* k 3)) pe (vector-at PCS (+ (* k 3) 1)) pp (vector-at PCS (+ (* k 3) 2))
-                                u1 (if (>= q 90) (refuse-text f R "refused: prompt parentheses nested too deeply\n") 0)]
+                                u1 (if (>= q 395) (refuse-text f R "refused: prompt parentheses nested too deeply\n") 0)]
                             (if (= pp 1)
                               (let [is (+ ps 1) ie (- pe 1)
                                     colon (loop [i (- ie 1)] (if (< i is) -1 (if (= (byte-at f (+ p i)) 58) i (recur (- i 1)))))
@@ -495,7 +495,7 @@
 
 ;; the code points of the bytes [s, e) (with "\\(" and "\\)" as plain parentheses) into CP / CL / WT from index k, lower-cased, classified,
 ;; NFC-composed, special tokens marked; then one boundary entry (class 0) so that nothing joins across a segment; returns the new k
-(defn- decode-seg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 s :i64 e :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 k0 :i64 w :i64] :i64
+(defn- decode-seg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 s :i64 e :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k0 :i64 w :i64 g :i64] :i64
   (let [k (loop [q s k k0]
             (if (>= q e) k
               (let [b0 (byte-at f (+ pbuf q))
@@ -511,10 +511,49 @@
                     cl (if (> sp 0) 5 (if (= m 1) 1 (cls c)))
                     u1 (if (= cl 4) (refuse-text f R "refused: a character outside the supported set (ASCII, Latin-1, Latin Extended-A, CJK, kana, Hangul, fullwidth forms, common symbols and emoji)\n") 0)
                     k2 (if (= m 1) (- k 1) k)
-                    a (vector-assoc! CP k2 (if (= m 1) pc c)) b (vector-assoc! CL k2 cl) x (vector-assoc! WT k2 w)]
+                    a (vector-assoc! CP k2 (if (= m 1) pc c)) b (vector-assoc! CL k2 cl) x (vector-assoc! WT k2 w) y (vector-assoc! SGI k2 g)]
                 (recur (+ q (if (> sp 0) (if (= sp 1) 15 13) (bit-and d 7))) (+ k2 1)))))
-        a (vector-assoc! CP k 32) b (vector-assoc! CL k 0) x (vector-assoc! WT k 0)]
+        a (vector-assoc! CP k 32) b (vector-assoc! CL k 0) x (vector-assoc! WT k 0) y (vector-assoc! SGI k g)]
     (+ k 1)))
+
+
+;; ComfyUI's batching of the token groups (one group per segment) into blocks of 77: BOS, tokens, EOS, padding. A group of fewer than 8 tokens is kept
+;; whole (the block is closed with EOS and padding and a new one started when it does not fit); a longer group is cut where the block is full.
+;; OUT / OUTW / OUTG: the tokens, their weights and group numbers (count in OUT[0], token k at index k + 1); fills IDS / WTS (block * 77 + position)
+;; for at most 4 blocks and returns the block count
+(defn- batch-blocks [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 OUT :vector-i64 OUTW :vector-i64 OUTG :vector-i64 IDS :vector-i64 WTS :vector-i64
+                     bos :i64 eos :i64 pad :i64] :i64
+  (let [cnt (vector-at OUT 0)
+        u0 (vector-assoc! IDS 0 bos) u1 (vector-assoc! WTS 0 65536)
+        r (loop [p 0 c 0 len 1]
+            (if (>= p cnt)
+              (vector-i64 c len)
+              (let [g (vector-at OUTG (+ 1 p))
+                    e (loop [q p] (if (and (< q cnt) (= (vector-at OUTG (+ 1 q)) g)) (recur (+ q 1)) q))
+                    st (loop [q p] (if (and (> q 0) (= (vector-at OUTG q) g)) (recur (- q 1)) q))
+                    large (if (>= (- e st) 8) 1 0)
+                    base (+ (* c 77) len)
+                    u2 (if (>= c 3) (refuse-text f R "refused: a prompt of more than 4 blocks of 75 tokens\n") 0)]
+                (if (> (+ (- e p) len) 76)
+                  (let [rem (- 76 len)]
+                    (if (= large 1)
+                      (let [x (loop [j 0] (if (= j rem) 0 (let [a (vector-assoc! IDS (+ base j) (vector-at OUT (+ 1 (+ p j))))
+                                                                b (vector-assoc! WTS (+ base j) (vector-at OUTW (+ 1 (+ p j))))] (recur (+ j 1)))))
+                            a (vector-assoc! IDS (+ (* c 77) 76) eos) b (vector-assoc! WTS (+ (* c 77) 76) 65536)
+                            a2 (vector-assoc! IDS (* (+ c 1) 77) bos) b2 (vector-assoc! WTS (* (+ c 1) 77) 65536)]
+                        (recur (+ p rem) (+ c 1) 1))
+                      (let [a (vector-assoc! IDS base eos) b (vector-assoc! WTS base 65536)
+                            x (loop [j (+ len 1)] (if (>= j 77) 0 (let [a1 (vector-assoc! IDS (+ (* c 77) j) pad) b1 (vector-assoc! WTS (+ (* c 77) j) 65536)] (recur (+ j 1)))))
+                            a2 (vector-assoc! IDS (* (+ c 1) 77) bos) b2 (vector-assoc! WTS (* (+ c 1) 77) 65536)]
+                        (recur p (+ c 1) 1))))
+                  (let [x (loop [j 0] (if (= j (- e p)) 0 (let [a (vector-assoc! IDS (+ base j) (vector-at OUT (+ 1 (+ p j))))
+                                                                b (vector-assoc! WTS (+ base j) (vector-at OUTW (+ 1 (+ p j))))] (recur (+ j 1)))))]
+                    (recur e c (+ len (- e p))))))))
+        c (vector-at r 0)
+        len (vector-at r 1)
+        a (vector-assoc! IDS (+ (* c 77) len) eos) b (vector-assoc! WTS (+ (* c 77) len) 65536)
+        x (loop [j (+ len 1)] (if (>= j 77) 0 (let [a1 (vector-assoc! IDS (+ (* c 77) j) pad) b1 (vector-assoc! WTS (+ (* c 77) j) 65536)] (recur (+ j 1)))))]
+    (+ c 1)))
 
 (defn- wr-num [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 v :i64] :i64
   (let [t (string-from-i64 v)
@@ -556,8 +595,8 @@
         OFF (vector-alloc 520)
         CP (vector-alloc 8192) CL (vector-alloc 8192)
         tmpw (cc f (vector-at R 3) 1024 0 0 0 0)
-        OUT (vector-alloc 4096) OUTW (vector-alloc 4096)
-        SEG (vector-alloc 640) STK (vector-alloc 400) PCS (vector-alloc 252) WT (vector-alloc 8192)]
+        OUT (vector-alloc 4096) OUTW (vector-alloc 4096) OUTG (vector-alloc 4096) SGI (vector-alloc 8192) IDS (vector-alloc 320) WTS (vector-alloc 320)
+        SEG (vector-alloc 1840) STK (vector-alloc 1600) PCS (vector-alloc 920) WT (vector-alloc 8192)]
     ;; one output line per prompt line
     (loop [ls 0]
       (if (>= ls plen) 0
@@ -566,32 +605,46 @@
               nseg (segments f R pbuf ls le SEG STK PCS)
               ncp (loop [g 0 k 0]
                     (if (= g nseg) k
-                      (recur (+ g 1) (decode-seg f R pbuf (vector-at SEG (* g 3)) (vector-at SEG (+ (* g 3) 1)) CP CL WT k (vector-at SEG (+ (* g 3) 2))))))
+                      (recur (+ g 1) (decode-seg f R pbuf (vector-at SEG (* g 3)) (vector-at SEG (+ (* g 3) 1)) CP CL WT SGI k (vector-at SEG (+ (* g 3) 2)) g))))
               walk (loop [i 0]
                      (if (>= i ncp) 0
                        (if (= (vector-at CL i) 0) (recur (+ i 1))
                          (if (= (vector-at CL i) 5)
                            (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (if (= (vector-at CP i) 2097153) bos eos))
-                                 ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) v (vector-assoc! OUT 0 (+ cc 1))]
+                                 ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) gg (vector-assoc! OUTG (+ 1 cc) (vector-at SGI i)) v (vector-assoc! OUT 0 (+ cc 1))]
                              (recur (+ i 1)))
                            (let [n (token-len CP CL i ncp)
                                  r (word-symbols f R CP i n wbuf tmpw OFF)
                                  c0 (vector-at OUT 0)
                                  b (bpe-word f R VT arena PT wbuf (vector-at r 0) (vector-at r 1) OFF SS SE SI OUT)
                                  c1 (vector-at OUT 0)
-                                 ws (loop [j c0] (if (>= j c1) 0 (let [x (vector-assoc! OUTW (+ 1 j) (vector-at WT i))] (recur (+ j 1)))))]
+                                 ws (loop [j c0] (if (>= j c1) 0 (let [x (vector-assoc! OUTW (+ 1 j) (vector-at WT i)) y (vector-assoc! OUTG (+ 1 j) (vector-at SGI i))] (recur (+ j 1)))))]
                              (recur (+ i n)))))))
               cnt (vector-at OUT 0)
+              nb (batch-blocks f R OUT OUTW OUTG IDS WTS bos eos eos)
               keep (if (> cnt 75) 75 cnt)
-              p0 (wr-num f R bos)
-              p1 (loop [k 0] (if (= k keep) 0 (let [a (wr-text f R " ") b (wr-num f R (vector-at OUT (+ 1 k)))] (recur (+ k 1)))))
-              p2 (wr-text f R " ")
-              p3 (wr-num f R eos)
-              p4 (wr-text f R "\n")
-              pw (if (= @WLINES@ 1)
-                   (let [a (wr-text f R "w")
-                         b (loop [k 0] (if (= k keep) 0 (let [x (wr-text f R " ") y (wr-num f R (vector-at OUTW (+ 1 k)))] (recur (+ k 1)))))
-                         c (wr-text f R "\n")]
-                     0)
-                   0)]
+              pr (if (= @BLOCKS@ 1)
+                   (loop [b 0]
+                     (if (= b nb) 0
+                       (let [a (loop [k 0] (if (= k 77) 0 (let [x (if (= k 0) 0 (wr-text f R " ")) y (wr-num f R (vector-at IDS (+ (* b 77) k)))] (recur (+ k 1)))))
+                             a1 (wr-text f R "\n")
+                             w1 (if (= @WLINES@ 1)
+                                  (let [c (wr-text f R "w")
+                                        d (loop [k 0] (if (= k 77) 0 (let [x (wr-text f R " ") y (wr-num f R (vector-at WTS (+ (* b 77) k)))] (recur (+ k 1)))))
+                                        e (wr-text f R "\n")]
+                                    0)
+                                  0)]
+                         (recur (+ b 1)))))
+                   (let [p0 (wr-num f R bos)
+                         p1 (loop [k 0] (if (= k keep) 0 (let [a (wr-text f R " ") b (wr-num f R (vector-at OUT (+ 1 k)))] (recur (+ k 1)))))
+                         p2 (wr-text f R " ")
+                         p3 (wr-num f R eos)
+                         p4 (wr-text f R "\n")
+                         pw (if (= @WLINES@ 1)
+                              (let [a (wr-text f R "w")
+                                    b (loop [k 0] (if (= k keep) 0 (let [x (wr-text f R " ") y (wr-num f R (vector-at OUTW (+ 1 k)))] (recur (+ k 1)))))
+                                    c (wr-text f R "\n")]
+                                0)
+                              0)]
+                     0))]
           (recur (+ le 1)))))))

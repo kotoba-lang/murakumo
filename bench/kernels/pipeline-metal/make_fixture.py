@@ -134,9 +134,6 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
     from comfy.sd1_clip import SDTokenizer
     tk_l = SDTokenizer(tokenizer_path=tokdir, max_length=77, pad_with_end=True, embedding_directory=None, embedding_size=768, embedding_key="clip_l", has_start_token=True, pad_to_max_length=True)
     tk_g = SDTokenizer(tokenizer_path=tokdir, max_length=77, pad_with_end=False, embedding_directory=None, embedding_size=1280, embedding_key="clip_g", has_start_token=True, pad_to_max_length=True)
-    def ids_for(prompt):
-        bl = tk_l.tokenize_with_weights(prompt)[0]; bg = tk_g.tokenize_with_weights(prompt)[0]
-        return [x[0] for x in bl], [x[0] for x in bg], [x[1] for x in bl]
     def blend(z, ze, wts):
         # ClipTokenWeightEncoder.encode_token_weights: z[j] = (z[j] - z_empty[j]) * weight + z_empty[j] where weight != 1.0
         z = z.clone()
@@ -144,18 +141,25 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
             if w != 1.0: z[0][j] = (z[0][j] - ze[0][j]) * w + ze[0][j]
         return z
     def cond(tag, prompt):
-        il, ig, wts = ids_for(prompt)
+        # every block of 77 ComfyUI's tokenizer makes (a prompt of more than 75 tokens has several), each through the towers on its own, then joined
+        # along the sequence axis; the pooled vector is the first block's
+        bl = tk_l.tokenize_with_weights(prompt); bg = tk_g.tokenize_with_weights(prompt)
+        il = [x[0] for b in bl for x in b]; ig = [x[0] for b in bg for x in b]
         open(os.path.join(d, "prompt_" + tag + ".txt"), "w", encoding="utf-8").write(prompt + "\n")
         np.array(il + [0], dtype=np.int32).tofile(os.path.join(d, "ids_l_" + tag + ".i32")); np.array(ig + [0], dtype=np.int32).tofile(os.path.join(d, "ids_g_" + tag + ".i32"))
         with torch.no_grad():
-            ol = clip_l(input_ids=torch.tensor([il]), output_hidden_states=True); og = clip_g(input_ids=torch.tensor([ig]), output_hidden_states=True)
-        lpen = ol.hidden_states[-2]; gpen = og.hidden_states[-2]; gpool = og.text_embeds
-        if any(w != 1.0 for w in wts):
-            with torch.no_grad():
-                el = clip_l(input_ids=torch.tensor([[49406, 49407] + [49407] * 75]), output_hidden_states=True)
-                eg = clip_g(input_ids=torch.tensor([[49406, 49407] + [0] * 75]), output_hidden_states=True)
-            lpen = blend(lpen, el.hidden_states[-2], wts); gpen = blend(gpen, eg.hidden_states[-2], wts)
-        ctx = torch.cat([lpen, gpen], dim=-1)
+            el = clip_l(input_ids=torch.tensor([[49406, 49407] + [49407] * 75]), output_hidden_states=True)
+            eg = clip_g(input_ids=torch.tensor([[49406, 49407] + [0] * 75]), output_hidden_states=True)
+            lps, gps, gpool = [], [], None
+            for k in range(len(bl)):
+                wts = [x[1] for x in bl[k]]
+                ol = clip_l(input_ids=torch.tensor([[x[0] for x in bl[k]]]), output_hidden_states=True); og = clip_g(input_ids=torch.tensor([[x[0] for x in bg[k]]]), output_hidden_states=True)
+                lpen = ol.hidden_states[-2]; gpen = og.hidden_states[-2]
+                if any(w != 1.0 for w in wts):
+                    lpen = blend(lpen, el.hidden_states[-2], wts); gpen = blend(gpen, eg.hidden_states[-2], wts)
+                lps.append(lpen); gps.append(gpen)
+                if k == 0: gpool = og.text_embeds
+        ctx = torch.cat([torch.cat(lps, dim=1), torch.cat(gps, dim=1)], dim=-1)
         y = ns2["encode_adm_fn"](fs, pooled_output=gpool, **sizes)
         for n, v in (("ctx_" + tag, ctx[0]), ("y_" + tag, y[0])): v.numpy().astype(np.float32).tofile(os.path.join(d, n + ".f32"))
         return ctx, y
