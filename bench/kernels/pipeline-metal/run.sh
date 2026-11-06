@@ -64,6 +64,7 @@ if [ "$LAYOUT" = single ]; then
   mutant inproj-v-offset 'wv (cvle! f R S vwn HID HID (if (= scheme 0) 0 (* 2 (* HID HID))))' 'wv (cvle! f R S vwn HID HID 0)'
   mutant text-projection-transposed '(cv32! f R S (nm pre "text_projection"))' '(cvl! f R S (nm pre "text_projection") HID HID)'
   mutant f16-params-scaled 'D[i] = float(S[i]);' 'D[i] = float(S[i]) * 1.5f;'
+  mutant f32-in-f16-file '(if (= dsz 4) 18 35)' '35'
 fi
 # the fixtures are large (up to 2.8 GB): on success the weight files are removed from the build dir unless KEEP=1
 if [ "$fail" = 0 ]; then
