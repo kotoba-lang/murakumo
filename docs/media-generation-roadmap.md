@@ -310,3 +310,18 @@ Blocked behind I3. Recorded here so the dependency is explicit.
 - JUN-701 / JUN-740: the Amu-native engine and murakumo serving it.
 - JUN-804: S1–S8. JUN-819 (ADR 0405): first Metal kernel. JUN-377 (ADR 0375).
 - `kotoba-lang/comfyui`, `kotoba-lang/cloud-murakumo-generation`.
+
+## Remaining gaps, and why each is still open (2026-11-07, after slice 46)
+
+Written so that "what is left" is a statement in the record, not an impression. Owner decisions need no further engineering until made; the rest are choices of effort, with the reason they were not taken.
+
+| gap | kind | why it is open |
+|---|---|---|
+| a trained SDXL checkpoint, its publisher digest, a real render and its quality check (D1) | owner decision | which checkpoint, its licence and the download are the owner's; no SDXL-class file exists on this Mac; every correctness gate so far uses random weights against ComfyUI / Hugging Face code |
+| where a real render runs (D4) | owner decision | the fleet nodes were offline during this work; which node to use is a choice |
+| other image models (SD 1.x / 2.x, Qwen Image, other samplers: I5) | needs weights | each needs its checkpoint (a D1-class download decision) and its own graph; none is in use |
+| UNet per-call speed (4 to 35 percent behind PyTorch MPS, slice 46) | effort, uncertain return | at 768 px the profile (slice 23 tool) puts 52 percent of the GPU time in `linear_t` and 26 percent in `conv_k3s1`; tile shapes, unrolling, staging, transposed weights, prefetch and a resident-Q attention were each measured (slices 24 to 35) and the remaining ones were negative; caching the context's K / V across steps saves about 2 percent; the rest needs a different algorithm per layer, with no measured candidate |
+| prompts of more than 4 blocks, `embedding:` names | not needed yet | the block count is capped at 4 (300 tokens; the repeat to a common length grows with the least common multiple of the two prompts' block counts); no textual-inversion file is in use to test `embedding:` against |
+| scripts outside the supported set (Greek, Cyrillic, Arabic, Indic, ...), mark sequences longer than one | effort, low demand | refused with a message, never tokenized differently; each script needs its own class and lower-casing table checked against the oracle |
+| the digest check hashes the file in a separate pass | accepted | the program hashes and reads through one descriptor and refuses a changed size, modification time or change time, so a swap or a write is caught; a writer that also controls the clock and the kernel is out of scope |
+
