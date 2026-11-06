@@ -70,7 +70,7 @@ State read 2026-11-06 from amu `origin/main` (`f6c6ea215`) and JUN-804.
 | Kernels | conv, GroupNorm, LayerNorm, attention, GEGLU, upsample, timestep embedding, matmul, ResBlock, SpatialTransformer: done on CPU (I1/I2) | `bench/kernels/` |
 | CLIP BPE tokenizer | not written in Kotoba (comfyui-clj has one in `.cljk`, as an oracle) | I3b |
 | Label-embedding MLP, input/output block wiring with skip concat, middle block, sampler, tiled VAE, PNG writer | not written | I3c-I3e |
-| A pinned SDXL checkpoint on this Mac | **none** (fleet checkpoints live on offline nodes); a safetensors reader with per-tensor admission exists on the Metal route and is tested on a synthetic file only | decision D1 |
+| A pinned SDXL checkpoint on this Mac | **none** (fleet checkpoints live on offline nodes); a safetensors reader with per-tensor admission and a SHA-256 of a file ([record](../../bench/results/2026-11-06-sha256-metal/README.md)) exist on the Metal route, tested on synthetic files only | decision D1 |
 
 ## Sub-stages and gates
 
