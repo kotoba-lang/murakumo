@@ -1,0 +1,19 @@
+;; Run only under a qualified FS2 fixture with an exclusive fresh root.
+;; The provider must bound E replies and the host must exclude replacement or
+;; same-size writes; these cases have not yet been executed.
+(ns murakumo.checkpoint-bounded-write-cases (:export [test-checkpoint-bounded-write]))
+
+(defn- cbw-bytes [n :i64] :vector-i64
+  (loop [i 0 out (vector-alloc n)]
+    (if (= i n) out (recur (+ i 1) (vector-assoc! out i (mod (+ (* i 17) 65) 256))))))
+(defn test-checkpoint-bounded-write [root :string] :bool
+  (let [empty (vector-alloc 0) full (cbw-bytes 4097) changed (cbw-bytes 4097)
+        altered (vector-assoc! changed 4096 (mod (+ (vector-at changed 4096) 1) 256))
+        small (cbw-bytes 4096) missing (str root "/missing")
+        zero-path (str root "/empty") full-path (str root "/full")]
+    (and (not (cp-written-equal? missing empty))
+         (cp-write zero-path empty) (cp-written-equal? zero-path empty)
+         (not (cp-written-equal? zero-path small))
+         (cp-write full-path full) (cp-written-equal? full-path full)
+         (not (cp-written-equal? full-path small))
+         (not (cp-written-equal? full-path altered)))))

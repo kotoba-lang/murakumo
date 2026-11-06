@@ -80,18 +80,31 @@
             (if (= k (+ n (- e i))) v
               (recur (+ k 1) (vector-assoc! v k (if (< k n) (vector-at prefix k) (vector-at b (+ i (- k n))))))))
         z (typed-cap-call :fs/app-data :bytes :bytes (bytes-from-vector-i64 v))] 0))
+;; Verification must not issue an unbounded A read after writing. The FS2 E
+;; provider must enforce the requested range and the trusted host must exclude
+;; concurrent replacement and same-size writes throughout the operation.
+(defn- cp-written-equal? [p :string b :vector-i64] :bool
+  (let [n (vector-count b)]
+    (and (= (cp-size p) n)
+         (if (= n 0) (cp-empty-readable? p)
+           (loop [start 0]
+             (if (= start n) true
+               (let [end (if (<= (- n start) 4096) n (+ start 4096))
+                     same (arena-scope
+                            (let [part (cp-range p start (- end start))]
+                              (and (= (vector-count part) (- end start))
+                                   (loop [i 0]
+                                     (if (= i (- end start)) true
+                                       (and (= (vector-at part i) (vector-at b (+ start i)))
+                                            (recur (+ i 1))))))))]
+                 (and same (recur end))))))
+         (= (cp-size p) n))))
 (defn- cp-write [p :string b :vector-i64] :bool
   (let [z (loop [i 0 first true]
             (let [e (cp-cut b i) x (cp-piece p b i e first)]
               (if (= e (vector-count b)) 0 (recur e false))))
         flush (cp-fs "M" p "")]
-    ;; A failed A read is represented as an empty vector. For an empty
-    ;; write, additionally prove that a regular zero-size file can be read;
-    ;; otherwise a read failure could compare equal to the empty CID.
-    (and (= flush "1")
-         (or (> (vector-count b) 0)
-             (and (= (cp-size p) 0) (cp-empty-readable? p) (= (cp-size p) 0)))
-         (= (cp-cid (cp-read p)) (cp-cid b)))))
+    (and (= flush "1") (cp-written-equal? p b))))
 (defn- cp-put [store :string b :vector-i64] :string
   (let [cid (cp-cid b) p (str store "/" cid) status (cp-fs "D" p "")]
     ;; Even an existing block may be the unsynced remnant of a previous

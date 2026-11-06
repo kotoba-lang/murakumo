@@ -45,7 +45,7 @@
 ;; this file.
 ;; docs/cell-run.md has the gate.
 (ns murakumo.fleet-cell-run
-  (:export [cell-run cell-run-main receipt-text own-state cell-admit cell-execute cell-execute-captured cell-start key-seed]))
+  (:export [cell-run cell-run-main receipt-text own-state cell-admit cell-execute cell-execute-captured cell-start key-seed key-seed-fs2]))
 
 (defn- cr-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
 (defn- cr-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
@@ -77,6 +77,35 @@
 ;; the node's seed from its key file; no bytes when it is not 64 lowercase hex
 (defn key-seed [key-path :string] :vector-i64
   (let [key (cr-read key-path)] (if (cr-key-ok? key) (cr-seed key) (vector-alloc 0))))
+
+;; Explicit FS2-capable host path: only the first 64 key bytes are read.
+;; The host must privately own the path and exclude replacement/same-size
+;; writes across metadata and range calls. Provider failures remain unknown.
+(defn- cr-key-meta [path :string] :string
+  (let [reply (typed-cap-call :fs/app-data :string :string (str "\u0000FS2\u0000O" path "\u0000"))]
+    (if (and (>= (string-byte-length reply) 5) (= (string-substring reply 0 5) "\u0000FS2\u0000"))
+      (string-substring reply 5 (string-length reply)) "")))
+(defn- cr-key-digits? [s :string limit :i64] :bool
+  (and (> (string-length s) 0) (<= (string-length s) limit)
+       (loop [i 0]
+         (if (= i (string-length s)) true
+           (let [c (string-code-point-at s i)]
+             (and (>= c 48) (<= c 57) (recur (+ i 1))))))))
+(defn- cr-read-fs2-key [path :string] :vector-i64
+  (let [meta (cr-key-meta path) mode (cr-field meta 0) size (cr-field meta 1)
+        blocks (cr-field meta 2) kind (cr-field meta 3)
+        n (cr-int size) m (cr-int mode) b (cr-int blocks)]
+    (if (not (and (= meta (str mode " " size " " blocks " " kind))
+                  (cr-key-digits? mode 3) (cr-key-digits? size 18) (cr-key-digits? blocks 18)
+                  (>= m 0) (<= m 511) (>= b 0) (= kind "0") (>= n 64)))
+      (vector-alloc 0)
+      (let [reply (typed-cap-call :fs/app-data :string :bytes (str "\u0000FS2\u0000E" path "\u00000:64"))]
+        (if (and (= (bytes-count reply) 69) (= (bytes-at reply 0) 0) (= (bytes-at reply 1) 70)
+                 (= (bytes-at reply 2) 83) (= (bytes-at reply 3) 50) (= (bytes-at reply 4) 0)
+                 (= (cr-key-meta path) meta))
+          (vector-i64-from-bytes (bytes-slice reply 5 69)) (vector-alloc 0))))))
+(defn key-seed-fs2 [key-path :string] :vector-i64
+  (let [key (cr-read-fs2-key key-path)] (if (cr-key-ok? key) (cr-seed key) (vector-alloc 0))))
 
 ;; the first manifest descriptor in an index jcs.reader accepted, or -1
 (defn- cr-manifest [index :vector-i64] :i64

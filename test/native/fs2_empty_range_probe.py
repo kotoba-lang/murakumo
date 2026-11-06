@@ -26,6 +26,8 @@ def main(fixture):
         root = Path(directory)
         (root / "empty").write_bytes(b"")
         (root / "one").write_bytes(b"x")
+        data = bytes(65 + (i * 17) % 26 for i in range(4097))
+        (root / "boundary").write_bytes(data)
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
         saved = None
         if fd != 3:
@@ -43,7 +45,15 @@ def main(fixture):
                 r = subprocess.run([str(fixture), "E", "/" + name, tail], cwd=root, pass_fds=(3,),
                                    capture_output=True, timeout=4, preexec_fn=limits)
                 assert r.returncode == -signal.SIGTRAP and r.stdout == b"" and r.stderr == b""
-            print("PASS diagnostic string response: zero ranges and error non-success")
+            for tail, expected in (("0:4096", data[:4096]), ("4096:1", data[4096:]),
+                                   ("100:3997", data[100:])):
+                r = subprocess.run([str(fixture), "E", "/boundary", tail], cwd=root, pass_fds=(3,),
+                                   capture_output=True, timeout=4, preexec_fn=limits)
+                assert r.returncode == 0 and r.stdout == b"\x00FS2\x00" + expected + b"\n" and r.stderr == b""
+            r = subprocess.run([str(fixture), "E", "/boundary", "100:4096"], cwd=root, pass_fds=(3,),
+                               capture_output=True, timeout=4, preexec_fn=limits)
+            assert r.returncode == -signal.SIGTRAP and r.stdout == b"" and r.stderr == b""
+            print("PASS diagnostic string response: zero and bounded ranges; overrun traps")
         finally:
             if fd != 3:
                 if saved is None:
