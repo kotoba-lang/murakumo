@@ -192,6 +192,10 @@ and dtype admission, data read into a Metal buffer, on a synthetic 28-tensor fil
 command buffer, within 2.3e-3 of PyTorch's float32 `CLIPTextModel` on random weights (2 layers, width 128, the real vocabulary and 77 positions), four mutants detected
 ([record](../bench/results/2026-11-06-clip-tower-metal/README.md)). Not CLIP-L / CLIP-G size, not joined to the tokenizer, no SDXL penultimate-layer or projection handling.
 
+**I3b, third slice: prompt text to hidden states (2026-11-06).** The tokenizer and the tower joined in one Kotoba program (`bench/kernels/text-encode-metal/`): the same 77 ids as
+Hugging Face's `CLIPTokenizer` and hidden states within 2.4e-3 of PyTorch's `CLIPTextModel`, two mutants detected
+([record](../bench/results/2026-11-06-text-encode-metal/README.md)). First end-to-end path from text to model output in Kotoba; still the small random-weight tower.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
