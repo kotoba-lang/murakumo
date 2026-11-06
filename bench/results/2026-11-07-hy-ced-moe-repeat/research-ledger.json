@@ -1,0 +1,148 @@
+{
+  "schema": "ced-moe-seed-replay-study/v1",
+  "status": "preregistered-qualification",
+  "registered_utc": "2026-11-06T22:45:59.254797+00:00",
+  "source_predecessor": "087603fd",
+  "question": "Does the RAM-minus-NVMe loss gap recur across paired seeds and exceed same-placement suffix replay variation?",
+  "constraints": {
+    "physical_nodes": 10,
+    "physical_bytes_per_node": 17179869184,
+    "requested_bytes_per_learner": 10737418240,
+    "kernel_fatal_bytes": 9663676416,
+    "developer_mac_model_execution": false,
+    "existing_services_and_old_checkpoints": "preserve"
+  },
+  "conditions": [
+    {
+      "seed": 936,
+      "placement": "ram",
+      "phases": [
+        "prefix32",
+        "suffix32",
+        "replay32"
+      ]
+    },
+    {
+      "seed": 936,
+      "placement": "nvme",
+      "phases": [
+        "prefix32",
+        "suffix32",
+        "replay32"
+      ]
+    },
+    {
+      "seed": 937,
+      "placement": "nvme",
+      "phases": [
+        "prefix32",
+        "suffix32",
+        "replay32"
+      ]
+    },
+    {
+      "seed": 937,
+      "placement": "ram",
+      "phases": [
+        "prefix32",
+        "suffix32",
+        "replay32"
+      ]
+    },
+    {
+      "seed": 938,
+      "placement": "nvme",
+      "phases": [
+        "prefix32",
+        "suffix32",
+        "replay32"
+      ]
+    },
+    {
+      "seed": 938,
+      "placement": "ram",
+      "phases": [
+        "prefix32",
+        "suffix32",
+        "replay32"
+      ]
+    }
+  ],
+  "tokens": {
+    "primary_per_seed_backend": 4096,
+    "primary_updates": 64,
+    "primary_phases": [
+      32,
+      32
+    ],
+    "replay_tokens": 2048,
+    "replay_updates": 32,
+    "replay_start_checkpoint": 32,
+    "replay_end_step": 64,
+    "unique_primary_tokens_per_backend_all_seeds": 12288,
+    "additional_replayed_compute_tokens_per_backend": 6144,
+    "counting": "globalonce, not multiplied by10; replay repeats suffix, not extra training tostep96"
+  },
+  "fixed": {
+    "preset": "3b",
+    "parameters": 3003341824,
+    "sequence": 64,
+    "global_batch": 1,
+    "model_and_data_seed": "paired936/937/938; different seeds may use different tokenstreams, paired placements exactlysame",
+    "lr": 0.0003,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "eps": 1e-08,
+    "weight_decay": 0.01,
+    "global_clip": 1,
+    "warmup_steps": 4,
+    "validation_seed": 936,
+    "validation_batches": 8,
+    "validation_tokens": 512,
+    "validation_every": 16,
+    "terminal_secondary_dev_seed": 1936,
+    "terminal_secondary_dev_batches": 32,
+    "terminal_secondary_dev_tokens": 2048,
+    "secondary_scope": "additionalfixedvalidation sample atstep64 afteroptimizerclose; not independenttest and not selection",
+    "confirmation_test": "not consulted"
+  },
+  "controls": [
+    "smallseed936/937/938 initialization/inputstream checks",
+    "seed937 RAM/NVMe2+newprocess2 vscontinuous4 andwrongseed refusal",
+    "allstate boundaryfingerprints exact and sampler/warmupresume",
+    "firstupdategradient fingerprint distinguishes preoptimizer differences",
+    "ownworker identity cancellation control",
+    "compressedarchive allmemberSHA and genuine tinycheckpoint roundtrip/resume"
+  ],
+  "measures": [
+    "fixedvalidation curves/terminalCE/perbatchCE",
+    "initial/terminalweights/master/m/v logicalFP32value fingerprints",
+    "firstunclippedgradient fingerprints perphase",
+    "globalupdate-only/dev-inclusive/all-in rates",
+    "logicalboundarypayload/NIC/processdisk/devicecounters/hostswap/backgroundjobs",
+    "allactualcheckpoint32/64 files/globalcert/readback"
+  ],
+  "analysis": {
+    "primary": "threepaired seed terminal64 RAM-minus-NVMe deltas, mean/sampleSD/min/max/signcount; showallseeds",
+    "secondary": "samepaired deltas atstep32 and largerterminaldevsample",
+    "within_condition": "main suffix vs replay suffix startingfromexact32state, terminalCE delta and changedfingerprints; comparemode-gap magnitude to replay variation",
+    "inference": "descriptive n3, no significance/equivalentconvergence/generalquality claim; fixedorder2:1 not fullybalanced",
+    "old_trial": "previous32update0.302639gap is historical, excluded from primary64update estimates"
+  },
+  "storage": {
+    "new_primary_checkpoints": "32and64fullstate for each of6conditions; allpreserved",
+    "replay": "measurement-only no finalcheckpoint, finalstates fingerprinted then normalworkerexit",
+    "raw_new_snapshot_bytes_estimate": 504562871976,
+    "lossless_archive": "zlib/gzip level1, streamed validatedtar; allmemberbytes/hashes verified before retiring only redundant new-study source",
+    "retention": "oldercheckpoints untouched; newcompressed archives may be relocatedwithintrustedfleet after SHAverification; sourcepointer/catalogrecorded",
+    "transient_source_disk_reserve_bytes": 1073741824,
+    "archive_destination_completed_reserve_bytes": 4294967296,
+    "admission": "measurelive freecapacity beforeeveryphase/move; no unchecked deletion or capincrease; stopifspace cannotbe safelypreserved"
+  },
+  "limits": [
+    "existingjoseph inference retained, sharedhost/swap confound",
+    "1Gbps actuallinks, not10Gbps",
+    "oneprefix andsameinitial32replayedtwice perseed/backend, n3only",
+    "BF16 nondeterminism and cacheorder remain measured, no silentfallback"
+  ]
+}
