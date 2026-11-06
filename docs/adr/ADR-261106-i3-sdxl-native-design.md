@@ -61,7 +61,7 @@ State read 2026-11-06 from amu `origin/main` (`f6c6ea215`) and JUN-804.
 | f16 *storage* (checkpoints are f16) | **absent**: no half-float type in `seed/20-names`, `21-check` or `30-lower` (grep: none; the `f16` hits in `seed/41-a64gen` are 16-bit integer pattern helpers); S1 left it a language decision | JUN-804 S1/S2 |
 | Byte arrays / typed loads (`:bytes`) | not started (S2) | JUN-804 |
 | Read a multi-GB file in a guest (`:model/read`, read-only map) | not started (S4); the Mac CLI gives guests no filesystem and a 5 s `run` | JUN-804, `native-public-entry.md` |
-| More than one input file (checkpoint + CLIP `vocab`/`merges`) | **open**: S4 as written maps one file | this ADR, decision D3 |
+| More than one input file (checkpoint + CLIP `vocab`/`merges`) | **open for the end-user route** (S4 as written maps one file); **possible on the Metal route**, where libc `open`/`pread` work (safetensors reader, [record](../../bench/results/2026-11-06-safetensors-metal/README.md)) | this ADR, decision D3 |
 | SIMD lanes (`sdot`, `fmla`) | not started (S3) | JUN-804 |
 | Threads | not started (S6) | JUN-804 |
 | GPU: one hand-written MSL kernel through dyld | merged (S7 slice 1, ADR 0405) | amu#1822 |
@@ -70,7 +70,7 @@ State read 2026-11-06 from amu `origin/main` (`f6c6ea215`) and JUN-804.
 | Kernels | conv, GroupNorm, LayerNorm, attention, GEGLU, upsample, timestep embedding, matmul, ResBlock, SpatialTransformer: done on CPU (I1/I2) | `bench/kernels/` |
 | CLIP BPE tokenizer | not written in Kotoba (comfyui-clj has one in `.cljk`, as an oracle) | I3b |
 | Label-embedding MLP, input/output block wiring with skip concat, middle block, sampler, tiled VAE, PNG writer | not written | I3c-I3e |
-| A pinned SDXL checkpoint on this Mac | **none** (fleet checkpoints live on offline nodes) | decision D1 |
+| A pinned SDXL checkpoint on this Mac | **none** (fleet checkpoints live on offline nodes); a safetensors reader with per-tensor admission exists on the Metal route and is tested on a synthetic file only | decision D1 |
 
 ## Sub-stages and gates
 
