@@ -1,0 +1,87 @@
+// Single-head attention, head dim HD = @NDC@ * 64 (the VAE's mid block: 512), no mask, LK a multiple of 32, ONE pass with an online softmax (stage M slice 32):
+// the row statistics are computed by 4 threads per row with shuffles, the running output (8 query rows per simdgroup, HD columns) is rescaled by a diagonal-matrix
+// product when the running maximum moves, and the keys loop has no threadgroup barrier. P = {LK, bits of 1/sqrt(HD), first query block}; grid (query blocks, 1).
+kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [[buffer(1)]], device const half *V [[buffer(2)]],
+                      device half *O [[buffer(3)]], device const uint *P [[buffer(4)]],
+                      uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                      uint tid [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float Ssm[32 * 32];
+  threadgroup half Psm[32 * 32];
+  threadgroup float Dsm[4 * 64];
+  threadgroup float Lsm[32];
+  threadgroup float Tmp[4 * 64];
+  const uint ND = @NDC@ * 8u;
+  const uint HD = ND * 8u;
+  uint LK = P[0];
+  float SCALE = as_type<float>(P[1]);
+  uint NB = LK / 32u;
+  uint q0 = (tg.x + P[2]) * 32u;
+  simdgroup_float8x8 oacc[@NDC@ * 8];
+  for (uint dt = 0u; dt < ND; dt++)
+    oacc[dt] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  uint rr = tid >> 2;
+  uint qq = tid & 3u;
+  float m = -INFINITY;
+  float l = 0.0f;
+  for (uint kb = 0u; kb < NB; kb++) {
+    for (uint j = 0u; j < 4u; j++) {
+      simdgroup_float8x8 s = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+      for (uint d = 0u; d < ND; d++) {
+        simdgroup_half8x8 qd;
+        simdgroup_half8x8 kt;
+        simdgroup_load(qd, Q + (q0 + sg * 8u) * HD + d * 8u, HD);
+        simdgroup_load(kt, K + (kb * 32u + j * 8u) * HD + d * 8u, HD, ulong2(0, 0), true);
+        simdgroup_multiply_accumulate(s, qd, kt, s);
+      }
+      simdgroup_store(s, Ssm + sg * 8u * 32u + j * 8u, 32);
+    }
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    float bm = -INFINITY;
+    for (uint c = qq * 8u; c < qq * 8u + 8u; c++) bm = max(bm, Ssm[rr * 32u + c] * SCALE);
+    bm = max(bm, simd_shuffle_xor(bm, 1u));
+    bm = max(bm, simd_shuffle_xor(bm, 2u));
+    float mn = max(m, bm);
+    float alpha = (m == -INFINITY) ? 0.0f : exp(m - mn);
+    float sum = 0.0f;
+    for (uint c = qq * 8u; c < qq * 8u + 8u; c++) {
+      float p = exp(Ssm[rr * 32u + c] * SCALE - mn);
+      Psm[rr * 32u + c] = half(p);
+      sum += p;
+    }
+    sum += simd_shuffle_xor(sum, 1u);
+    sum += simd_shuffle_xor(sum, 2u);
+    l = l * alpha + sum;
+    m = mn;
+    Dsm[sg * 64u + lane] = 0.0f;
+    Dsm[sg * 64u + 32u + lane] = 0.0f;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    if (qq == 0u) Dsm[sg * 64u + (lane >> 2) * 9u] = alpha;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    simdgroup_float8x8 D;
+    simdgroup_load(D, Dsm + sg * 64u, 8);
+    for (uint dt = 0u; dt < ND; dt++) {
+      simdgroup_float8x8 z = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+      simdgroup_multiply_accumulate(z, D, oacc[dt], z);
+      oacc[dt] = z;
+    }
+    for (uint ks = 0u; ks < 4u; ks++) {
+      simdgroup_half8x8 pa;
+      simdgroup_load(pa, Psm + sg * 8u * 32u + ks * 8u, 32);
+      for (uint dt = 0u; dt < ND; dt++) {
+        simdgroup_half8x8 vt;
+        simdgroup_load(vt, V + (kb * 32u + ks * 8u) * HD + dt * 8u, HD);
+        simdgroup_multiply_accumulate(oacc[dt], pa, vt, oacc[dt]);
+      }
+    }
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (qq == 0u) Lsm[rr] = l;
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint dt = 0u; dt < ND; dt++) {
+    simdgroup_store(oacc[dt], Tmp + sg * 64u, 8);
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint e = lane; e < 64u; e += 32u)
+      O[(q0 + sg * 8u + e / 8u) * HD + dt * 8u + e % 8u] = half(Tmp[sg * 64u + e] / Lsm[sg * 8u + e / 8u]);
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+  }
+}

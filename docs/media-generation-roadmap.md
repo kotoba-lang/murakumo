@@ -243,6 +243,8 @@ At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI
 
 **Stage M, slice 31: GroupNorm for large groups (2026-11-06).** For groups of 262,144 elements or more (the VAE at 512 px and up) the statistics are computed as partial sums over 64 tiles per group and the normalisation is element-parallel instead of 32 threadgroups reading the group three times: about 75 percent less GroupNorm GPU time in the 1024 px decode (0.59 to 0.82 s down to 0.19 s), unchanged numerics in the gates, two mutants on the new kernels detected ([record](../bench/results/2026-11-06-groupnorm-tiles/README.md)).
 
+**Stage M, slice 32: the VAE attention in one pass (2026-11-06).** The 512-wide single-head attention of the VAE mid block got the online softmax: about 12 percent less GPU time (the kernel is bound by tile loads, not by the softmax); two variants that did not help (shared Q loads, untransposed K) are recorded, accuracy slightly lower but inside the limits ([record](../bench/results/2026-11-06-attn-wide-online/README.md)).
+
 **Stage M, slice 20: the UNet graph at wider widths (2026-11-06).** The slice-17 gate at model_channels 128 (494 M parameters) and 192 (1.007 B parameters, heads up to 12) agrees with ComfyUI's `UNetModel` at all 21 stages (worst 9.7e-3, final 1.0e-3), 134 and 187 ms at 256 px ([record](../bench/results/2026-11-06-unet-sdxl-named-widths/README.md)). SDXL's real 320 (2.57 B) was not run: the 10 GB fixture needs ~20 GB of RAM while the Mac's swap was nearly full; the gate scripts now remove their large weight files on success, because earlier slices' leftover build directories had filled the disk.
 
 ## Audio stages
