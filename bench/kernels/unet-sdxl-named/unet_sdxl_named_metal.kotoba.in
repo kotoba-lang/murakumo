@@ -384,6 +384,104 @@ kernel void conv(device const half *X [[buffer(0)]], device const half *Wt [[buf
     }
   }
 }
+kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt [[buffer(1)]], device const float *Bias [[buffer(2)]],
+                      device const float *Res [[buffer(3)]], device float *C [[buffer(4)]], device const uint *P [[buffer(5)]],
+                      uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                      uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup half As[64 * 64];
+  threadgroup half Bs[64 * 64];
+  threadgroup float Cs[64 * 64];
+  uint CIN = P[0]; uint COUT = P[1]; uint IH = P[2]; uint IW = P[3];
+  uint NP = P[7]; uint NPP = P[8]; uint MODE = P[9];
+  uint KD = CIN * 9u;
+  uint KDP = ((KD + 63u) / 64u) * 64u;
+  bool vec4 = (KD & 3u) == 0u;
+  uint HWI = IH * IW;
+  uint m0 = tg.y * 64u;
+  uint n0 = tg.x * 64u;
+  uint row0 = (sg / 2u) * 32u;
+  uint col0 = (sg % 2u) * 32u;
+  simdgroup_float8x8 acc[4][4];
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  uint pg = n0 + (tid & 63u);
+  bool pok = pg < NP;
+  int oy = int(pg / IW);
+  int ox = int(pg % IW);
+  uint vmask = 0u;
+  for (uint tap = 0u; tap < 9u; tap++) {
+    int yy = oy + int(tap / 3u) - 1;
+    int xx = ox + int(tap % 3u) - 1;
+    if (pok && yy >= 0 && yy < int(IH) && xx >= 0 && xx < int(IW)) vmask |= (1u << tap);
+  }
+  int pix = oy * int(IW) + ox;
+  uint kk0 = tid >> 6;
+  for (uint k0 = 0u; k0 < KDP; k0 += 64u) {
+    if (vec4) {
+      for (uint it = 0u; it < 8u; it++) {
+        uint idx4 = tid + it * 128u;
+        uint r = idx4 >> 4;
+        uint c = (idx4 & 15u) * 4u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        half4 w = half4(0.0h);
+        if (m < COUT && kc < KD) w = *((device const half4 *)(Wt + m * KD + kc));
+        *((threadgroup half4 *)(As + r * 64u + c)) = w;
+      }
+    }
+    uint k = k0 + kk0;
+    uint ci = k / 9u;
+    uint tap = k - ci * 9u;
+    for (uint it = 0u; it < 32u; it++) {
+      uint idx = tid + it * 128u;
+      if (!vec4) {
+        uint r = idx >> 6;
+        uint c = idx & 63u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
+      }
+      half v = half(0.0f);
+      if (k < KD && ((vmask >> tap) & 1u) != 0u) {
+        uint ky = tap / 3u;
+        uint kx = tap - ky * 3u;
+        v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
+      }
+      Bs[idx] = v;
+      k += 2u;
+      tap += 2u;
+      if (tap >= 9u) { tap -= 9u; ci += 1u; }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint ks = 0u; ks < 8u; ks++) {
+      simdgroup_half8x8 a[4];
+      simdgroup_half8x8 b[4];
+      for (uint i = 0u; i < 4u; i++)
+        simdgroup_load(a[i], As + (row0 + i * 8u) * 64u + ks * 8u, 64u);
+      for (uint j = 0u; j < 4u; j++)
+        simdgroup_load(b[j], Bs + ks * 8u * 64u + col0 + j * 8u, 64u);
+      for (uint i = 0u; i < 4u; i++)
+        for (uint j = 0u; j < 4u; j++)
+          simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      simdgroup_store(acc[i][j], Cs + (row0 + i * 8u) * 64u + col0 + j * 8u, 64);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint idx = tid; idx < 4096u; idx += 128u) {
+    uint m = m0 + idx / 64u;
+    uint p = n0 + idx % 64u;
+    if (m < COUT && p < NP) {
+      float v = Cs[idx];
+      if (MODE >= 1u) v += Bias[m];
+      if (MODE == 2u) v += Res[m * NP + p];
+      C[m * NPP + p] = v;
+    }
+  }
+}
 
 // bias1[c] = C1[c] + Bt[c] + sum_k silu(Emb[k]) * W[c*TE + k]   (W is a Linear weight stored [CO, TE]). P = {TE, CO}
 kernel void temb_bias2(device const float *Emb [[buffer(0)]], device const float *Wt [[buffer(1)]], device const float *Bt [[buffer(2)]],
@@ -819,7 +917,7 @@ kernel void vadd(device const float *A [[buffer(0)]], device const float *B [[bu
         ow (+ (quot (- (+ iw (* 2 pad)) ks) str) 1)
         np (* oh ow)
         p (pu f R S cin cout ih iw ks str ow np np mode)]
-    (emit! S (vector-i64 xh wh bias res out p) (vector-i64 0 0 boff roff ooff 0) 5 1 (quot (+ np 63) 64) (quot (+ cout 63) 64) 128)))
+    (emit! S (vector-i64 xh wh bias res out p) (vector-i64 0 0 boff roff ooff 0) (if (and (= ks 3) (= str 1)) 17 5) 1 (quot (+ np 63) 64) (quot (+ cout 63) 64) 128)))
 
 ;; linear_t: P = {M, K, N, OUTH, RES, ACT}
 (defn- lin! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 a :i64 wh :i64 bias :i64 boff :i64 res :i64 roff :i64
@@ -982,11 +1080,11 @@ kernel void vadd(device const float *A [[buffer(0)]], device const float *B [[bu
         S (zeros 125000)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 17) 0
+             (if (= i 18) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
                           (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
-                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" "vadd"))))))))))))))))
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" "conv_k3s1")))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
