@@ -10,7 +10,7 @@ ls -l "$WK/model.safetensors" | awk '{printf "file %.2f GB\n", $5/1e9}'
 shasum -a 256 "$WK/model.safetensors" | cut -c1-64 > "$WK/model.sha256"  # the pinned digest the program checks before reading the file
 SB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',($CH*4)**-0.5))[0])")
 CFGB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',4.0))[0])")
-sed -e "s#@MODEL@#$WK/model.safetensors#;s#@EXPECT@#$WK/model.sha256#;s#@PRE_L@#conditioner.embedders.0.transformer.#;s#@PRE_G@#conditioner.embedders.1.model.#;s#@SCHEME_L@#0#;s#@SCHEME_G@#1#;s#@X@#$WK/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/prompt_c.txt#;s#@PROMPTU@#$WK/prompt_u.txt#;s#@SZ@#$WK/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/big.kotoba"
+sed -e "s#@MODEL@#$WK/model.safetensors#;s#@EMBDIR@##;s#@EXPECT@#$WK/model.sha256#;s#@PRE_L@#conditioner.embedders.0.transformer.#;s#@PRE_G@#conditioner.embedders.1.model.#;s#@SCHEME_L@#0#;s#@SCHEME_G@#1#;s#@X@#$WK/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/prompt_c.txt#;s#@PROMPTU@#$WK/prompt_u.txt#;s#@SZ@#$WK/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/big.kotoba"
 "$AMU/bin/amu" compile "$WK/big.kotoba" --runtime-profile amu-program-metal -o "$WK/big" > /dev/null
 /usr/bin/time -l "$WK/big" > /dev/null 2> "$WK/big.err" || true
 "$PYC" - "$WK/big.err" "$LAT" "$STEPS" <<'PYEOF'

@@ -27,7 +27,7 @@ python3 "$HERE/make_unicode_prompts.py" > "$WK/prompts_unicode.txt"
 "$PY" "$HERE/oracle.py" "$TOKDIR" "$WK/prompts_unicode.txt" > "$WK/expect_u.txt" 2>/dev/null
 PROMPTS=${PROMPTS:-$HERE/prompts.txt}
 build() { # name [from to]
-  sed -e "s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTS@#$PROMPTS#;s#@WLINES@#${WLINES:-0}#;s#@WEIGHTS@#${WEIGHTS:-0}#;s#@BLOCKS@#${BLOCKS:-0}#" "$HERE/clip_tokenizer_metal.kotoba.in" > "$WK/$1.kotoba"
+  sed -e "s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTS@#$PROMPTS#;s#@WLINES@#${WLINES:-0}#;s#@WEIGHTS@#${WEIGHTS:-0}#;s#@BLOCKS@#${BLOCKS:-0}#;s#@EMBDIR@#${EMBDIR:-}#" "$HERE/clip_tokenizer_metal.kotoba.in" > "$WK/$1.kotoba"
   if [ -n "${2:-}" ]; then
     FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/$1.kotoba"
   fi
@@ -98,8 +98,25 @@ if [ -n "${COMFY:-}" ]; then
   bmut keep-small-group-whole '(if (> (+ (- e p) len) 76)' '(if (> (+ (- e p) len) 77)'
   WEXP=
 fi
+# embeddings (slice 48): "embedding:name" words against ComfyUI's SDTokenizer with an embedding directory (test files made by make_embeddings.py)
+if [ -n "${COMFY:-}" ]; then
+  python3 "$HERE/make_embeddings.py" "$WK/emb" 2>/dev/null || "$PY" "$HERE/make_embeddings.py" "$WK/emb"
+  PYTHONPATH="$STUBS:$COMFY" "$PY" "$HERE/oracle_e.py" "$TOKDIR" "$HERE/prompts_emb.txt" "$WK/emb" > "$WK/expect_e.txt" 2>/dev/null
+  WEXP="$WK/expect_e.txt"
+  PROMPTS="$HERE/prompts_emb.txt" WLINES=1 WEIGHTS=1 BLOCKS=1 EMBDIR="$WK/emb" build tke; run tke
+  if wcmp tke; then echo "all $(grep -c '^w ' "$WK/expect_e.txt") blocks with embedding words equal ComfyUI's SDTokenizer (ids and embedding rows exact, weights within 8/65536)"; else echo "EMBEDDING MISMATCH"; fail=1; fi
+  emut() { # label from to: the embedding gate must fail
+    PROMPTS="$HERE/prompts_emb.txt" WLINES=1 WEIGHTS=1 BLOCKS=1 EMBDIR="$WK/emb" build "e$1" "$2" "$3"; run "e$1"
+    if wcmp "e$1" quiet; then echo "mutant [$1] NOT detected"; fail=1; else echo "mutant [$1]: embedding gate fails (detected)"; fi
+  }
+  emut comma-retry '(if (< slen tlen)' '(if (< slen 0)'
+  emut lora-cut '(= (byte-at f (+ pbuf i)) 60)' '(= (byte-at f (+ pbuf i)) 61)'
+  emut path-escape '(>= (sub-find f name 0 len "..") 0)' '(>= (sub-find f name 0 len "..") 9999)'
+  emut start-of-word '(is-asp (byte-at f (+ pbuf (- i 1))))' '(< 0 1)'
+  WEXP=
+fi
 # a variable assignment before a shell function call persists in this shell: put the defaults back
-WLINES=0; WEIGHTS=0; BLOCKS=0; PROMPTS=$HERE/prompts.txt
+WLINES=0; WEIGHTS=0; BLOCKS=0; EMBDIR=; PROMPTS=$HERE/prompts.txt
 mut rank '(if (and (>= r 0) (< r br))' '(if (and (>= r 0) (> r br))'
 mut lowercase '(< c 128) (if (within c 65 90) (+ c 32) c)' '(< c 128) c'
 mut special-token '(if (= (match-lit f p i e "<|startoftext|>") 1) 1' '(if (= (match-lit f p i e "<|startoftext|>") 7) 1'

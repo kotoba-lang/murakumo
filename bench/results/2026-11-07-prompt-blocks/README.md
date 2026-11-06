@@ -6,7 +6,7 @@ Both programs used to truncate a prompt at 75 tokens. ComfyUI instead cuts it in
 
 What was ported:
 - The batching rule exactly: a token group (one per weighted segment) of fewer than 8 tokens is kept whole (the block is closed with the end token and padding and a new one started when it does not fit); a group of 8 or more is cut where the block is full. Padding is the end token for CLIP-L and 0 for the bigG tower.
-- In the render program: the towers are recorded once and run once per block (id copy, towers, output copy at the block's row offset), the weights are applied per block, and the conditional and unconditional contexts are repeated up to the least common multiple of their block counts (ComfyUI does this when it batches them; attention over a repeated sequence gives the same result). `cat_ctx` takes the repeat; the cross-attention key count and the K / V row count are runtime values (S[56], S[57]) instead of 77 and 128. Up to 4 blocks (300 tokens) per prompt; more is refused.
+- In the render program: the towers are recorded once and run once per block (id copy, towers, output copy at the block's row offset), the weights are applied per block, and the conditional and unconditional contexts are repeated up to the least common multiple of their block counts (ComfyUI does this when it batches them; attention over a repeated sequence gives the same result). `cat_ctx` takes the repeat; the cross-attention key count and the K / V row count are runtime values (S[60], S[61] since slice 48; slice 45 used 56 and 57, which the 47th kernel slot then overlapped) instead of 77 and 128. Up to 4 blocks (300 tokens) per prompt; more is refused.
 
 | check | result |
 |---|---|

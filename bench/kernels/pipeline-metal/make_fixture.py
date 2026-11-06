@@ -132,8 +132,21 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
     tok = CLIPTokenizer.from_pretrained(tokdir)
     # ComfyUI's own tokenizers (escape_important / token_weights / the Hugging Face tokenizer per segment): ids and one weight per position
     from comfy.sd1_clip import SDTokenizer
-    tk_l = SDTokenizer(tokenizer_path=tokdir, max_length=77, pad_with_end=True, embedding_directory=None, embedding_size=768, embedding_key="clip_l", has_start_token=True, pad_to_max_length=True)
-    tk_g = SDTokenizer(tokenizer_path=tokdir, max_length=77, pad_with_end=False, embedding_directory=None, embedding_size=1280, embedding_key="clip_g", has_start_token=True, pad_to_max_length=True)
+    import subprocess
+    embdir = os.path.join(d, "emb")
+    subprocess.check_call([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "clip-tokenizer-metal", "make_embeddings.py"), embdir])
+    tk_l = SDTokenizer(tokenizer_path=tokdir, max_length=77, pad_with_end=True, embedding_directory=embdir, embedding_size=768, embedding_key="clip_l", has_start_token=True, pad_to_max_length=True)
+    tk_g = SDTokenizer(tokenizer_path=tokdir, max_length=77, pad_with_end=False, embedding_directory=embdir, embedding_size=1280, embedding_key="clip_g", has_start_token=True, pad_to_max_length=True)
+    def run_block(model, entries):
+        # a block of ComfyUI tokens: embedding rows (tensors) are put into spare rows of the token embedding for the forward pass (ids 1, 2, ...), then restored
+        w = model.text_model.embeddings.token_embedding.weight; saved = {}; ids = []; nxt = 1
+        for x in entries:
+            if torch.is_tensor(x[0]):
+                saved.setdefault(nxt, w[nxt].clone()); w[nxt] = x[0].to(w.dtype); ids.append(nxt); nxt += 1
+            else: ids.append(x[0])
+        try: return model(input_ids=torch.tensor([ids]), output_hidden_states=True)
+        finally:
+            for r, v in saved.items(): w[r] = v
     def blend(z, ze, wts):
         # ClipTokenWeightEncoder.encode_token_weights: z[j] = (z[j] - z_empty[j]) * weight + z_empty[j] where weight != 1.0
         z = z.clone()
@@ -144,7 +157,7 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
         # every block of 77 ComfyUI's tokenizer makes (a prompt of more than 75 tokens has several), each through the towers on its own, then joined
         # along the sequence axis; the pooled vector is the first block's
         bl = tk_l.tokenize_with_weights(prompt); bg = tk_g.tokenize_with_weights(prompt)
-        il = [x[0] for b in bl for x in b]; ig = [x[0] for b in bg for x in b]
+        il = [0 if torch.is_tensor(x[0]) else x[0] for b in bl for x in b]; ig = [0 if torch.is_tensor(x[0]) else x[0] for b in bg for x in b]
         open(os.path.join(d, "prompt_" + tag + ".txt"), "w", encoding="utf-8").write(prompt + "\n")
         np.array(il + [0], dtype=np.int32).tofile(os.path.join(d, "ids_l_" + tag + ".i32")); np.array(ig + [0], dtype=np.int32).tofile(os.path.join(d, "ids_g_" + tag + ".i32"))
         with torch.no_grad():
@@ -153,7 +166,7 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
             lps, gps, gpool = [], [], None
             for k in range(len(bl)):
                 wts = [x[1] for x in bl[k]]
-                ol = clip_l(input_ids=torch.tensor([[x[0] for x in bl[k]]]), output_hidden_states=True); og = clip_g(input_ids=torch.tensor([[x[0] for x in bg[k]]]), output_hidden_states=True)
+                ol = run_block(clip_l, bl[k]); og = run_block(clip_g, bg[k])
                 lpen = ol.hidden_states[-2]; gpen = og.hidden_states[-2]
                 if any(w != 1.0 for w in wts):
                     lpen = blend(lpen, el.hidden_states[-2], wts); gpen = blend(gpen, eg.hidden_states[-2], wts)
