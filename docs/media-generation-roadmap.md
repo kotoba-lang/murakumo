@@ -178,6 +178,10 @@ convolution inputs.
 buffer, within 5.6e-2 (normalised; ~5e-4 of the largest output) of the double-precision block on the CPU twin's parameters (the f32 CPU twin: 3.7e-5), four mutants detected
 ([record](../bench/results/2026-11-06-spatial-metal/README.md)). With slice 8, both block types of the UNet now run on the GPU in single command buffers.
 
+**I3a, first slice (2026-11-06).** A safetensors reader on the Metal route (`bench/kernels/safetensors-metal/`): header parsed into a tensor catalog, per-tensor size
+and dtype admission, data read into a Metal buffer, on a synthetic 28-tensor file equal to a Python oracle line for line; truncation and a wrong shape are refused
+([record](../bench/results/2026-11-06-safetensors-metal/README.md)). No real checkpoint, no sha256, no mapping of multi-gigabyte files yet.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
