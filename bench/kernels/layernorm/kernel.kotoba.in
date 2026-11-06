@@ -1,0 +1,65 @@
+(ns murakumo.layernorm (:export [main]))
+
+;; LayerNorm over the last axis with affine, f32: the norm in every transformer
+;; block of a SpatialTransformer. x is [@R@, @N@]. Per row: mean, biased
+;; variance, y = (x - mean) * (1 / sqrt(var + eps)) * gamma + beta, each step
+;; rounded alone and sums taken in index order, as kernel.c does. Values travel
+;; as i64 bit patterns.
+
+(defn- nr [] :i64 @R@)
+(defn- nn [] :i64 @N@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+;; v[i] = iv * scale + add, iv a signed 16-bit LCG draw
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64 add :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-add (f32-mul (i64-to-f32-rounded iv) (fb scale)) (fb add))))]
+        (recur (+ i 1) t)))))
+
+(defn- row-sum [x :vector-i64 base :i64] :i64
+  (loop [i 0 acc 0]
+    (if (= i (nn)) acc
+      (recur (+ i 1) (bf (f32-add (fb acc) (fb (vector-at x (+ base i)))))))))
+
+(defn- row-sq [x :vector-i64 base :i64 meanb :i64] :i64
+  (loop [i 0 acc 0]
+    (if (= i (nn)) acc
+      (let [d (f32-sub (fb (vector-at x (+ base i))) (fb meanb))]
+        (recur (+ i 1) (bf (f32-add (fb acc) (f32-mul d d))))))))
+
+(defn- pass [x :vector-i64 ga :vector-i64 be :vector-i64 c0 :i64] :i64
+  (let [invn (f32-div (fb 1065353216) (i64-to-f32-rounded (nn)))
+        eps (f64-to-f32-rounded 0.00001)]
+    (loop [r 0 c c0]
+      (if (= r (nr)) c
+        (let [base (* r (nn))
+              meanb (bf (f32-mul (fb (row-sum x base)) invn))
+              var (f32-mul (fb (row-sq x base meanb)) invn)
+              invb (bf (f32-div (fb 1065353216) (f32-sqrt (f32-add var eps))))]
+          (recur (+ r 1)
+                 (loop [i 0 cc c]
+                   (if (= i (nn)) cc
+                     (let [y0 (f32-mul (f32-sub (fb (vector-at x (+ base i))) (fb meanb)) (fb invb))
+                           y (f32-add (f32-mul y0 (fb (vector-at ga i))) (fb (vector-at be i)))]
+                       (recur (+ i 1) (bit-and (+ (* cc 31) (bit-and (bf y) 4294967295)) (mask48))))))))))))
+
+(defn main [] :i64
+  (let [x (vector-alloc (* (nr) (nn)))
+        ga (vector-alloc (nn))
+        be (vector-alloc (nn))
+        s1 (fill x (* (nr) (nn)) 12345 956301312 0)
+        s2 (fill ga (nn) s1 931135488 1065353216)
+        s3 (fill be (nn) s2 947912704 0)]
+    (loop [i 0 c (bit-and s3 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (pass x ga be c))))))
