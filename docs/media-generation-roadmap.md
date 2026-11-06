@@ -169,6 +169,11 @@ per call batched against about 347 ms unbatched (arithmetic).
 a double reference built from the half-rounded values the error is 1.3e-5 to 2.1e-5 (float32 accumulation); against the unrounded values it is
 8.5e-3 to 1.2e-2 (f16 storage), about 1 percent for random data of order 1. That second figure is the scale of the f16-versus-exact gap I3e has to tolerate.
 
+**Stage M, slice 8 (2026-11-06).** A whole ResBlock on the GPU from one Kotoba program (`bench/kernels/resblock-metal/`): six kernels in one command
+buffer and one encoder, within 4.9e-3 of the double-precision block on the same parameters (the f32 CPU twin: 9.4e-6), three mutants detected
+([record](../bench/results/2026-11-06-resblock-metal/README.md)). The first composed block on the GPU; the gap to the CPU twin is the half-precision
+convolution inputs.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
