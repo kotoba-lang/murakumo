@@ -1,0 +1,293 @@
+(ns murakumo.clip-tokenizer-metal (:export [main]))
+
+;; I3b, first slice (JUN-927, ADR-261106): the CLIP byte-pair tokenizer in Kotoba, on the Metal route (amu ADR 0405,
+;; profile amu-program-metal: libSystem through dyld, so open / pread are ordinary C calls). It reads
+;; ComfyUI's tokenizer files (vocab.json: @VOCAB@; merges.txt: @MERGES@) and a prompts file (@PROMPTS@,
+;; one ASCII prompt per line), builds a hash table of the vocabulary and one of the merge ranks, and prints for each
+;; prompt the token ids to stderr, space separated: <|startoftext|> (49406), the prompt's tokens, <|endoftext|> (49407),
+;; truncated to 77 as the CLIP towers expect. Pre-tokenization is the CLIP regex for ASCII text: lowercase; skip
+;; whitespace; the contractions 's 't 're 've 'm 'll 'd; a run of letters; one digit; a run of anything else.
+;; Words are split into characters, the last one carrying </w>, and merged by lowest rank until no merge applies.
+;; Not supported (refused): non-ASCII bytes, the special-token spellings inside a prompt, HTML entities, ComfyUI's
+;; prompt weighting and embeddings syntax. Vocabulary entries with non-ASCII keys are skipped (no ASCII prompt needs them).
+
+(defn- hsize [] :i64 131072)
+(defn- psize [] :i64 262144)
+
+(defn- byte-at [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (bit-and (peek f p) 255))
+
+;; read the whole file at path into a fresh malloc'd buffer (NUL padded); returns the address, size in sz[0]
+(defn- slurp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 path :string sz :vector-i64] :i64
+  (let [fd (cc f (sym f "open") (cstr f (vector-at R 3) path) 0 0 0 0)
+        u0 (if (< fd 0) (vector-at [0] 1) 0)
+        total (cc f (sym f "lseek") fd 0 2 0 0)
+        buf (cc f (vector-at R 3) (+ total 16) 0 0 0 0)
+        got (cc f (sym f "pread") fd buf total 0 0)
+        u1 (if (= got total) 0 (vector-at [0] 1))
+        z (loop [i 0] (if (= i 16) 0 (let [u (poke8 f (+ buf (+ total i)) 0)] (recur (+ i 1)))))
+        s (vector-assoc! sz 0 total)]
+    buf))
+
+(defn- fnv [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64] :i64
+  (loop [i 0 h 2166136261]
+    (if (= i n) h
+      (recur (+ i 1) (bit-and (* (bit-xor h (byte-at f (+ p i))) 16777619) 4294967295)))))
+
+(defn- bytes-eq [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 q :i64 n :i64] :i64
+  (loop [i 0]
+    (if (= i n) 1
+      (if (= (byte-at f (+ p i)) (byte-at f (+ q i))) (recur (+ i 1)) 0))))
+
+;; vocabulary table: slot s holds [arena offset + 1 (0 = empty), length, id] at VT[3s..3s+2]; keys live in the arena
+(defn- vt-find [f [:fn [[:i64 :i64 :i64] :i64]] VT :vector-i64 arena :i64 p :i64 n :i64] :i64
+  (let [mask (- (hsize) 1)]
+    (loop [s (bit-and (fnv f p n) mask)]
+      (let [off (vector-at VT (* s 3))]
+        (if (= off 0) -1
+          (if (and (= (vector-at VT (+ (* s 3) 1)) n) (= (bytes-eq f p (+ arena (- off 1)) n) 1))
+            (vector-at VT (+ (* s 3) 2))
+            (recur (bit-and (+ s 1) mask))))))))
+
+;; insert the key at p (n bytes) with id; its bytes are copied to the arena at st[0]
+(defn- vt-insert [f [:fn [[:i64 :i64 :i64] :i64]] VT :vector-i64 arena :i64 st :vector-i64 p :i64 n :i64 id :i64] :i64
+  (let [mask (- (hsize) 1)
+        top (vector-at st 0)
+        c (loop [i 0] (if (= i n) 0 (let [u (poke8 f (+ arena (+ top i)) (byte-at f (+ p i)))] (recur (+ i 1)))))
+        s0 (bit-and (fnv f p n) mask)
+        s (loop [s s0] (if (= (vector-at VT (* s 3)) 0) s (recur (bit-and (+ s 1) mask))))
+        a (vector-assoc! VT (* s 3) (+ top 1))
+        b (vector-assoc! VT (+ (* s 3) 1) n)
+        d (vector-assoc! VT (+ (* s 3) 2) id)
+        e (vector-assoc! st 0 (+ top n))]
+    0))
+
+;; decode the JSON string whose content starts at p+i into the scratch area at tmp; returns the index after the
+;; closing quote, with the decoded length in out[0] and 1 in out[1] if it held an escape this reader does not decode
+(defn- json-string [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 tmp :i64 out :vector-i64] :i64
+  (loop [j i k 0 bad 0]
+    (let [c (byte-at f (+ p j))]
+      (cond
+        (= c 34) (let [a (vector-assoc! out 0 k) b (vector-assoc! out 1 bad)] (+ j 1))
+        (= c 92)
+        (let [d (byte-at f (+ p (+ j 1)))]
+          (cond
+            (= d 34) (let [u (poke8 f (+ tmp k) 34)] (recur (+ j 2) (+ k 1) bad))
+            (= d 92) (let [u (poke8 f (+ tmp k) 92)] (recur (+ j 2) (+ k 1) bad))
+            (= d 117) (recur (+ j 6) k 1)
+            :else (recur (+ j 2) k 1)))
+        (>= c 128) (recur (+ j 1) k 1)
+        :else (let [u (poke8 f (+ tmp k) c)] (recur (+ j 1) (+ k 1) bad))))))
+
+(defn- parse-uint [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 out :vector-i64] :i64
+  (let [s (loop [j i] (if (= (byte-at f (+ p j)) 32) (recur (+ j 1)) j))]
+    (loop [j s v 0]
+      (let [b (byte-at f (+ p j))]
+        (if (and (>= b 48) (<= b 57))
+          (recur (+ j 1) (+ (* v 10) (- b 48)))
+          (let [u (vector-assoc! out 0 v)] j))))))
+
+;; vocab.json: {"key": id, ...}
+(defn- load-vocab [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 st :vector-i64 tmp :i64] :i64
+  (let [out (vector-alloc 2)
+        num (vector-alloc 1)]
+    (loop [j 0 count 0]
+      (if (>= j n) count
+        (if (= (byte-at f (+ p j)) 34)
+          (let [e (json-string f p (+ j 1) tmp out)
+                len (vector-at out 0)
+                bad (vector-at out 1)
+                colon (loop [q e] (if (= (byte-at f (+ p q)) 58) q (recur (+ q 1))))
+                e2 (parse-uint f p (+ colon 1) num)
+                u (if (= bad 0) (vt-insert f VT arena st tmp len (vector-at num 0)) 0)]
+            (recur e2 (if (= bad 0) (+ count 1) count)))
+          (recur (+ j 1) count))))))
+
+;; merge-rank table: slot s holds [key + 1 (0 = empty), rank] at PT[2s..2s+1], key = idA * 65536 + idB
+(defn- pt-find [PT :vector-i64 key :i64] :i64
+  (let [mask (- (psize) 1)]
+    (loop [s (bit-and (* key 2654435761) mask)]
+      (let [k (vector-at PT (* s 2))]
+        (if (= k 0) -1
+          (if (= k (+ key 1)) (vector-at PT (+ (* s 2) 1))
+            (recur (bit-and (+ s 1) mask))))))))
+
+(defn- pt-insert [PT :vector-i64 key :i64 rank :i64] :i64
+  (let [mask (- (psize) 1)
+        s (loop [s (bit-and (* key 2654435761) mask)]
+            (if (= (vector-at PT (* s 2)) 0) s (recur (bit-and (+ s 1) mask))))
+        a (vector-assoc! PT (* s 2) (+ key 1))
+        b (vector-assoc! PT (+ (* s 2) 1) rank)]
+    0))
+
+;; merges.txt: a header line, then "a b" per line, rank = line number after the header
+(defn- load-merges [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 PT :vector-i64] :i64
+  (let [first (loop [j 0] (if (= (byte-at f (+ p j)) 10) (+ j 1) (recur (+ j 1))))]
+    (loop [j first rank 0 stored 0]
+      (if (>= j n) stored
+        (let [le (loop [q j] (if (or (= (byte-at f (+ p q)) 10) (>= q n)) q (recur (+ q 1))))
+              sp (loop [q j] (if (or (= (byte-at f (+ p q)) 32) (>= q le)) q (recur (+ q 1))))
+              ascii (loop [q j] (if (>= q le) 1 (if (>= (byte-at f (+ p q)) 128) 0 (recur (+ q 1)))))
+              ia (if (= ascii 1) (vt-find f VT arena (+ p j) (- sp j)) -1)
+              ib (if (= ascii 1) (vt-find f VT arena (+ p (+ sp 1)) (- le (+ sp 1))) -1)
+              ok (if (and (>= ia 0) (>= ib 0)) 1 0)
+              u (if (= ok 1) (pt-insert PT (+ (* ia 65536) ib) rank) 0)]
+          (recur (+ le 1) (+ rank 1) (+ stored ok)))))))
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+(defn- peek [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (f 0 p 0))
+(defn- poke [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 1 p v))
+(defn- poke8 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 2 p v))
+(defn- scratch [f [:fn [[:i64 :i64 :i64] :i64]]] :i64 (f 4 0 0))
+
+(defn- cc [f [:fn [[:i64 :i64 :i64] :i64]] fn :i64 a :i64 b :i64 c :i64 d :i64 e :i64] :i64
+  (let [s (+ (scratch f) 64)
+        u0 (poke f s a) u1 (poke f (+ s 8) b) u2 (poke f (+ s 16) c)
+        u3 (poke f (+ s 24) d) u4 (poke f (+ s 32) e)]
+    (f 3 fn s)))
+
+(defn- put-text [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s)) n (vector-count v)]
+    (loop [i 0]
+      (if (= i n) (poke8 f (+ p n) 0)
+        (let [u (poke8 f (+ p i) (vector-at v i))] (recur (+ i 1)))))))
+
+(defn- sym [f [:fn [[:i64 :i64 :i64] :i64]] name :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) name)
+        p (cc f (peek f base) -2 (+ base 256) 0 0 0)]
+    (if (= p 0) (vector-at [0] 1) p)))
+
+(defn- cstr [f [:fn [[:i64 :i64 :i64] :i64]] malloc :i64 s :string] :i64
+  (let [p (cc f malloc (+ (string-length s) 1) 0 0 0 0)
+        u (put-text f p s)]
+    p))
+
+
+(defn- refuse-text [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (let [p (cstr f (vector-at R 3) s)
+        w (cc f (sym f "write") 2 p (string-length s) 0 0)]
+    (vector-at [0] 1)))
+
+;; BPE of the word at w (n bytes, lowercase), with "</w>" appended to the buffer; appends its ids to OUT (count in OUT[0])
+(defn- bpe-word [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 arena :i64 PT :vector-i64 w :i64 n :i64
+                 SS :vector-i64 SE :vector-i64 SI :vector-i64 OUT :vector-i64] :i64
+  (let [u0 (if (> n 400) (refuse-text f R "refused: a word longer than 400 bytes\n") 0)
+        s0 (poke8 f (+ w n) 60) s1 (poke8 f (+ w (+ n 1)) 47) s2 (poke8 f (+ w (+ n 2)) 119) s3 (poke8 f (+ w (+ n 3)) 62)
+        init (loop [i 0]
+               (if (= i n) 0
+                 (let [st i
+                       en (if (= i (- n 1)) (+ n 4) (+ i 1))
+                       id (vt-find f VT arena (+ w st) (- en st))
+                       u (if (< id 0) (refuse-text f R "refused: a symbol missing from the vocabulary\n") 0)
+                       a (vector-assoc! SS i st) b (vector-assoc! SE i en) c (vector-assoc! SI i id)]
+                   (recur (+ i 1)))))
+        m (loop [m n]
+            (let [best (loop [i 0 br 2147483647 bi -1]
+                         (if (>= i (- m 1)) bi
+                           (let [r (pt-find PT (+ (* (vector-at SI i) 65536) (vector-at SI (+ i 1))))]
+                             (if (and (>= r 0) (< r br)) (recur (+ i 1) r i) (recur (+ i 1) br bi)))))]
+              (if (< best 0) m
+                (let [ia (vector-at SI best)
+                      ib (vector-at SI (+ best 1))
+                      m2 (loop [i 0 k 0]
+                           (if (>= i m) k
+                             (if (and (< i (- m 1)) (and (= (vector-at SI i) ia) (= (vector-at SI (+ i 1)) ib)))
+                               (let [st (vector-at SS i)
+                                     en (vector-at SE (+ i 1))
+                                     id (vt-find f VT arena (+ w st) (- en st))
+                                     u (if (< id 0) (refuse-text f R "refused: a merged symbol missing from the vocabulary\n") 0)
+                                     a (vector-assoc! SS k st) b (vector-assoc! SE k en) c (vector-assoc! SI k id)]
+                                 (recur (+ i 2) (+ k 1)))
+                               (let [a (vector-assoc! SS k (vector-at SS i)) b (vector-assoc! SE k (vector-at SE i)) c (vector-assoc! SI k (vector-at SI i))]
+                                 (recur (+ i 1) (+ k 1))))))]
+                  (recur m2)))))
+        out (loop [i 0 c (vector-at OUT 0)]
+              (if (= i m) (vector-assoc! OUT 0 c)
+                (let [u (vector-assoc! OUT (+ 1 c) (vector-at SI i))] (recur (+ i 1) (+ c 1)))))]
+    0))
+
+(defn- lc [b :i64] :i64 (if (and (>= b 65) (<= b 90)) (+ b 32) b))
+(defn- is-ws [b :i64] :i64 (if (or (= b 32) (and (>= b 9) (<= b 13))) 1 0))
+(defn- is-letter [b :i64] :i64 (let [c (lc b)] (if (and (>= c 97) (<= c 122)) 1 0)))
+(defn- is-digit [b :i64] :i64 (if (and (>= b 48) (<= b 57)) 1 0))
+
+;; the length of the token starting at p+i within [0, e)
+(defn- token-len [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64] :i64
+  (let [c (lc (byte-at f (+ p i)))
+        n1 (if (< (+ i 1) e) (lc (byte-at f (+ p (+ i 1)))) 0)
+        n2 (if (< (+ i 2) e) (lc (byte-at f (+ p (+ i 2)))) 0)]
+    (cond
+      (= c 39)
+      (cond
+        (or (= n1 115) (or (= n1 116) (or (= n1 109) (= n1 100)))) 2
+        (or (and (= n1 114) (= n2 101)) (or (and (= n1 118) (= n2 101)) (and (= n1 108) (= n2 108)))) 3
+        :else (loop [j (+ i 1)]
+                (if (and (< j e) (and (= (is-ws (byte-at f (+ p j))) 0) (and (= (is-letter (byte-at f (+ p j))) 0) (= (is-digit (byte-at f (+ p j))) 0))))
+                  (recur (+ j 1)) (- j i))))
+      (= (is-letter c) 1)
+      (loop [j (+ i 1)] (if (and (< j e) (= (is-letter (byte-at f (+ p j))) 1)) (recur (+ j 1)) (- j i)))
+      (= (is-digit c) 1) 1
+      :else
+      (loop [j (+ i 1)]
+        (if (and (< j e) (and (= (is-ws (byte-at f (+ p j))) 0) (and (= (is-letter (byte-at f (+ p j))) 0) (= (is-digit (byte-at f (+ p j))) 0))))
+          (recur (+ j 1)) (- j i))))))
+
+(defn- wr-num [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 v :i64] :i64
+  (let [t (string-from-i64 v)
+        p (cstr f (vector-at R 3) t)]
+    (cc f (sym f "write") 2 p (string-length t) 0 0)))
+(defn- wr-text [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (cc f (sym f "write") 2 (cstr f (vector-at R 3) s) (string-length s) 0 0))
+
+(defn main [] :i64
+  (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
+        dlopen (sym f "dlopen")
+        R (vector-i64 (sym f "objc_msgSend") (sym f "sel_registerName") (sym f "objc_getClass") (sym f "malloc"))
+        sz (vector-alloc 1)
+        vbuf (slurp f R "@VOCAB@" sz)
+        vlen (vector-at sz 0)
+        mbuf (slurp f R "@MERGES@" sz)
+        mlen (vector-at sz 0)
+        pbuf (slurp f R "@PROMPTS@" sz)
+        plen (vector-at sz 0)
+        arena (cc f (vector-at R 3) 4194304 0 0 0 0)
+        tmp (cc f (vector-at R 3) 4096 0 0 0 0)
+        wbuf (cc f (vector-at R 3) 1024 0 0 0 0)
+        VT (vector-alloc (* (hsize) 3))
+        PT (vector-alloc (* (psize) 2))
+        z1 (loop [i 0] (if (= i (* (hsize) 3)) 0 (let [u (vector-assoc! VT i 0)] (recur (+ i 1)))))
+        z2 (loop [i 0] (if (= i (* (psize) 2)) 0 (let [u (vector-assoc! PT i 0)] (recur (+ i 1)))))
+        st (vector-alloc 1)
+        z3 (vector-assoc! st 0 0)
+        nv (load-vocab f vbuf vlen VT arena st tmp)
+        nm (load-merges f mbuf mlen VT arena PT)
+        bos (vt-find f VT arena (cstr f (vector-at R 3) "<|startoftext|>") 15)
+        eos (vt-find f VT arena (cstr f (vector-at R 3) "<|endoftext|>") 13)
+        u0 (wr-text f R "vocab ")
+        u1 (wr-num f R nv)
+        u2 (wr-text f R " merges ")
+        u3 (wr-num f R nm)
+        u4 (wr-text f R "\n")
+        SS (vector-alloc 512) SE (vector-alloc 512) SI (vector-alloc 512)
+        OUT (vector-alloc 4096)]
+    ;; one output line per prompt line
+    (loop [ls 0]
+      (if (>= ls plen) 0
+        (let [le (loop [q ls] (if (or (>= q plen) (= (byte-at f (+ pbuf q)) 10)) q (recur (+ q 1))))
+              u (vector-assoc! OUT 0 0)
+              bad (loop [q ls] (if (>= q le) 0 (if (>= (byte-at f (+ pbuf q)) 128) 1 (recur (+ q 1)))))
+              r0 (if (= bad 1) (refuse-text f R "refused: a non-ASCII byte in a prompt\n") 0)
+              walk (loop [i ls]
+                     (if (>= i le) 0
+                       (if (= (is-ws (byte-at f (+ pbuf i))) 1) (recur (+ i 1))
+                         (let [n (token-len f pbuf i le)
+                               cp (loop [k 0] (if (= k n) 0 (let [x (poke8 f (+ wbuf k) (lc (byte-at f (+ pbuf (+ i k)))))] (recur (+ k 1)))))
+                               b (bpe-word f R VT arena PT wbuf n SS SE SI OUT)]
+                           (recur (+ i n))))))
+              cnt (vector-at OUT 0)
+              keep (if (> cnt 75) 75 cnt)
+              p0 (wr-num f R bos)
+              p1 (loop [k 0] (if (= k keep) 0 (let [a (wr-text f R " ") b (wr-num f R (vector-at OUT (+ 1 k)))] (recur (+ k 1)))))
+              p2 (wr-text f R " ")
+              p3 (wr-num f R eos)
+              p4 (wr-text f R "\n")]
+          (recur (+ le 1)))))))

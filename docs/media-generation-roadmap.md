@@ -184,6 +184,10 @@ and dtype admission, data read into a Metal buffer, on a synthetic 28-tensor fil
 
 **SHA-256 (2026-11-06).** SHA-256 of a file in Kotoba on the Metal route (`bench/kernels/sha256-metal/`): equal to `shasum -a 256` on 15 inputs including the padding boundaries and a 5 MiB random file, a changed round constant detected, about 74 MiB/s on one core ([record](../bench/results/2026-11-06-sha256-metal/README.md)). With the reader above this covers digest-before-read for a checkpoint; not yet joined to it, not run on a multi-gigabyte file.
 
+**I3b, first slice: the CLIP tokenizer (2026-11-06).** The CLIP byte-pair tokenizer in Kotoba on the Metal route (`bench/kernels/clip-tokenizer-metal/`): the same ids as Hugging Face's
+`CLIPTokenizer` on 21 prompt lines (mixed case, contractions, digits, symbols, long words, truncation), three mutants detected, 0.38 s including the table build
+([record](../bench/results/2026-11-06-clip-tokenizer-metal/README.md)). ASCII only; ComfyUI's weighting, embeddings and chunking are not implemented.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
