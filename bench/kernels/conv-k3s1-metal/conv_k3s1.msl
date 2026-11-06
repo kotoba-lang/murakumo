@@ -1,20 +1,22 @@
-// 3x3, stride 1, pad 1 implicit-GEMM convolution specialised from the general `conv` kernel (stage M slice 23): the 9 tap validity bits and the
-// pixel offset are computed once per thread, the (channel, tap) index advances incrementally instead of dividing per element. Same arguments and
-// epilogue as `conv`; requires OW == IW and NP == IH * IW (true for stride 1, pad 1). The programs paste this text after their `conv` kernel.
+// 3x3, stride 1, pad 1 implicit-GEMM convolution specialised from the general `conv` kernel (stage M slices 23 and 30): the 9 tap validity bits and the pixel
+// offset are computed once per thread, the (channel, tap) index advances incrementally instead of dividing per element, and a threadgroup of 8 simdgroups (256
+// threads) computes 128 output channels x 64 pixels so the gathered input tile, the expensive part, is reused for twice the channels of the 64 x 64 first version
+// (about 40 percent less GPU time). A 128-channel tile with only 4 simdgroups (each 64 x 32) was 4 to 5 times SLOWER (register pressure). Same arguments and
+// epilogue as `conv`; requires OW == IW and NP == IH * IW (stride 1, pad 1). Dispatch with 256 threads per threadgroup and grid y = ceil(COUT / 128).
 kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt [[buffer(1)]], device const float *Bias [[buffer(2)]],
                       device const float *Res [[buffer(3)]], device float *C [[buffer(4)]], device const uint *P [[buffer(5)]],
                       uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
                       uint tid [[thread_index_in_threadgroup]]) {
-  threadgroup half As[64 * 64];
-  threadgroup half Bs[64 * 64];
-  threadgroup float Cs[64 * 64];
+  threadgroup float Cs[128 * 64];
+  threadgroup half *As = (threadgroup half *)Cs;
+  threadgroup half *Bs = (threadgroup half *)(Cs + 64 * 64);
   uint CIN = P[0]; uint COUT = P[1]; uint IH = P[2]; uint IW = P[3];
   uint NP = P[7]; uint NPP = P[8]; uint MODE = P[9];
   uint KD = CIN * 9u;
   uint KDP = ((KD + 63u) / 64u) * 64u;
   bool vec4 = (KD & 3u) == 0u;
   uint HWI = IH * IW;
-  uint m0 = tg.y * 64u;
+  uint m0 = tg.y * 128u;
   uint n0 = tg.x * 64u;
   uint row0 = (sg / 2u) * 32u;
   uint col0 = (sg % 2u) * 32u;
@@ -37,7 +39,7 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
   for (uint k0 = 0u; k0 < KDP; k0 += 64u) {
     if (vec4) {
       for (uint it = 0u; it < 8u; it++) {
-        uint idx4 = tid + it * 128u;
+        uint idx4 = tid + it * 256u;
         uint r = idx4 >> 4;
         uint c = (idx4 & 15u) * 4u;
         uint m = m0 + r;
@@ -46,19 +48,21 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
         if (m < COUT && kc < KD) w = *((device const half4 *)(Wt + m * KD + kc));
         *((threadgroup half4 *)(As + r * 64u + c)) = w;
       }
-    }
-    uint k = k0 + kk0;
-    uint ci = k / 9u;
-    uint tap = k - ci * 9u;
-    for (uint it = 0u; it < 32u; it++) {
-      uint idx = tid + it * 128u;
-      if (!vec4) {
+    } else {
+      for (uint it = 0u; it < 32u; it++) {
+        uint idx = tid + it * 256u;
         uint r = idx >> 6;
         uint c = idx & 63u;
         uint m = m0 + r;
         uint kc = k0 + c;
         As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
       }
+    }
+    uint k = k0 + kk0;
+    uint ci = k / 9u;
+    uint tap = k - ci * 9u;
+    for (uint it = 0u; it < 16u; it++) {
+      uint idx = tid + it * 256u;
       half v = half(0.0f);
       if (k < KD && ((vmask >> tap) & 1u) != 0u) {
         uint ky = tap / 3u;
@@ -66,8 +70,8 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
         v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
       }
       Bs[idx] = v;
-      k += 2u;
-      tap += 2u;
+      k += 4u;
+      tap += 4u;
       if (tap >= 9u) { tap -= 9u; ci += 1u; }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -88,7 +92,7 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
     for (uint j = 0u; j < 4u; j++)
       simdgroup_store(acc[i][j], Cs + (row0 + i * 8u) * 64u + col0 + j * 8u, 64);
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  for (uint idx = tid; idx < 4096u; idx += 128u) {
+  for (uint idx = tid; idx < 8192u; idx += 256u) {
     uint m = m0 + idx / 64u;
     uint p = n0 + idx % 64u;
     if (m < COUT && p < NP) {
