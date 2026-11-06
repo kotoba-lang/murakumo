@@ -1,0 +1,35 @@
+;; Compose after fleet_model_oci_seal and its native dependency closure.
+;; The fixture digest was calculated independently from compact JSON bytes.
+(ns murakumo.fleet-model-oci-seal-test (:export [test-model-oci-seal-descriptors test-model-oci-seal-observed-pin]))
+
+(defn test-model-oci-seal-descriptors [] :bool
+  (let [base "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mtp "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        assets "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        expected "sha256:6575a990965422340f1e5cecd0494a0b93ce32ea38ce01fc70082c051cbb1f01"
+        text (ms-manifest base 1234 mtp 512 assets 1024)
+        bytes (ms-bytes text) layers (json-member bytes 0 "layers")
+        index (ms-bytes (ms-index expected 758))
+        manifests (json-member index 0 "manifests")]
+    (and (= (vector-count bytes) 758) (= (ms-digest text) expected)
+         (not (= (ms-digest (ms-manifest base 1234 mtp 512 assets 1025)) expected))
+         (not (= (ms-digest (ms-manifest mtp 1234 base 512 assets 1024)) expected))
+         (json-valid? bytes) (json-canonical? bytes)
+         (= (ol-text bytes 0 "artifactType") "application/vnd.awai.model.bonsai.v1")
+         (>= layers 0) (= (json-kind bytes layers) 2) (= (json-count bytes layers) 3)
+         (ma-layer? bytes (json-element bytes layers 0) "application/vnd.awai.model.bonsai.weights.v1" base 1234)
+         (ma-layer? bytes (json-element bytes layers 1) "application/vnd.awai.model.bonsai.mtp.v1" mtp 512)
+         (ma-layer? bytes (json-element bytes layers 2) "application/vnd.awai.model.bonsai.assets.tar.v1" assets 1024)
+         (json-valid? index) (json-canonical? index) (>= manifests 0)
+         (= (json-count index manifests) 1)
+         (ol-index-ok? index (json-element index manifests 0) expected 758))))
+
+;; Independent public-source observation, not an approved publisher or a
+;; produced OCI artifact. See docs/evidence/awai149-oci-expected-20261103.
+(defn test-model-oci-seal-observed-pin [] :bool
+  (let [base "sha256:130de5925082c168b7866b2e91b52e44abbafc99017e3ca352b77b5b55a269ed"
+        mtp "sha256:f803737b0e64bcce54fcfa22f2c7ee342ad37192b8e2a3299fc940387a828c9d"
+        assets "sha256:9a2a88d5d3bf678f56310ff7f2dbf1868e43e28ac6ef61176b281d976398cea7"
+        manifest (ms-manifest base 8595477990 mtp 238934226 assets 13517312)]
+    (and (= (string-byte-length manifest) 774)
+         (= (ms-digest manifest) "sha256:a64f932f5780e1024057f84ed96a761cd535610dc6b0870154a93b9e59df3bc8"))))

@@ -11,8 +11,16 @@
 (defn- ta-parent [p :string] :string
   (loop [i (- (string-length p) 1)]
     (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+(defn- ta-trim-slash [p :string] :string
+  (let [n (string-length p)]
+    (if (and (> n 1) (= (string-substring p (- n 1) n) "/")) (string-substring p 0 (- n 1)) p)))
 (defn- ta-overlap? [a :string b :string] :bool
-  (or (= a b) (= (string-index-of a (str b "/")) 0) (= (string-index-of b (str a "/")) 0)))
+  ;; The path validator permits a trailing slash. Normalize it before
+  ;; comparing directory boundaries so /layout/ cannot contain /layout/out
+  ;; while being treated as a separate tree. Callers still exclude aliases.
+  (let [x (ta-trim-slash a) y (ta-trim-slash b)]
+    (or (= x "") (= y "") (= x "/") (= y "/") (= x y)
+        (= (string-index-of x (str y "/")) 0) (= (string-index-of y (str x "/")) 0))))
 (defn- ta-read [path :string offset :i64 count :i64] :vector-i64
   (let [r (typed-cap-call 35 :string :bytes (ol-frame "E" path (str (ol-dec offset) ":" (ol-dec count))))]
     (if (and (= (bytes-count r) (+ count 5)) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70)

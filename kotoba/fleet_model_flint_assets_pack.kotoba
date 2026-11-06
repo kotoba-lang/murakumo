@@ -1,0 +1,77 @@
+;; Flint metadata USTAR producer candidate. Compose after fleet_model_assets_pack
+;; and fleet_model_flint_oci_stage. The host independently pins an observation,
+;; owns the source tree and output directory exclusively, and excludes aliases
+;; and concurrent mutation. The tar is not a publisher attestation or model
+;; loading grant. Large digest/copy operations require a qualified governor.
+(ns murakumo.fleet-model-flint-assets-pack (:export [model-flint-assets-pack-main]))
+
+(defn- fp-preflight [source :string b :vector-i64 files :i64] :i64
+  (loop [i 0 total 1024]
+    (if (= i 7) total
+      (let [name (ft-name i) entry (pk-entry b files name)
+            size (if (>= entry 0) (ol-int b entry "size") -1)
+            digest (if (>= entry 0) (str "sha256:" (ol-text b entry "sha256")) "")
+            next (+ total 512 (if (and (> size 0) (<= size 16777216)) (pk-padded size) 67108865))]
+        (if (or (< entry 0) (not (= (json-kind b entry) 1))
+                (not (= (digest-problem digest) "oci/ok"))
+                (<= size 0) (> size 16777216) (> next 67108864)
+                (not (= (md-observe (str source "/" name) digest size) "model/digest-observed")))
+          -1 (recur (+ i 1) next))))))
+
+(defn- fp-emit [source :string output :string b :vector-i64 files :i64] :bool
+  (loop [i 0]
+    (if (= i 7) (ta-write output (vector-alloc 1024) 1024 false)
+      (let [name (ft-name i) entry (pk-entry b files name)
+            size (ol-int b entry "size") digest (str "sha256:" (ol-text b entry "sha256"))
+            header (pk-header name size)]
+        (and (ta-header? header) (= (ta-octal header 124 136) size)
+             (ta-write output header 512 (= i 0))
+             (pk-copy (str source "/" name) output size digest)
+             (recur (+ i 1)))))))
+
+(defn- fp-metadata-sizes [b :vector-i64 files :i64] :vector-i64
+  (loop [i 0 out (vector-alloc 6)]
+    (if (= i 6) out
+      (let [entry (pk-entry b files (ft-name i))
+            n (if (>= entry 0) (ol-int b entry "size") -1)]
+        (recur (+ i 1) (vector-assoc! out i n))))))
+
+(defn model-flint-assets-pack-main [] :i64
+  (let [source (md-arg 0) lock (md-arg 1) pin (md-arg 2) output (md-arg 3)
+        valid (and (= (md-arg 4) "") (md-path? source) (md-path? lock) (md-path? output)
+                   (not (= (string-substring source (- (string-length source) 1) (string-length source)) "/"))
+                   (not (ta-overlap? source output)) (not (ta-overlap? lock output))
+                   (= (digest-problem pin) "oci/ok") (mp-mode? source "448" "1")
+                   (mp-mode? (str source "/.kapitsa") "448" "1")
+                   (mp-mode? (ta-parent output) "448" "1") (= (ta-fs "D" output "") "0"))
+        b (if valid (ma-read lock 16384) (vector-alloc 0))
+        root (if (and (ol-read-ok? b) (json-valid? b)) (ol-root b) -1)
+        files (if (>= root 0) (json-member b root "files") -1)
+        lock-ok (and valid (>= root 0) (= (json-kind b root) 1)
+                     (= (str "sha256:" (sha256-hex b)) pin)
+                     (= (ol-text b root "kind") "awai.flint-source-observation/1")
+                     (>= files 0) (= (json-kind b files) 2) (= (json-count b files) 9)
+                     (pk-weight-entry? b files "model.safetensors")
+                     (pk-weight-entry? b files "experts.safetensors"))
+        total (if lock-ok (fp-preflight source b files) -1)
+        meta-sizes (if (>= total 0) (fp-metadata-sizes b files) (vector-alloc 0))
+        base-entry (if lock-ok (pk-entry b files "model.safetensors") -1)
+        experts-entry (if lock-ok (pk-entry b files "experts.safetensors") -1)
+        file-list (if (>= total 0) (ma-read (str source "/.kapitsa/manifest.json") 16384) (ol-failed))
+        manifest-ok (and (>= base-entry 0) (>= experts-entry 0)
+                         (fk-manifest-valid? file-list (ol-int b base-entry "size")
+                                             (ol-int b experts-entry "size") meta-sizes))]
+    (if (or (< total 0) (not manifest-ok)) (let [x (md-out "flint-assets-pack/input-refused")] 1)
+      (let [written (and (fp-emit source output b files) (= (ta-fs "H" output "600") "1")
+                         (mp-mode? output "384" "0") (= (ta-fs "M" output "") "1")
+                         (= (ta-fs "M" (ta-parent output) "") "1"))
+            before (if written (typed-cap-call 35 :string :string (ol-frame "F" output "")) "")
+            work (s2-work (s2-iv 8))
+            hashed (and written (md-regular? before) (= (ol-size before 67108864) total)
+                        (md-stream output total work))
+            after (if hashed (typed-cap-call 35 :string :string (ol-frame "F" output "")) "")
+            result (if (and hashed (= before after))
+                     (str "flint-assets-pack/packed sha256:" (hex (s2-out work 8)) " " (ol-dec total))
+                     "flint-assets-pack/output-unknown")
+            x (md-out result)]
+        (if (and hashed (= before after)) 0 1)))))

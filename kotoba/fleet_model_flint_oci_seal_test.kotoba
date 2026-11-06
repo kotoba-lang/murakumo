@@ -1,0 +1,21 @@
+;; Source-level vector; the digest is independently calculated from compact
+;; JSON. These synthetic values are not pins for a real model or publisher.
+(ns murakumo.fleet-model-flint-oci-seal-test (:export [test-flint-oci-descriptors]))
+
+(defn test-flint-oci-descriptors [] :bool
+  (let [base "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        experts "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        assets "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        expected "sha256:574c1edcd63fd9f17e25b210c36f3007ee073c15304d61a4bdce2e87351c19c3"
+        text (mf-manifest base 1234 experts 512 assets 1024)
+        b (ms-bytes text) layers (json-member b 0 "layers")]
+    (and (= (vector-count b) 756) (= (ms-digest text) expected)
+         (json-valid? b) (json-canonical? b)
+         (= (ol-text b 0 "artifactType") "application/vnd.awai.model.flint.v1")
+         (>= layers 0) (= (json-kind b layers) 2) (= (json-count b layers) 3)
+         (ma-layer? b (json-element b layers 0) "application/vnd.awai.model.flint.model.v1" base 1234)
+         (ma-layer? b (json-element b layers 1) "application/vnd.awai.model.flint.experts.v1" experts 512)
+         (ma-layer? b (json-element b layers 2) "application/vnd.awai.model.flint.assets.tar.v1" assets 1024)
+         (not (ma-layer? b (json-element b layers 1) "application/vnd.awai.model.bonsai.mtp.v1" experts 512))
+         (not (= (ms-digest (mf-manifest experts 1234 base 512 assets 1024)) expected))
+         (not (= (ms-digest (mf-manifest base 1234 experts 512 assets 1025)) expected)))))

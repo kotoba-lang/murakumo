@@ -1,0 +1,99 @@
+;; Flint OCI seal candidate: model weights, experts weights, and a metadata
+;; tar have distinct independently pinned layers. Compose after
+;; fleet_model_oci_seal and its full dependency closure. The trusted host owns
+;; the private layout, pins all sizes and hashes and excludes path replacement.
+;; A sealed layout does not validate the tar members, publish or load a model,
+;; qualify a resource governor, or grant execution. Unknown writes need host
+;; reconciliation; the high-load operations require the qualified governor.
+(ns murakumo.fleet-model-flint-oci-seal (:export [model-flint-oci-seal-main]))
+
+(defn- mf-manifest [base :string base-size :i64 experts :string experts-size :i64 assets :string assets-size :i64] :string
+  (let [empty "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"]
+    (str "{\"artifactType\":\"application/vnd.awai.model.flint.v1\",\"config\":"
+         (ms-descriptor "application/vnd.oci.empty.v1+json" empty 2)
+         ",\"layers\":["
+         (ms-descriptor "application/vnd.awai.model.flint.model.v1" base base-size) ","
+         (ms-descriptor "application/vnd.awai.model.flint.experts.v1" experts experts-size) ","
+         (ms-descriptor "application/vnd.awai.model.flint.assets.tar.v1" assets assets-size)
+         "],\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"schemaVersion\":2}")))
+
+(defn- mf-check [layout :string manifest :string manifest-size :i64 base :string base-size :i64 experts :string experts-size :i64
+                assets :string assets-size :i64 verify-weights :bool] :string
+  (if (or (not (md-path? layout)) (not (= (digest-problem manifest) "oci/ok"))
+          (not (= (digest-problem base) "oci/ok")) (not (= (digest-problem experts) "oci/ok"))
+          (not (= (digest-problem assets) "oci/ok"))
+          (< manifest-size 1) (> manifest-size 1048576) (< base-size 1) (> base-size 17179869184)
+          (< experts-size 1) (> experts-size 17179869184) (< assets-size 1) (> assets-size 17179869184)
+          (= base experts) (= base assets) (= experts assets)) "flint-artifact/input-refused"
+    (let [layout-bytes (ma-read (str layout "/oci-layout") 1024)
+          index (ma-read (str layout "/index.json") 1048576)
+          indexes (if (and (ol-read-ok? index) (json-valid? index)) (json-member index (ol-root index) "manifests") -1)
+          first (if (and (>= indexes 0) (= (json-kind index indexes) 2) (= (json-count index indexes) 1)) (json-element index indexes 0) -1)
+          m (ma-read (ol-blob-path layout manifest) manifest-size)]
+      (cond (not (and (ol-read-ok? layout-bytes) (json-valid? layout-bytes)
+                      (= (ol-text layout-bytes (ol-root layout-bytes) "imageLayoutVersion") "1.0.0"))) "flint-artifact/layout-refused"
+            (not (and (= (ol-int index (ol-root index) "schemaVersion") 2)
+                      (ol-index-ok? index first manifest manifest-size)
+                      (= (ol-text index first "mediaType") "application/vnd.oci.image.manifest.v1+json"))) "flint-artifact/index-refused"
+            (or (not (ol-read-ok? m)) (not (= (vector-count m) manifest-size))
+                (not (= (str "sha256:" (sha256-hex m)) manifest)) (not (json-valid? m))) "flint-artifact/manifest-refused"
+            :else
+            (let [root (ol-root m) layers (json-member m root "layers") config (json-member m root "config")
+                  first-layer (if (and (>= layers 0) (= (json-kind m layers) 2) (= (json-count m layers) 3)) (json-element m layers 0) -1)
+                  second-layer (if (>= first-layer 0) (json-element m layers 1) -1)
+                  third-layer (if (>= first-layer 0) (json-element m layers 2) -1)
+                  empty-digest "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+                  empty-config (ma-read (ol-blob-path layout empty-digest) 2)]
+              (cond (or (not (= (ol-int m root "schemaVersion") 2))
+                        (not (= (ol-text m root "mediaType") "application/vnd.oci.image.manifest.v1+json"))
+                        (not (= (ol-text m root "artifactType") "application/vnd.awai.model.flint.v1"))
+                        (not (ma-layer? m config "application/vnd.oci.empty.v1+json" empty-digest 2))
+                        (not (ol-read-ok? empty-config)) (not (= (vector-count empty-config) 2))
+                        (not (= (str "sha256:" (sha256-hex empty-config)) empty-digest))
+                        (not (ma-layer? m first-layer "application/vnd.awai.model.flint.model.v1" base base-size))
+                        (not (ma-layer? m second-layer "application/vnd.awai.model.flint.experts.v1" experts experts-size))
+                        (not (ma-layer? m third-layer "application/vnd.awai.model.flint.assets.tar.v1" assets assets-size))) "flint-artifact/descriptor-refused"
+                    (not (md-present? (ol-blob-path layout base) base-size)) "flint-artifact/base-unknown"
+                    (not (md-present? (ol-blob-path layout experts) experts-size)) "flint-artifact/experts-unknown"
+                    (and verify-weights (not (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed"))) "flint-artifact/base-unknown"
+                    (and verify-weights (not (= (md-observe (ol-blob-path layout experts) experts experts-size) "model/digest-observed"))) "flint-artifact/experts-unknown"
+                    (not (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed")) "flint-artifact/assets-unknown"
+                    :else (if verify-weights "flint-artifact/digests-observed" "flint-artifact/descriptors-observed")))))))
+
+(defn model-flint-oci-seal-main [] :i64
+  (let [layout (md-arg 0) base (md-arg 1) base-size (md-decimal (md-arg 2))
+        experts (md-arg 3) experts-size (md-decimal (md-arg 4)) assets (md-arg 5)
+        assets-size (md-decimal (md-arg 6)) expected (md-arg 7)
+        empty "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        valid (and (= (md-arg 8) "") (md-path? layout)
+                   (not (= (string-substring layout (- (string-length layout) 1) (string-length layout)) "/"))
+                   (= (digest-problem base) "oci/ok") (= (digest-problem experts) "oci/ok")
+                   (= (digest-problem assets) "oci/ok") (= (digest-problem expected) "oci/ok")
+                   (> base-size 0) (> experts-size 0) (>= assets-size 1024) (<= assets-size 67108864)
+                   (= (rem assets-size 512) 0)
+                   (not (= base experts)) (not (= base assets)) (not (= experts assets))
+                   (not (= empty base)) (not (= empty experts)) (not (= empty assets))
+                   (not (= expected empty)) (not (= expected base)) (not (= expected experts)) (not (= expected assets)))
+        manifest (if valid (mf-manifest base base-size experts experts-size assets assets-size) "")
+        manifest-size (string-byte-length manifest)
+        ready (and valid (= (ms-digest manifest) expected)
+                   (mp-mode? layout "448" "1") (mp-mode? (str layout "/blobs") "448" "1")
+                   (mp-mode? (str layout "/blobs/sha256") "448" "1")
+                   (= (ta-fs "D" (str layout "/oci-layout") "") "0")
+                   (= (ta-fs "D" (str layout "/index.json") "") "0")
+                   (= (ta-fs "D" (ol-blob-path layout empty) "") "0")
+                   (= (ta-fs "D" (ol-blob-path layout expected) "") "0"))]
+    (if (not ready) (let [x (md-out "flint-layout/input-refused")] 2)
+      (let [verified (and (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed")
+                          (= (md-observe (ol-blob-path layout experts) experts experts-size) "model/digest-observed")
+                          (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed"))]
+        (if (not verified) (let [x (md-out "flint-layout/blob-refused")] 1)
+          (let [written (and (ms-write (ol-blob-path layout empty) "{}")
+                             (ms-write (ol-blob-path layout expected) manifest)
+                             (ms-write (str layout "/oci-layout") "{\"imageLayoutVersion\":\"1.0.0\"}")
+                             (ms-write (str layout "/index.json") (ms-index expected manifest-size)))
+                checked (if written (mf-check layout expected manifest-size base base-size experts experts-size assets assets-size true) "")
+                result (if (= checked "flint-artifact/digests-observed")
+                         (str "flint-layout/sealed " expected " " (ol-dec manifest-size)) "flint-layout/publication-unknown")
+                x (md-out result)]
+            (if (= checked "flint-artifact/digests-observed") 0 1)))))))

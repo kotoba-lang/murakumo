@@ -1,0 +1,137 @@
+;; Experimental deterministic USTAR producer for the Bonsai asset profile.
+;; Compose after fleet_model_assets. The host independently pins the exact
+;; source-observation bytes and owns an exclusive, non-aliased source tree,
+;; lock file and private output parent for the whole operation. Hashes do not
+;; authenticate the publisher. A partial output is retained for reconciliation.
+;; This produces only the asset tar: it does not copy weights, publish an OCI
+;; layout, establish a durable reservation, or authorize model execution.
+(ns murakumo.fleet-model-assets-pack (:export [model-assets-pack-main]))
+
+(defn- pk-put [out :vector-i64 offset :i64 text :string] :vector-i64
+  (let [b (vector-i64-from-bytes (string-to-utf8 text))]
+    (loop [i 0 v out]
+      (if (= i (vector-count b)) v
+        (recur (+ i 1) (vector-assoc! v (+ offset i) (vector-at b i)))))))
+
+;; Fixed-width octal field, NUL terminated. All callers validate the number
+;; and use fields wide enough to represent their bounded values.
+(defn- pk-octal [out :vector-i64 start :i64 width :i64 number :i64] :vector-i64
+  (loop [i (+ start (- width 2)) n number v out]
+    (if (< i start) v
+      (recur (- i 1) (quot n 8) (vector-assoc! v i (+ 48 (rem n 8)))))))
+
+(defn- pk-header [name :string size :i64] :vector-i64
+  (let [v (vector-alloc 512)
+        a (pk-put v 0 name) b (pk-octal a 100 8 384)
+        c (pk-octal b 108 8 0) d (pk-octal c 116 8 0)
+        e (pk-octal d 124 12 size) f (pk-octal e 136 12 0)
+        g (vector-assoc! f 156 48) h (pk-put g 257 "ustar")
+        i (vector-assoc! h 263 48) j (vector-assoc! i 264 48)
+        sum (ta-checksum j) k (pk-octal j 148 7 sum)]
+    (vector-assoc! k 155 32)))
+
+;; An exact pinned observation contains 17 unique file entries. Find each
+;; required fixed asset by name; a duplicate or missing name is refused.
+(defn- pk-entry [b :vector-i64 files :i64 name :string] :i64
+  (loop [i 0 found -1]
+    (if (= i (json-count b files)) found
+      (let [entry (json-element b files i)]
+        (if (= (ol-text b entry "path") name)
+          (if (>= found 0) -2 (recur (+ i 1) entry))
+          (recur (+ i 1) found))))))
+
+(defn- pk-padded [size :i64] :i64 (* (quot (+ size 511) 512) 512))
+
+;; The other two records are weight descriptors, not tar entries. Validate
+;; their presence and shape so a 17-entry lock cannot substitute unknown rows.
+(defn- pk-weight-entry? [b :vector-i64 files :i64 name :string] :bool
+  (let [entry (pk-entry b files name)
+        size (if (>= entry 0) (ol-int b entry "size") -1)
+        digest (if (>= entry 0) (str "sha256:" (ol-text b entry "sha256")) "")]
+    (and (>= entry 0) (= (json-kind b entry) 1) (> size 0) (<= size 17179869184)
+         (= (digest-problem digest) "oci/ok"))))
+
+;; Validate all 15 inputs and compute total before creating output. The
+;; subsequent copy hashes the same chunks it writes, not only this preflight.
+(defn- pk-preflight [source :string b :vector-i64 files :i64] :i64
+  (loop [i 0 total 1024]
+    (if (= i 15) total
+      (let [name (ta-name i) entry (pk-entry b files name)
+            size (if (>= entry 0) (ol-int b entry "size") -1)
+            digest (if (>= entry 0) (str "sha256:" (ol-text b entry "sha256")) "")
+            next (+ total 512 (if (and (> size 0) (<= size 16777216)) (pk-padded size) 67108865))]
+        (if (or (< entry 0) (not (= (json-kind b entry) 1))
+                (not (= (digest-problem digest) "oci/ok"))
+                (<= size 0) (> size 16777216) (> next 67108864)
+                (not (= (md-observe (str source "/" name) digest size) "model/digest-observed")))
+          -1 (recur (+ i 1) next))))))
+
+;; Stream each source once into the tar while calculating its pinned digest.
+;; Chunks except the last are multiples of 64; append tar padding only after
+;; the exact source length and digest have been verified.
+(defn- pk-copy [source :string output :string size :i64 digest :string] :bool
+  (let [entry (typed-cap-call 35 :string :string (ol-frame "O" source ""))
+        before (if (and (md-regular? entry) (= (ol-size entry 16777216) size))
+                 (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")]
+    (if (or (not (md-regular? before)) (not (= (ol-size before 16777216) size))) false
+      (let [work (s2-work (s2-iv 8)) k (s2-k)
+            copied (loop [offset 0]
+                     (if (= offset size) true
+                       (let [count (if (> (- size offset) 65536) 65536 (- size offset))
+                             last (= (+ offset count) size)
+                             ok (arena-scope
+                                  (let [data (ta-read source offset count) whole (* (quot count 64) 64)]
+                                    (and (= (vector-count data) count) (md-blocks work data whole k)
+                                         (if last (md-pad work data whole (- count whole) size k) true)
+                                         (ta-write output data count false))))]
+                         (and ok (recur (+ offset count))))))
+            after (typed-cap-call 35 :string :string (ol-frame "F" source ""))
+            pad (- (pk-padded size) size)]
+        (and copied (= before after) (= (str "sha256:" (hex (s2-out work 8))) digest)
+             (if (= pad 0) true (ta-write output (vector-alloc pad) pad false)))))))
+
+(defn- pk-emit [source :string output :string b :vector-i64 files :i64] :bool
+  (loop [i 0]
+    (if (= i 15) (ta-write output (vector-alloc 1024) 1024 false)
+      (let [name (ta-name i) entry (pk-entry b files name)
+            size (ol-int b entry "size") digest (str "sha256:" (ol-text b entry "sha256"))
+            header (pk-header name size)]
+        (and (ta-header? header) (= (ta-octal header 124 136) size)
+             (ta-write output header 512 (= i 0))
+             (pk-copy (str source "/" name) output size digest)
+             (recur (+ i 1)))))))
+
+;; argv: source directory, pinned observation path, observation SHA-256,
+;; absent output tar path. Output is a digest and byte count only after every
+;; input and the completed, synced tar has been independently streamed.
+(defn model-assets-pack-main [] :i64
+  (let [source (md-arg 0) lock (md-arg 1) pin (md-arg 2) output (md-arg 3)
+        valid (and (= (md-arg 4) "") (md-path? source) (md-path? lock) (md-path? output)
+                   (not (= (string-substring source (- (string-length source) 1) (string-length source)) "/"))
+                   (not (ta-overlap? source output)) (not (ta-overlap? lock output))
+                   (= (digest-problem pin) "oci/ok") (mp-mode? source "448" "1")
+                   (mp-mode? (ta-parent output) "448" "1") (= (ta-fs "D" output "") "0"))
+        b (if valid (ma-read lock 16384) (vector-alloc 0))
+        root (if (and (ol-read-ok? b) (json-valid? b)) (ol-root b) -1)
+        files (if (>= root 0) (json-member b root "files") -1)
+        lock-ok (and valid (>= root 0) (= (json-kind b root) 1)
+                     (= (str "sha256:" (sha256-hex b)) pin)
+                     (= (ol-text b root "kind") "awai.model-source-observation/1")
+                     (>= files 0) (= (json-kind b files) 2) (= (json-count b files) 17)
+                     (pk-weight-entry? b files "model.safetensors")
+                     (pk-weight-entry? b files "mtp.safetensors"))
+        total (if lock-ok (pk-preflight source b files) -1)]
+    (if (< total 0) (let [x (md-out "assets-pack/input-refused")] 1)
+      (let [written (and (pk-emit source output b files) (= (ta-fs "H" output "600") "1")
+                         (mp-mode? output "384" "0") (= (ta-fs "M" output "") "1")
+                         (= (ta-fs "M" (ta-parent output) "") "1"))
+            before (if written (typed-cap-call 35 :string :string (ol-frame "F" output "")) "")
+            work (s2-work (s2-iv 8))
+            hashed (and written (md-regular? before) (= (ol-size before 67108864) total)
+                        (md-stream output total work))
+            after (if hashed (typed-cap-call 35 :string :string (ol-frame "F" output "")) "")
+            result (if (and hashed (= before after))
+                     (str "assets-pack/packed sha256:" (hex (s2-out work 8)) " " (ol-dec total))
+                     "assets-pack/output-unknown")
+            x (md-out result)]
+        (if (and hashed (= before after)) 0 1)))))
