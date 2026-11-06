@@ -54,6 +54,7 @@ mutant() { # label from to [config, default mini]
 }
 case " $CONFIGS " in *" mini "*)
 mutant attn-scale 'float SCALE = as_type<float>(P[1]);' 'float SCALE = 1.0f;'
+mutant attn-wide-normalise 'half(Tmp[sg * 64u + e] / Lsm[sg * 8u + e / 8u])' 'half(Tmp[sg * 64u + e])'
 mutant upsample 'O[i] = half(X[(c * IH + y / 2u) * IW + x / 2u] * Sc[1]);' 'O[i] = half(X[(c * IH + y / 2u) * IW + (x + 1u) / 2u] * Sc[1]);'
 mutant residual '(vector-i64 cout cout ih iw 3 1 2))
       (let [sc (scl!' '(vector-i64 cout cout ih iw 3 1 1))
