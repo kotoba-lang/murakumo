@@ -41,3 +41,21 @@ tensor loading/store construction. Failedprepare creates no globalcommit.
 Allcontrol children exit0/reap within requested2/fatal1GiB. Actual3B capacity,
 RAM/NVMe performance/loss comparison and fullcheckpoint readback remain pending.
 Eachhost has its own recorded OS qualification; do not assume identicalmacOS.
+
+## Actual3B NVMe condition complete
+
+Frozen source087603fd,10physical owners,32updates/2048tokens,16+newprocess16.
+All10guards/finiteupdates/exit0-reap receipts pass, maxfootprint4.20942GiB.
+FixeddevCE10.625805→8.739648; periodicdev-inclusive4.29910tok/s,update-only
+4.60493,init/eval/save/load-inclusive3.93505tok/s over520.45142maxrank seconds.
+Save16/32max11.787/5.226s, load4.611s; boundaryCE exact. Separate fullreadback
+checks bothglobal generations'1216files/42,046,905,998bytes and sampler/update/
+warmup/source/runtime/data/options/layout/generation. RAMcondition pending.
+
+Joseph retained its co-located inference server. Hostswap4419.50→5354.56MiB
+(+935.06) during thiscondition, others did not increase (zebulun decreased).
+This is shared-host, fixed-order evidence; do not claim isolated backend
+bandwidth, zero paging or unchanged inference latency. No service was stopped.
+Initial NVMe-prefix snapshots use executable-name process listings, insufficient
+to identify Hyargument names; own-child completion is proved by supervisors.
+Later snapshots/finalaudit inspect fullarguments only for our ownscript names.
