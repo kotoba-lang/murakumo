@@ -71,13 +71,16 @@ python3 -I bench/kernels/q8_0-matvec/run.py --amu ../amu --out q8-matvec-mymac.j
   v2 to SPIR-V, pinned in [kotoba-lang/inference](https://github.com/kotoba-lang/inference).
   The last run that generated tokens on this Mac (2026-10-19) was a Kotoba
   decode guest driving GLSL-built kernels through a C loader that is gone.
-  Amu's own GPU route on macOS is planned, not built.
+  Amu's own GPU route on macOS now runs one hand-written MSL kernel through
+  Metal (stage S7, first slice, kotoba-lang/amu#1822). It runs no model yet and
+  does not dispatch the kernels above.
 - **Amu selfhost on the Mac.** `bin/amu`, the signed Mach-O that Amu builds
   of itself, compiles murakumo's Q8_0 kernel today at 1.7× the time of C. It
-  cannot yet read a model file, use SIMD, threads or the GPU, and its f32 code
-  is slow (stage S1, kotoba-lang/amu#1813, keeps f32 locals in FP registers and is
-  not yet adopted); [the roadmap](docs/inference-roadmap.md) changes the Kotoba
-  spec and the Amu compiler, stage by stage, until it can (JUN-804).
+  cannot yet read a model file or use SIMD or threads, and its f32 code is still
+  slow: stage S1 (kotoba-lang/amu#1813) keeps f32 locals in FP registers in leaf
+  functions but misses its target of 2× the time of C.
+  [The roadmap](docs/inference-roadmap.md) changes the Kotoba spec and the Amu
+  compiler, stage by stage, until it can (JUN-804).
 
 Native agent development recovery: [signed Git checkpoints between nodes](docs/git-checkpoint.md)
 (JUN-156; two-host recovery drill, separate from automatic placement).
@@ -86,7 +89,7 @@ Native agent development recovery: [signed Git checkpoints between nodes](docs/g
 
 - **Kernels** are Kotoba. Amu compiles them for the CPU (scalar AArch64
   now; NEON lanes are stage S3) and for GPUs (KIR v2 to SPIR-V; MSL emission
-  exists, a macOS launch route does not yet).
+  exists, but the macOS Metal route so far runs only a hand-written kernel).
 - **Engine**: the forward pass, KV cache and sampler that run those kernels
   against a GGUF on one machine (Mac-native through Amu selfhost: stages S4–S7).
 - **Node**: one machine's identity, heartbeat, qualification and job loop.
