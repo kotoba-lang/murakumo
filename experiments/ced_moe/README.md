@@ -5,14 +5,27 @@ Experimental training code, explicitly requested in Hy by the owner on
 Hy's Python runtime and MLX dependency are authorized for this experiment;
 this does not establish a production runtime or fleet qualification.
 
-**Training is currently blocked before allocation.** The approved fleet
+**Fleet training requires a qualified per-process kernel limit.** The earlier fleet
 sequence256 trial exceeded its requested10GiB ceiling: MLX allocator peak
 11.36GiB and system swap rose by1,212.13MiB. Sequence512 was not started.
 MLX0.32.4 [`set_memory_limit`](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html)
-is a guideline that may be exceeded, not a hard limit. `memory_policy.hy`
-refuses every training preset until a hard memory enforcer is qualified;
-there is no override flag. Existing result files are historical measurements,
-not proof of enforcement. See the [fleet assessment](../../bench/results/2026-11-06-hy-ced-moe/README.md).
+is a guideline that may be exceeded, not a hard limit. The current guard uses
+XNU's fatal active/inactive process-footprint limits, set and read back by a
+one-shot privileged helper for its invoking user's live ancestor process only.
+For a requested10GiB budget, the kernel fatal threshold is9GiB; the1GiB margin
+is below the requested ceiling and is not added capacity. MLX's setting is
+still advisory. This is a kill-on-limit kernel backstop, not a claim that an
+oversized buffer request is rejected before allocation or that all memory
+metrics are interchangeable. No system-wide setting or service is changed.
+
+`check_kernel_limit.hy` must first qualify both CPU and Metal allocations on
+the exact host/OS/helper-source digests. Small children positively allocate,
+then exceed128MiB/384MiB fatal limits and must exit by SIGKILL. A missing,
+stale or failing qualification or setter/readback refuses training before
+model allocation/collective/output. No override flag. The runtime qualification
+file is ignored by Git; it is not a portable approval or shared governor.
+See [guarded evidence](../../bench/results/2026-11-06-hy-ced-moe-guarded/README.md)
+and the [earlier failure](../../bench/results/2026-11-06-hy-ced-moe/README.md).
 
 ## Model implemented
 
@@ -83,8 +96,8 @@ Owner correction on 2026-11-06: do not run training or GPU benchmarks on the
 developer's current Mac. The examples below are for designated fleet training
 hosts only, after admission. The local pilot figures below are historical
 controls completed before that instruction, not permission for further local runs.
-The training command currently refuses before model initialization. Neither
-manual admission nor the time supervisor bypasses the memory-policy refusal.
+The command refuses without host/source qualification and successful fatal
+limit readback. Neither admission nor the time supervisor bypasses that check.
 
 ```sh
 hy experiments/ced_moe/data.hy --output /path/to/task-data
@@ -105,8 +118,11 @@ committed. FineWeb-Edu is a larger follow-up corpus, not a downloaded prerequisi
 The runner uses FP32 optimizer/master state and BF16 or FP32 model weights,
 finite gradient/loss checks, clipping, an advisory MLX memory setting, maximum
 steps, a wall-clock budget checked between steps, and a task-output lock.
-The advisory setting does not enforce the requested ceiling; the current
-pre-allocation refusal supersedes execution until that gap is resolved.
+The advisory setting does not enforce the requested ceiling; the kernel
+backstop is installed before model initialization. The recorded kernel
+process footprint includes compressed memory and is separate from resident
+bytes and MLX active/peak buffer bytes. Record all of them instead of claiming
+MLX peak is total process memory.
 These controls do not qualify the shared resource governor.
 `bounded_trial.hy` supervises only its explicitly launched child process group
 with a wall deadline. It requires an already admitted trial and is not an
@@ -121,9 +137,19 @@ hy experiments/ced_moe/check_memory_policy.hy --data /path/to/task-data \
   --output /path/to/fresh-control-name
 ```
 
-They replace model initialization, graph evaluation, memory setting and
-distributed initialization with failure sentinels, verify the refusal reason,
-and assert that no run directory was created.
+They simulate a failed kernel setter, replace model initialization, graph
+evaluation, memory setting and distributed initialization with failure sentinels,
+verify the refusal reason, and assert that no run directory was created.
+
+The default activation checkpointing recomputes each layer's attention and
+MoE kernels, with floating outputs only. Integer index selections remain
+discrete. Shared K/V, index K and CED source remain differentiable. The
+`check_rematerialization.hy` FP32 control compares every parameter gradient
+and an SGD update with checkpointing disabled/enabled. Initialization and
+FP32-master creation materialize tensors sequentially. The optimizer consumes
+gradient entries after updating each parameter; the training loop releases
+the previous gradient tree before the next forward/backward. MLX cache is zero.
+These reduce peak overlap without changing precision, optimizer or model size.
 
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.

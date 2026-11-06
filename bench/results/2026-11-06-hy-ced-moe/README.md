@@ -3,6 +3,10 @@
 2026-11-06 JST. This is four optimizer steps, not convergence or a useful
 pretrained model. No 3B training or 30B time prediction is established here.
 
+The stop/refusal statements below describe the earlier failure revision.
+Subsequent kernel guard qualification and memory-saving changes are recorded
+separately in [guarded evidence](../2026-11-06-hy-ced-moe-guarded/README.md).
+
 ## Stop condition: sequence256 exceeded the requested ceiling
 
 The owner authorized sequence256 then512, each four SGD steps, requested10GiB,

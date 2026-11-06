@@ -67,13 +67,17 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
    "bf16_weight_bytes" (* 2 total)
    "adamw_training_state_bytes_16_per_parameter" (* 16 total)})
 
-(defn init-parameters [cfg [seed 0] [dtype mx.bfloat16]]
+(defn init-parameters [cfg [seed 0] [dtype mx.bfloat16] [materialize False]]
   (mx.random.seed seed)
-  (dfor [key shape] (.items (shapes cfg)) key
-    (if (in "norm" key)
+  (setv result {})
+  (for [[key shape] (.items (shapes cfg))]
+    (setv value (if (in "norm" key)
       (mx.ones shape :dtype dtype)
       (* (mx.random.normal shape :dtype dtype)
-         (if (= key "embedding") 0.02 (/ 1.0 (math.sqrt (get shape -2))))))))
+         (if (= key "embedding") 0.02 (/ 1.0 (math.sqrt (get shape -2)))))))
+    (when materialize (mx.eval value))
+    (setv (get result key) value))
+  result)
 
 (defn norm [x weight]
   (.astype (* x (mx.rsqrt (+ (mx.mean (mx.square (.astype x mx.float32)) :axis -1 :keepdims True)
@@ -97,8 +101,9 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
   (setv shape [batch (// (+ seq pad) rate) rate dim])
   (mx.sum (* (.reshape kv shape) (mx.softmax (.reshape z shape) :axis 2)) :axis 2))
 
-(defn selected-attention [q main-k main-v local-k local-v indices valid cfg]
-  (setv [batch heads seq dim] q.shape
+(defn attention-kernel [q main-k main-v local-k local-v indices valid cfg]
+  (setv indices (mx.stop-gradient indices) valid (mx.stop-gradient valid)
+        [batch heads seq dim] q.shape
         kk (mx.take-along-axis (mx.expand_dims main-k 1)
                (mx.expand_dims indices -1) :axis 2)
         vv (mx.take-along-axis (mx.expand_dims main-v 1)
@@ -119,7 +124,12 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
   (mx.sum (* (mx.expand_dims (.astype probs values.dtype) -1)
              (mx.expand_dims values 1)) :axis -2))
 
-(defn moe [x p prefix cfg]
+(defn selected-attention [q main-k main-v local-k local-v indices valid cfg]
+  (setv apply (if (.get cfg "activation_checkpoint" False)
+                  (mx.checkpoint attention-kernel) attention-kernel))
+  (apply q main-k main-v local-k local-v indices valid cfg))
+
+(defn moe-kernel [x p prefix cfg]
   (setv [batch seq dim] x.shape flat (.reshape x [-1 dim])
         logits (@ flat (get p (+ prefix "router")))
         probs (mx.softmax (.astype logits mx.float32) :axis -1)
@@ -142,13 +152,19 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
         balance (* (/ e k) (mx.sum (* (mx.stop-gradient loads) (mx.mean probs :axis 0)))))
   #((.reshape (+ selected shared) [batch seq dim]) balance loads))
 
-(defn forward [p tokens cfg]
-  (setv [batch seq] tokens.shape d (get cfg "width") heads (get cfg "heads")
+(defn moe [x p prefix cfg]
+  (setv apply (if (.get cfg "activation_checkpoint" False)
+                  (mx.checkpoint moe-kernel) moe-kernel))
+  (apply x p prefix cfg))
+
+(defn block [p x source main-k main-v main-end index-k selection cfg i mode]
+  (setv [batch seq d] x.shape heads (get cfg "heads")
         hd (get cfg "head_dim") half (// (get cfg "layers") 2)
-        pos (mx.arange seq) x (mx.take (get p "embedding") tokens :axis 0)
-        main-k None main-v None main-end None index-k None selection None
-        source None total-index (mx.array 0.0) total-balance (mx.array 0.0) loads [])
-  (for [[i mode] (enumerate (modes cfg))]
+        pos (mx.arange seq) layer-index (mx.array 0.0)
+        ;; Checkpoint's local VJP also sees integer state inputs. They remain
+        ;; discrete; stop only these, never main K/V, index K or CED source.
+        main-end (if (is main-end None) None (mx.stop-gradient main-end))
+        selection (if (is selection None) None (mx.stop-gradient selection)))
     (setv prefix (+ "blocks." (str i) ".")
           xn (norm x (get p (+ prefix "attn_norm")))
           q (.transpose (.reshape (@ xn (get p (+ prefix "q"))) [batch seq heads hd])
@@ -157,9 +173,6 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
           local (@ xn (get p (+ prefix "local_kv")))
           lk (rope (get local #(... (slice 0 hd))) (.reshape pos [1 seq]))
           lv (get local #(... (slice hd None))))
-    (when (= i half)
-      ;; Do not detach: every decoder Full source contributes to encoder gradients.
-      (setv source x main-k None main-v None index-k None selection None))
     (if (= mode "swa")
       (do
         (setv dummy (mx.zeros [batch 1 hd] :dtype x.dtype)
@@ -196,7 +209,7 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
                 teacher (mx.stop-gradient teacher)
                 log-probs (- masked (mx.logsumexp masked :axis -1 :keepdims True))
                 index-loss (- (mx.mean (mx.sum (* teacher log-probs) :axis -1))))
-          (+= total-index index-loss))
+          (setv layer-index index-loss))
         (setv ends (mx.take main-end selection)
               valid (<= ends (.reshape pos [1 seq 1]))
               out (selected-attention q main-k main-v lk lv selection valid cfg))))
@@ -204,6 +217,22 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
                     (get p (+ prefix "o")))))
     (setv [ff balance load] (moe (norm x (get p (+ prefix "ffn_norm"))) p prefix cfg)
           x (+ x ff))
+  #(x main-k main-v main-end index-k selection layer-index balance load))
+
+(defn forward [p tokens cfg]
+  (setv half (// (get cfg "layers") 2)
+        x (mx.take (get p "embedding") tokens :axis 0)
+        main-k None main-v None main-end None index-k None selection None
+        source None total-index (mx.array 0.0) total-balance (mx.array 0.0) loads [])
+  (for [[i mode] (enumerate (modes cfg))]
+    (when (= i half)
+      ;; CED source and shared KV stay differentiable across checkpoint boundaries.
+      (setv source x main-k None main-v None index-k None selection None))
+    (setv prefix (+ "blocks." (str i) ".")
+          local-params (dfor [k v] (.items p) :if (.startswith k prefix) k v)
+          [x main-k main-v main-end index-k selection index-loss balance load]
+          (block local-params x source main-k main-v main-end index-k selection cfg i mode))
+    (+= total-index index-loss)
     (+= total-balance balance)
     (.append loads load))
   (setv logits (@ (norm x (get p "final_norm")) (.transpose (get p "embedding") [1 0]))

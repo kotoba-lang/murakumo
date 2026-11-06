@@ -9,6 +9,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
 (import model :as m)
 (import data [digest])
 (import memory_policy [require-hard-memory-enforcer])
+(import process_memory [counters])
 
 (defn sample-batch [tokens batch seq rng]
   (setv starts (.integers rng 0 (- (len tokens) seq 1) :size batch)
@@ -97,7 +98,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
     (setv new-master (- (* master (- 1 (* args.lr args.weight_decay))) (* args.lr update))
           new-param (.astype new-master value.dtype))
     (mx.eval new-master new-param)
-    (setv (get (get state "master") key) new-master (get p key) new-param))
+    (setv (get (get state "master") key) new-master (get p key) new-param)
+    (.pop grads key))
   (float grad-norm))
 
 (defn run [args]
@@ -107,6 +109,7 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
         provenance (digest manifest-path)
         cfg (m.config args.preset)
         (get cfg "vocab") (get manifest "vocab_size")
+        (get cfg "activation_checkpoint") args.activation_checkpoint
         report (m.parameter-report cfg)
         budget (int (* args.memory_limit_gib (** 1024 3)))
         dtype (if (= args.dtype "float32") mx.float32 mx.bfloat16)
@@ -120,10 +123,13 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (when (or (<= args.steps 0) (<= args.max_seconds 0) (< args.seq 4)
             (<= args.batch 0) (< args.world_size 1))
     (raise (ValueError "invalid bounded run options")))
-  ;; set_memory_limit below is an advisory graph-evaluation setting. It is not
-  ;; the requested hard ceiling. Refuse every training preset until an actual
-  ;; host/runtime enforcer is qualified; a watchdog cannot prevent overshoot.
-  (require-hard-memory-enforcer budget)
+  ;; Qualify the one-shot kernel setter on this exact host/source first. Its
+  ;; fatal process-footprint threshold is 1GiB below the requested ceiling.
+  (setv memory-enforcer (require-hard-memory-enforcer budget))
+  (when (> minimum (get memory-enforcer "kernel_limit_bytes"))
+    (raise (MemoryError "state-only minimum exceeds the lower kernel fatal threshold")))
+  (print (json.dumps {"phase" "before_model_initialization"
+                      "memory_enforcer" memory-enforcer "process_memory" (counters)}) :flush True)
   (for [split ["train" "validation"]]
     (assert (= (digest (/ corpus (+ split ".bin")))
                (get (get (get manifest "splits") split) "token_file_sha256"))
@@ -133,8 +139,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
     (setv world (mx.distributed.init :strict True :backend args.backend)
           rank (.rank world))
     (assert (= (.size world) args.world_size) "refuse silent singleton distributed run"))
-  (mx.set-memory-limit budget)
-  (mx.set-cache-limit (min (// budget 8) (* 512 (** 1024 2))))
+  (mx.set-memory-limit (- (get memory-enforcer "kernel_limit_bytes") (* 256 (** 1024 2))))
+  (mx.set-cache-limit 0)
   (.mkdir output :parents True :exist_ok True)
   (setv lock (open (/ output f"rank-{rank}.lock") "w"))
   (fcntl.flock (.fileno lock) (| fcntl.LOCK_EX fcntl.LOCK_NB))
@@ -148,8 +154,13 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
             step (get old "step") seen (get old "tokens_seen")
             rng.bit_generator.state (get old "rng_state")))
     (do
-      (setv p (m.init-parameters cfg args.seed dtype)
-            state {"master" (dfor [k v] (.items p) k (.astype v mx.float32))})
+      (setv p (m.init-parameters cfg args.seed dtype :materialize True)
+            state {"master" {}})
+      (for [[k v] (.items p)]
+        (setv master (.astype v mx.float32))
+        (mx.eval master)
+        (setv (get (get state "master") k) master))
+      (setv master None)
       (when (= args.optimizer "adamw")
         (for [kind ["m" "v"]]
           (setv (get state kind) (dfor [k v] (.items p) k (mx.zeros v.shape)))))))
@@ -187,9 +198,14 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
                "step_seconds" (- t2 t0) "gradient_norm" gradient-norm
                "logical_gradient_bytes_cumulative" comm-logical
                "ring_tx_bytes_estimate_cumulative" comm-ring-estimate
-               "mlx_peak_bytes" (mx.get-peak-memory)})
+               "mlx_peak_bytes" (mx.get-peak-memory)
+               "process_memory" (counters)})
     (.append trace row)
     (print (json.dumps row :sort_keys True) :flush True)
+    ;; Do not retain last step's 2GB dense gradient tree while building the
+    ;; next step. Updated entries were consumed above; release remaining refs.
+    (del grads value)
+    (mx.clear-cache)
     (when (= (% step args.eval_every) 0)
       (setv val (ce-value p validation cfg args.seq args.eval_batches args.seed))
       (print (json.dumps {"step" step "validation_ce" val}) :flush True)))
@@ -223,7 +239,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
                 "communication_wire_bytes_note" "requires dedicated interface/counter measurement"
                 "mlx_peak_bytes" (mx.get-peak-memory)
                 "memory_limit_bytes" budget "trace" trace
-                "memory_limit_semantics" "requested ceiling; MLX setting alone is advisory"
+                "memory_enforcer" memory-enforcer "process_memory" (counters)
+                "memory_limit_semantics" "kernel fatal process footprint with1GiB headroom; MLX advisory only"
                 "architecture" "reduced CSA2-style CED/SWA/Sparse MoE; see README"
                 "distributed_mode" (if world "replicated-ddp" "single-host")})
   (.write_text (/ output f"result-rank-{rank}.json") (json.dumps result :indent 2)
@@ -243,7 +260,8 @@ All clocks synchronize MLX so lazy graph construction is not timed as compute.
   (.add_argument parser "--weight-decay" :type float :default 0.01)
   (.add_argument parser "--clip" :type float :default 1.0)
   (.add_argument parser "--memory-limit-gib" :type float :default 2.0
-                 :help "Requested hard ceiling; training refuses until a qualified enforcer exists. MLX alone is advisory.")
+                 :help "Requested ceiling<=10GiB; kernel fatal threshold1GiB lower. Refuse without host/source qualification.")
+  (.add_argument parser "--activation-checkpoint" :action argparse.BooleanOptionalAction :default True)
   (.add_argument parser "--max-seconds" :type float :default 300.0)
   (for [[name default] [["steps" 100] ["seq" 128] ["batch" 1] ["seed" 936]
                         ["eval-every" 20] ["eval-batches" 4] ["world-size" 1]]]
