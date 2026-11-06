@@ -1934,6 +1934,118 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ]
     emb))
 
+;; ---- digest-before-read (slice 37): SHA-256 of the checkpoint file, compared with the pinned digest file ----
+;; The same code as bench/kernels/sha256-metal, as helpers. The expected digest is the first 64 characters of the pinned
+;; digest file (main passes its path); a different digest, or an unreadable file, traps before the checkpoint is read for any other purpose.
+(defn- sha-m32 [] :i64 4294967295)
+(defn- sha-rotr [x :i64 n :i64] :i64
+  (bit-and (bit-or (i64-shift-right x n) (i64-shift-left x (- 32 n))) (sha-m32)))
+(defn- sha-shr [x :i64 n :i64] :i64 (i64-shift-right x n))
+(defn- sha-add [a :i64 b :i64] :i64 (bit-and (+ a b) (sha-m32)))
+
+(defn- sha-ksched [] :vector-i64
+  (vector-i64 1116352408 1899447441 3049323471 3921009573 961987163 1508970993 2453635748 2870763221 3624381080 310598401 607225278 1426881987 1925078388 2162078206 2614888103 3248222580 3835390401 4022224774 264347078 604807628 770255983 1249150122 1555081692 1996064986 2554220882 2821834349 2952996808 3210313671 3336571891 3584528711 113926993 338241895))
+(defn- sha-ksched2 [] :vector-i64
+  (vector-i64 666307205 773529912 1294757372 1396182291 1695183700 1986661051 2177026350 2456956037 2730485921 2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344 430227734 506948616 659060556 883997877 958139571 1322822218 1537002063 1747873779 1955562222 2024104815 2227730452 2361852424 2428436474 2756734187 3204031479 3329325298))
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+(defn- sha-s0 [x :i64] :i64 (bit-xor (bit-xor (sha-rotr x 7) (sha-rotr x 18)) (sha-shr x 3)))
+(defn- sha-s1 [x :i64] :i64 (bit-xor (bit-xor (sha-rotr x 17) (sha-rotr x 19)) (sha-shr x 10)))
+(defn- sha-S0 [x :i64] :i64 (bit-xor (bit-xor (sha-rotr x 2) (sha-rotr x 13)) (sha-rotr x 22)))
+(defn- sha-S1 [x :i64] :i64 (bit-xor (bit-xor (sha-rotr x 6) (sha-rotr x 11)) (sha-rotr x 25)))
+(defn- sha-ch [e :i64 f :i64 g :i64] :i64 (bit-xor (bit-and e f) (bit-and (bit-xor e (sha-m32)) g)))
+(defn- sha-maj [a :i64 b :i64 c :i64] :i64 (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c)))
+
+;; big-endian 32-bit word from four bytes at p
+(defn- sha-be32 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64
+  (let [w (bit-and (peek f p) (sha-m32))]
+    (bit-or (bit-or (i64-shift-left (bit-and w 255) 24) (i64-shift-left (bit-and (i64-shift-right w 8) 255) 16))
+            (bit-or (i64-shift-left (bit-and (i64-shift-right w 16) 255) 8) (bit-and (i64-shift-right w 24) 255)))))
+
+;; one 64-byte sha-block at p: H is updated in place, K the 64 round constants, W a 64-word scratch vector
+(defn- sha-block [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 H :vector-i64 K :vector-i64 W :vector-i64] :i64
+  (let [u0 (loop [t 0]
+             (if (= t 16) 0
+               (let [u (vector-assoc! W t (sha-be32 f (+ p (* t 4))))] (recur (+ t 1)))))
+        u1 (loop [t 16]
+             (if (= t 64) 0
+               (let [v (sha-add (sha-add (sha-s1 (vector-at W (- t 2))) (vector-at W (- t 7)))
+                            (sha-add (sha-s0 (vector-at W (- t 15))) (vector-at W (- t 16))))
+                     u (vector-assoc! W t v)]
+                 (recur (+ t 1)))))]
+    (loop [t 0
+           a (vector-at H 0) b (vector-at H 1) c (vector-at H 2) d (vector-at H 3)
+           e (vector-at H 4) ff (vector-at H 5) g (vector-at H 6) h (vector-at H 7)]
+      (if (= t 64)
+        (let [x0 (vector-assoc! H 0 (sha-add (vector-at H 0) a)) x1 (vector-assoc! H 1 (sha-add (vector-at H 1) b))
+              x2 (vector-assoc! H 2 (sha-add (vector-at H 2) c)) x3 (vector-assoc! H 3 (sha-add (vector-at H 3) d))
+              x4 (vector-assoc! H 4 (sha-add (vector-at H 4) e)) x5 (vector-assoc! H 5 (sha-add (vector-at H 5) ff))
+              x6 (vector-assoc! H 6 (sha-add (vector-at H 6) g)) x7 (vector-assoc! H 7 (sha-add (vector-at H 7) h))]
+          0)
+        (let [t1 (sha-add (sha-add (sha-add h (sha-S1 e)) (sha-add (sha-ch e ff g) (vector-at K t))) (vector-at W t))
+              t2 (sha-add (sha-S0 a) (sha-maj a b c))]
+          (recur (+ t 1) (sha-add t1 t2) a b c (sha-add d t1) e ff g))))))
+
+(defn- sha-hex-digest [H :vector-i64] :string
+  (loop [i 0 s ""]
+    (if (= i 8) s
+      (let [w (vector-at H i)
+            t (loop [k 0 acc ""]
+                (if (= k 8) acc
+                  (let [d (bit-and (i64-shift-right w (- 28 (* 4 k))) 15)]
+                    (recur (+ k 1) (string-concat acc (string-substring "0123456789abcdef" d (+ d 1)))))))]
+        (recur (+ i 1) (string-concat s t))))))
+
+;; hex digest of the file at path, 64 lowercase hex characters
+(defn- sha-file [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 path :string] :string
+  (let [fd (cc f (sym f "open") (cstr f (vector-at R 3) path) 0 0 0 0)
+        u0 (if (< fd 0) (vector-at [0] 1) 0)
+        total (cc f (sym f "lseek") fd 0 2 0 0)
+        chunk 1048576
+        buf (cc f (vector-at R 3) (+ chunk 8) 0 0 0 0)
+        tail (cc f (vector-at R 3) 256 0 0 0 0)
+        K (vector-alloc 64)
+        k1 (loop [t 0] (if (= t 32) 0 (let [u (vector-assoc! K t (vector-at (sha-ksched) t))] (recur (+ t 1)))))
+        k2 (loop [t 0] (if (= t 32) 0 (let [u (vector-assoc! K (+ 32 t) (vector-at (sha-ksched2) t))] (recur (+ t 1)))))
+        W (vector-alloc 64)
+        H (vector-i64 1779033703 3144134277 1013904242 2773480762 1359893119 2600822924 528734635 1541459225)
+        full (* (quot total 64) 64)
+        u1 (loop [off 0]
+             (if (>= off full) 0
+               (let [want (if (< (- full off) chunk) (- full off) chunk)
+                     got (cc f (sym f "pread") fd buf want off 0)
+                     u (if (= got want) 0 (vector-at [0] 1))
+                     w (loop [p 0]
+                         (if (>= p want) 0
+                           (let [b (sha-block f (+ buf p) H K W)] (recur (+ p 64)))))]
+                 (recur (+ off want)))))
+        rem (- total full)
+        z (loop [i 0] (if (= i 256) 0 (let [u (poke8 f (+ tail i) 0)] (recur (+ i 1)))))
+        got2 (if (= rem 0) 0 (cc f (sym f "pread") fd tail rem full 0))
+        u2 (if (= got2 rem) 0 (vector-at [0] 1))
+        u3 (poke8 f (+ tail rem) 128)
+        nb (if (< rem 56) 64 128)
+        bits (* total 8)
+        u4 (loop [i 0]
+             (if (= i 8) 0
+               (let [u (poke8 f (+ tail (+ (- nb 1) (- 0 i))) (bit-and (i64-shift-right bits (* 8 i)) 255))] (recur (+ i 1)))))
+        u5 (sha-block f tail H K W)
+        u6 (if (= nb 128) (sha-block f (+ tail 64) H K W) 0)
+        u7 (cc f (sym f "close") fd 0 0 0 0)]
+    (sha-hex-digest H)))
+
+(defn- sha-verify! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 path :string expect :string] :i64
+  (let [want (cc f (sym f "open") (cstr f (vector-at R 3) expect) 0 0 0 0)
+        u0 (if (< want 0) (vector-at [0] 1) 0)
+        eb (cc f (vector-at R 3) 80 0 0 0 0)
+        z (loop [i 0] (if (= i 80) 0 (let [u (poke8 f (+ eb i) 0)] (recur (+ i 1)))))
+        got0 (cc f (sym f "pread") want eb 64 0 0)
+        u1 (if (= got0 64) 0 (vector-at [0] 1))
+        have (vector-i64-from-bytes (string-to-utf8 (sha-file f R path)))
+        bad (loop [i 0 acc 0]
+              (if (= i 64) acc
+                (recur (+ i 1) (+ acc (if (= (bit-and (peek f (+ eb i)) 255) (vector-at have i)) 0 1)))))]
+    (if (= bad 0) 0 (vector-at [0] 1))))
+
 (defn main [] :i64
   (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
         dlopen (sym f "dlopen")
@@ -1960,6 +2072,8 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
+        ;; digest-before-read: the checkpoint must match the pinned digest before anything is read from it
+        shv (sha-verify! f R "@MODEL@" "@EXPECT@")
         ;; the safetensors file
         fd (cc f (sym f "open") (cstr f (vector-at R 3) "@MODEL@") 0 0 0 0)
         u2 (if (< fd 0) (vector-at [0] 1) 0)
