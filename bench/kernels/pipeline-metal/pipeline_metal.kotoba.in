@@ -571,6 +571,17 @@ kernel void tcalc(device const float *ST [[buffer(0)]], device const float *SG [
   }
   Tb[0] = float(bj);
 }
+kernel void cat_ctx(device const float *L [[buffer(0)]], device const float *G [[buffer(1)]], device float *O [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint r = i / 2048u; uint c = i % 2048u;
+  O[i] = (r < 77u) ? ((c < 768u) ? L[r * 768u + c] : G[r * 1280u + (c - 768u)]) : 0.0f;
+}
+// SDXL's adm vector: the pooled 1280 floats, then Timestep(256) embeddings of [height, width, crop_h, crop_w, target_height, target_width] (cos half, sin half)
+kernel void adm(device const float *Pool [[buffer(0)]], device const float *Sz [[buffer(1)]], device float *O [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  if (i < 1280u) { O[i] = Pool[i]; return; }
+  uint j = i - 1280u; uint v = j / 256u; uint k = j % 256u; uint kk = k % 128u;
+  float arg = Sz[v] * precise::exp(-9.210340371976184f * float(kk) / 128.0f);
+  O[i] = (k < 128u) ? precise::cos(arg) : precise::sin(arg);
+}
 kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[buffer(1)]], device const uint *P [[buffer(2)]], uint j [[thread_position_in_grid]]) {
   uint DIM = P[0]; uint half_ = DIM / 2u;
   float t = Tb[0];
@@ -1196,11 +1207,11 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         S (zeros 125000)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 26) 0
+             (if (= i 28) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
                           (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
-                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" "tcalc")))))))))))))))))))))))))
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" "adm")))))))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
@@ -1240,10 +1251,15 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ;; inputs and shared buffers
         X (fbuf f R S (* 4 hw0)) hlx (half-load f R S "@X@" X (* 4 hw0))
         xin (fbuf f R S (* 4 hw0))
-        ctxfc (fbuf f R S (* 128 2048)) hlc (half-load f R S "@CTXC@" ctxfc (* 77 2048))
-        ctxfu (fbuf f R S (* 128 2048)) hlu (half-load f R S "@CTXU@" ctxfu (* 77 2048))
-        yc (fbuf f R S 2816) hly1 (half-load f R S "@YC@" yc 2816)
-        yu (fbuf f R S 2816) hly2 (half-load f R S "@YU@" yu 2816)
+        ctxfc (fbuf f R S (* 128 2048)) ctxfu (fbuf f R S (* 128 2048))
+        lc (fbuf f R S (* 77 768)) hllc (half-load f R S "@LC@" lc (* 77 768))
+        gc (fbuf f R S (* 77 1280)) hlgc (half-load f R S "@GC@" gc (* 77 1280))
+        pc (fbuf f R S 1280) hlpc (half-load f R S "@PC@" pc 1280)
+        lu (fbuf f R S (* 77 768)) hllu (half-load f R S "@LU@" lu (* 77 768))
+        gu (fbuf f R S (* 77 1280)) hlgu (half-load f R S "@GU@" gu (* 77 1280))
+        pu2 (fbuf f R S 1280) hlpu (half-load f R S "@PU@" pu2 1280)
+        sz (fbuf f R S 8) hlsz (half-load f R S "@SZ@" sz 6)
+        yc (fbuf f R S 2816) yu (fbuf f R S 2816)
         yv (fbuf f R S 2816)
         ctxh (hbuf f R S (* 128 2048))
         ST (fbuf f R S 1024) SG (fbuf f R S 32) Tbuf (fbuf f R S 4)
@@ -1254,6 +1270,10 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         iP (vector-at S 1)
         g1 (emit! S (vector-i64 ST) (vector-i64 0) 19 0 1 1 1)
         g2 (emit! S (vector-i64 ST SG PB) (vector-i64 0 0 0) 20 0 32 1 32)
+        cx1 (emit! S (vector-i64 lc gc ctxfc) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
+        cx2 (emit! S (vector-i64 lu gu ctxfu) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
+        ad1 (emit! S (vector-i64 pc sz yc) (vector-i64 0 0 0) 27 0 2816 1 64)
+        ad2 (emit! S (vector-i64 pu2 sz yu) (vector-i64 0 0 0) 27 0 2816 1 64)
         ctxhc (cvfh! f R S ctxfc 0 (* 128 2048))
         ctxhu (cvfh! f R S ctxfu 0 (* 128 2048))
         iP2 (vector-at S 1)
@@ -1393,6 +1413,10 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ;; run: prep once; per step B, C, U, D, E, U, F; then G
         qa (poke f pp0 (i64-shift-left steps 32))
         w0 (run-range f R queue S iP iP2)
+        dq1 (dump f (contents f R ctxfc) (* (* 77 2048) 4))
+        dq2 (dump f (contents f R yc) (* 2816 4))
+        dq3 (dump f (contents f R ctxfu) (* (* 77 2048) 4))
+        dq4 (dump f (contents f R yu) (* 2816 4))
         w1 (loop [i 0]
              (if (= i steps) 0
                (let [q (poke f pp0 (bit-or i (i64-shift-left steps 32)))

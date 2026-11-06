@@ -4,6 +4,10 @@ import sys, numpy as np
 raw = open(sys.argv[1], "rb").read(); d = sys.argv[2]; lat = int(sys.argv[3]); steps = int(sys.argv[4])
 n = 4 * lat * lat; ni = 3 * (8 * lat) ** 2
 out = []; off = 0; fin = True
+for name, cnt in (("ctx_c", 77 * 2048), ("y_c", 2816), ("ctx_u", 77 * 2048), ("y_u", 2816)):   # the conditioning the program built on the GPU
+    g = np.frombuffer(raw[off:off + 4 * cnt], dtype=np.float32); off += 4 * cnt
+    r = np.fromfile("%s/%s.f32" % (d, name), dtype=np.float32)
+    fin = fin and bool(np.isfinite(g).all()); out.append((name, float(np.max(np.abs(g - r) / np.maximum(1.0, np.abs(r))))))
 for i in range(steps):
     g = np.frombuffer(raw[off:off + 4 * n], dtype=np.float32); off += 4 * n
     r = np.fromfile("%s/expect_step%d.f32" % (d, i), dtype=np.float32)
