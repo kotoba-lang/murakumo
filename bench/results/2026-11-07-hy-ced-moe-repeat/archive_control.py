@@ -92,9 +92,10 @@ def admit(mode):
         candidates=[e for e in catalog() if e['archive_host']==tight and '/control/' not in e['archive_path']]
         assert candidates, ('insufficient local transient space without touching older data',tight,f,needed)
         e=max(candidates,key=lambda e:e['archive_bytes'])
-        destinations=[r for r in range(10) if r!=tight and f[r]>needed[r]+e['archive_bytes']+GIB]
-        assert destinations, ('no safe relocation target',f,needed)
-        move(e,max(destinations,key=lambda r:f[r]-needed[r]))
+        destinations=[r for r in range(10) if r!=tight and f[r]>max(needed[r],4*GIB)+e['archive_bytes']]
+        if not destinations:
+            concentrate_archive_space([max(n,4*GIB) for n in needed]);continue
+        move(e,max(destinations,key=lambda r:f[r]-max(needed[r],4*GIB)))
     raise RuntimeError('disk admission relocation bound')
 
 def qualify_relocation():
@@ -109,10 +110,23 @@ def qualify_relocation():
         assert retired['pass']
         write(HERE/'qualification-relocation.json',{'pass':True,'from_host':0,'to_host':1,'receipt':r,'retired_redundant_archive':retired})
 
+def concentrate_archive_space(minimum_free=None):
+    f=free(); entries=catalog();minimum_free=minimum_free or [4*GIB]*10
+    for source in sorted(range(10),key=lambda r:f[r]-minimum_free[r],reverse=True):
+        for e in sorted((e for e in entries if e['archive_host']==source and '/control/' not in e['archive_path']),key=lambda e:e['archive_bytes']):
+            destinations=[r for r in range(10) if r!=source and f[r]>e['archive_bytes']+minimum_free[r]]
+            if destinations:
+                target=max(destinations,key=lambda r:f[r])
+                move(e,target)
+                print(json.dumps({'space_concentration_from':source,'to':target,'bytes':e['archive_bytes']}),flush=True)
+                return
+    raise RuntimeError('no safe archive destination or verified small-archive relocation; preserve all data')
+
 def condition(seed,mode):
     qualify_relocation()
+    sizes=json.loads((SCRATCH/'storage-plan-input.json').read_text())['checkpoint_bytes']
     for step,phase_ in [(32,'prefix'),(64,'suffix')]:
-        f=free(); assignments=[]
+        pending=[]
         for r in range(10):
             path=f'repeat-v1/s{seed}/{mode}/{phase_}/checkpoint-{step}'
             existing=[e for e in catalog() if e['source']==path and e['source_host']==r]
@@ -121,20 +135,29 @@ def condition(seed,mode):
                 e=existing[0]
                 checked=json.loads(remote(e['archive_host'],PYTHON+' code/repeat_archive.py verify '+e['archive_path'],180))
                 assert checked['archive_sha256']==e['archive_sha256'] and checked['proof']==e['receipt']['proof']
-                continue
-            bound=json.loads((SCRATCH/'storage-plan-input.json').read_text())['checkpoint_bytes'][r]+2*1024*1024
-            eligible=[x for x in range(10) if f[x]>bound+4*GIB]
-            assert eligible
-            target=r if r in eligible else max(eligible,key=lambda x:f[x])
-            f[target]-=bound; assignments.append((r,path,target))
-        with cf.ThreadPoolExecutor(max_workers=10) as ex:
-            futures=[ex.submit(archive_one,r,path,False,target) for r,path,target in assignments]
-            while not all(p.done() for p in futures):
-                for p in futures:
-                    if p.done() and p.exception(): raise p.exception()
-                print(json.dumps({'archiving_seed':seed,'mode':mode,'step':step,'completed':sum(p.done() for p in futures)}),flush=True)
-                time.sleep(20)
-            for p in futures:p.result()
+            else:pending.append((r,path))
+        rounds=0
+        while pending:
+            rounds+=1;assert rounds<=100,'bounded archive admission; never delete older data'
+            f=free();assignments=[]
+            for r,path in pending:
+                bound=sizes[r]+2*1024*1024
+                eligible=[x for x in range(10) if f[x]>bound+4*GIB]
+                if not eligible:continue
+                target=r if r in eligible else max(eligible,key=lambda x:f[x])
+                f[target]-=bound;assignments.append((r,path,target))
+            if not assignments:
+                concentrate_archive_space();continue
+            with cf.ThreadPoolExecutor(max_workers=10) as ex:
+                futures=[ex.submit(archive_one,r,path,False,target) for r,path,target in assignments]
+                while not all(p.done() for p in futures):
+                    for p in futures:
+                        if p.done() and p.exception():raise p.exception()
+                    print(json.dumps({'archiving_seed':seed,'mode':mode,'step':step,'round':rounds,'batch':len(futures),'completed':sum(p.done() for p in futures),'remaining':len(pending)}),flush=True)
+                    time.sleep(20)
+                for p in futures:p.result()
+            finished={r for r,path,target in assignments}
+            pending=[(r,path) for r,path in pending if r not in finished]
 
 if __name__=='__main__':
     if sys.argv[1]=='condition':
