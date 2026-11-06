@@ -24,6 +24,7 @@
     (assert (< (get mem "lifetime_peak_phys_footprint_bytes") (get guard "kernel_limit_bytes")))
     (setv part (get (get r "partition") rank) opts (get r "options")
           kinds (if (= (get opts "optimizer") "adamw") ["master" "m" "v"] ["master"]))
+    (assert (> (get part "parameters") 0))
     (assert (= (get part "optimizer_state_kinds") kinds))
     (assert (= (get part "optimizer_state_bytes") (* 4 (len kinds) (get part "parameters"))))
     (setv updates (- (get r "end_step") (get r "start_step")) io (get r "logical_optimizer_io")
@@ -91,7 +92,8 @@
           opts (dict (get p "options")))
     (.pop opts "state_placement") (.pop opts "state_offload")
     (setv (get cohorts mode) {"options_except_placement" opts "config" (get p "config")
-                              "sources" (get p "source_sha256") "corpus" (get p "data_manifest_sha256")})
+                              "sources" (get p "source_sha256") "corpus" (get p "data_manifest_sha256")
+                              "partition" (get p "partition")})
     (when (.exists (/ root (+ "rank0/ten-readback-" mode ".json")))
       (setv reads (lfor rank (range 10) (read (+ "rank" (str rank) "/ten-readback-" mode ".json"))))
       (for [[rank receipt] (enumerate reads)]
@@ -128,6 +130,23 @@
           (get (get per-rank rank) "host_swap_mib_before") (swap-mib a)
           (get (get per-rank rank) "host_swap_mib_after") (swap-mib b)
           (get (get per-rank rank) "host_swap_mib_delta") (- (swap-mib b) (swap-mib a)))))
+(defn device [snapshot]
+  (setv line (next (gfor line (.splitlines (get snapshot "iostat"))
+                         :if (re.fullmatch r"\s*[0-9.]+\s+[0-9]+\s+[0-9.]+\s*" line) line))
+        fields (.split line))
+  #((datetime.datetime.fromisoformat (get snapshot "utc")) (int (get fields 1)) (float (get fields 2))))
+(for [mode results]
+  (setv observed [])
+  (for [phase ["prefix" "suffix"] rank (range 10)]
+    (setv a (read (+ "rank" (str rank) "/3b-" mode "-" phase "-before.json"))
+          b (read (+ "rank" (str rank) "/3b-" mode "-" phase "-after.json"))
+          [at ac am] (device a) [bt bc bm] (device b)
+          seconds (.total_seconds (- bt at)))
+    (assert (and (> seconds 0) (>= bc ac) (>= bm am)))
+    (.append observed {"rank" rank "phase" phase "window_seconds" seconds
+                      "iostat_reported_MB_delta" (- bm am)
+                      "iostat_transfer_count_delta" (- bc ac)}))
+  (setv (get (get results mode) "device_wide_io_windows") observed))
 (setv summary {"source_commit" "087603fd" "world_size" 10 "placements" results "comparison" comparison
                "developer_mac_model_execution" False "wire_bytes" None
                "timing_scope" "globaltokens once; sum maxrank phase/supervisor durations; phase includes periodicdev; record gaps/readback excluded"

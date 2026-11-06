@@ -59,3 +59,53 @@ bandwidth, zero paging or unchanged inference latency. No service was stopped.
 Initial NVMe-prefix snapshots use executable-name process listings, insufficient
 to identify Hyargument names; own-child completion is proved by supervisors.
 Later snapshots/finalaudit inspect fullarguments only for our ownscript names.
+
+## Paired actual3B result: same2048tokens/32updates per placement
+
+| Metric | NVMe state | RAM state |
+| -- | --: | --: |
+| FixeddevCE initial | 10.625805 | 10.625805 |
+| FixeddevCE final | 8.739648 | 9.042288 |
+| Update-only tok/s | 4.60493 | 9.09449 |
+| Periodicdev-inclusive tok/s | 4.29910 | 7.97905 |
+| Init/eval/save/load-inclusive tok/s | 3.93505 | 7.00156 |
+| Sum maxrank supervisor seconds | 520.45142 | 292.50637 |
+| Max learner footprintGiB | 4.20942 | 8.36196 |
+| Save16 /save32 max seconds | 11.787 /5.226 | 9.543 /5.634 |
+| Actualglobal restore seconds | 4.611 | 2.451 |
+| BoundaryCE error after newprocess restore | 0 | 0 |
+| Logicalboundarypayload globalonce | 254.04096MB | 254.04096MB |
+| WholeNIC TX perrank | 602.65–615.01MB | 602.31–611.20MB |
+| OSprocess diskread all10 | 999.999GB | 2.53230GB |
+| OSprocess diskwrite all10 | 1309.595GB | 84.10473GB |
+
+All10owners pass requested10GiB/fatal9GiB readback and finite updates, all
+children exit0/reaped/no timeout. Exact32inputhash sequences, config, source,
+corpus, partition and options exceptplacement match. FinaldevRAM is0.302639
+higher: both improve, but equalconvergence/causal qualityranking is not proved.
+Do not substitute a better intermediate loss. F32 controls prove the optimizer
+equations withinexisting tolerance; BF16 crossrun trajectory parity remains open.
+
+Observed RAM all-in speed is1.77928x, periodicdev-inclusive1.85598x, with93.5778%
+fewer processdiskwritebytes. RAM updates perform no statefilewrites;84.105GB
+remainingwrites include its two fullglobal durablecheckpoints. Readcache effects
+are included. Rates count globaltokens once and sum each phase's maxranktime;
+recording/CI/Linear gaps and independentreadback are excluded. No repeat/cache
+flush. WholeNIC includes background/control; exclusivewirebytes=null. Logical
+stateaccessbytes inRAM are not diskI/O. SSDdevice-wide snapshots are retained
+and independently parsed, including otheractivity; no NAND/exclusivetransferclaim.
+
+RAM also passes separateprocess readback of both1216file/42,046,905,998byte
+globalgenerations; allhash/header/shape/dtype/owner/source/runtime/data/options/
+seals/globalcertificate and32samplerinputs/globalstep/warmup pass. Eachbackend
+changedweight/master/m/v303/304/303/303shards from16→32. Finalnodeaudits confirm
+all10 ownworkers/supervisors/readers andport25711listeners absent. Allfourcomplete
+snapshots remain onowners; older1B/2/3owner checkpoints/sources are preserved.
+
+Joseph remains head-only and co-located inference server is retained. NVMe
+hostswap grows935.06MiB, RAMhostswap unchanged; othernodes show no growth.
+Do not interpret this fixedorder sharedhost observation as an isolated intrinsic
+backend benchmark or infer unchanged productioninference latency. Currentlinks
+are1Gbps. This qualifies limited10owner/3B placement+restart, not sufficient
+pretraining, Bonsai intelligence, nativeinference integration, elasticresharding
+or30Bcapacity/duration.
