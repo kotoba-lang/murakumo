@@ -1996,10 +1996,8 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         (recur (+ i 1) (string-concat s t))))))
 
 ;; hex digest of the file at path, 64 lowercase hex characters
-(defn- sha-file [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 path :string] :string
-  (let [fd (cc f (sym f "open") (cstr f (vector-at R 3) path) 0 0 0 0)
-        u0 (if (< fd 0) (vector-at [0] 1) 0)
-        total (cc f (sym f "lseek") fd 0 2 0 0)
+(defn- sha-file [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64] :string
+  (let [total (cc f (sym f "lseek") fd 0 2 0 0)
         chunk 1048576
         buf (cc f (vector-at R 3) (+ chunk 8) 0 0 0 0)
         tail (cc f (vector-at R 3) 256 0 0 0 0)
@@ -2029,18 +2027,17 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
              (if (= i 8) 0
                (let [u (poke8 f (+ tail (+ (- nb 1) (- 0 i))) (bit-and (i64-shift-right bits (* 8 i)) 255))] (recur (+ i 1)))))
         u5 (sha-block f tail H K W)
-        u6 (if (= nb 128) (sha-block f (+ tail 64) H K W) 0)
-        u7 (cc f (sym f "close") fd 0 0 0 0)]
+        u6 (if (= nb 128) (sha-block f (+ tail 64) H K W) 0)]
     (sha-hex-digest H)))
 
-(defn- sha-verify! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 path :string expect :string] :i64
+(defn- sha-verify! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 expect :string] :i64
   (let [want (cc f (sym f "open") (cstr f (vector-at R 3) expect) 0 0 0 0)
         u0 (if (< want 0) (vector-at [0] 1) 0)
         eb (cc f (vector-at R 3) 80 0 0 0 0)
         z (loop [i 0] (if (= i 80) 0 (let [u (poke8 f (+ eb i) 0)] (recur (+ i 1)))))
         got0 (cc f (sym f "pread") want eb 64 0 0)
         u1 (if (= got0 64) 0 (vector-at [0] 1))
-        have (vector-i64-from-bytes (string-to-utf8 (sha-file f R path)))
+        have (vector-i64-from-bytes (string-to-utf8 (sha-file f R fd)))
         bad (loop [i 0 acc 0]
               (if (= i 64) acc
                 (recur (+ i 1) (+ acc (if (= (bit-and (peek f (+ eb i)) 255) (vector-at have i)) 0 1)))))]
@@ -2072,11 +2069,11 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
-        ;; digest-before-read: the checkpoint must match the pinned digest before anything is read from it
-        shv (sha-verify! f R "@MODEL@" "@EXPECT@")
-        ;; the safetensors file
+        ;; the safetensors file: opened once, hashed through this descriptor, and every later read uses it too, so replacing
+        ;; the path after the hash (rename over it) cannot change what is read
         fd (cc f (sym f "open") (cstr f (vector-at R 3) "@MODEL@") 0 0 0 0)
         u2 (if (< fd 0) (vector-at [0] 1) 0)
+        shv (sha-verify! f R fd "@EXPECT@")
         lenb (cc f (vector-at R 3) 16 0 0 0 0)
         u3 (cc f (sym f "pread") fd lenb 8 0 0)
         hlen (peek f lenb)

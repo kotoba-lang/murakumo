@@ -75,6 +75,15 @@ if [ "$LAYOUT" = single ]; then
   mutant f16-params-scaled 'D[i] = float(S[i]);' 'D[i] = float(S[i]) * 1.5f;'
   mutant f32-in-f16-file '(if (= dsz 4) 18 35)' '35'
 fi
+# swap after the hash: the program renames a 4 KiB file over the checkpoint path right after the digest check. It reads through the
+# descriptor it hashed, so the render must be unchanged (the clean criteria) while the path now holds the other file. This is run last
+# because it replaces the fixture's checkpoint.
+head -c 4096 /dev/zero | tr '\0' 'z' > "$WK/fx/alt.bin"
+build mswap 'shv (sha-verify! f R fd "'"$WK/fx/model.sha256"'")' "shv (sha-verify! f R fd \"$WK/fx/model.sha256\") swp (cc f (sym f \"rename\") (cstr f (vector-at R 3) \"$WK/fx/alt.bin\") (cstr f (vector-at R 3) \"$WK/fx/model.safetensors\") 0 0 0)"
+sline=$(cmp_ mswap)
+sok=$(echo "$sline" | awk '{ok=1; for(i=1;i<=NF;i++){split($i,a,"="); if(a[1]=="finite"){if(a[2]!=1) ok=0} else if(a[1]=="ids_mismatch"){if(a[2]!=0) ok=0} else if(a[1] ~ /^(step|image)/){if(a[2]>0.05) ok=0} else if(a[1] ~ /^(ctx|y)_/){if(a[2]>0.05) ok=0}}; print ok}')
+swapped=$(wc -c < "$WK/fx/model.safetensors" | tr -d ' ')
+if [ "$swapped" = 4096 ] && [ "$sok" = 1 ]; then echo "swap after hash: path replaced by a 4096-byte file, render unchanged ($sline) (immune)"; else echo "swap after hash: path size $swapped, ok=$sok NOT immune"; fail=1; fi
 # the fixtures are large (up to 2.8 GB): on success the weight files are removed from the build dir unless KEEP=1
 if [ "$fail" = 0 ]; then
   [ "${KEEP:-0}" = 1 ] || rm -f "$WK"/fx/model.safetensors
