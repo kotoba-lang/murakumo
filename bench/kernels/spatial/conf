@@ -1,0 +1,6 @@
+PARAMS="SC=32 SH=8 SW=8 SG=8 SNH=2 SLC=16 SCC=24 SFI=64"
+REPS=3
+TOL=1e-4
+# cross-attention reads its keys from the image tokens instead of the context
+MUT_FROM='(linear ctx wk2 zero k lc cc (nc))'
+MUT_TO='(linear ln wk2 zero k lc cc (nc))'

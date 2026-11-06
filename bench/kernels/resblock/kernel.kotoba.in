@@ -1,0 +1,201 @@
+(ns murakumo.resblock (:export [main]))
+
+;; An SDXL-style ResBlock in f32 composed from the single-kernel slices, as
+;; kernel.c (impl.h) does it:
+;;   a = silu(groupnorm(x));   h1 = conv3x3(a) + linear(silu(temb))[c]
+;;   b = silu(groupnorm(h1));  h2 = conv3x3(b);   out = conv1x1(x) + h2
+;; x is [@CI@, @H@, @W@], out is [@CO@, @H@, @W@], temb is [@TE@], @G@ groups. Every
+;; step is one binary32 operation in the order kernel.c uses; sums run in index
+;; order and padded conv taps are skipped. Values travel as i64 bit patterns in
+;; vectors. The functions take their shapes as arguments so one conv serves 3x3
+;; and 1x1.
+
+(defn- nci [] :i64 @CI@)
+(defn- nco [] :i64 @CO@)
+(defn- hh [] :i64 @H@)
+(defn- ww [] :i64 @W@)
+(defn- ng [] :i64 @G@)
+(defn- nte [] :i64 @TE@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64 add :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-add (f32-mul (i64-to-f32-rounded iv) (fb scale)) (fb add))))]
+        (recur (+ i 1) t)))))
+
+(defn- expb [xb :i64] :i64
+  (let [lim (fb 1118699520)
+        x (f32-max (f32-min (fb xb) lim) (f32-neg lim))
+        fx (f32-add (f32-mul x (fb 1069066811)) (fb 1262485504))
+        k (- (bit-and (f32-to-bits fx) 8388607) 4194304)
+        kf (f32-sub fx (fb 1262485504))
+        r (f32-sub (f32-sub x (f32-mul kf (fb 1060208640))) (f32-mul kf (fb 3109978243)))
+        y0 (f32-add (f32-mul (fb 961571175) r) (fb 985088974))
+        y1 (f32-add (f32-mul y0 r) (fb 1007192328))
+        y2 (f32-add (f32-mul y1 r) (fb 1026206145))
+        y3 (f32-add (f32-mul y2 r) (fb 1042983594))
+        y4 (f32-add (f32-mul y3 r) (fb 1056964608))
+        p (f32-add (f32-add (f32-mul (f32-mul y4 r) r) r) (fb 1065353216))]
+    (bf (f32-mul p (f32-from-bits (i32-wrap (i64-shift-left (+ k 127) 23)))))))
+
+;; silu(v) = v / (exp(-v) + 1), on bit patterns
+(defn- silub [vb :i64] :i64
+  (let [e (f32-add (fb (expb (bf (f32-neg (fb vb))))) (fb 1065353216))]
+    (bf (f32-div (fb vb) e))))
+
+(defn- grp-sum [x :vector-i64 base :i64 n :i64] :i64
+  (loop [i 0 acc 0]
+    (if (= i n) acc
+      (recur (+ i 1) (bf (f32-add (fb acc) (fb (vector-at x (+ base i)))))))))
+
+(defn- grp-sq [x :vector-i64 base :i64 n :i64 meanb :i64] :i64
+  (loop [i 0 acc 0]
+    (if (= i n) acc
+      (let [d (f32-sub (fb (vector-at x (+ base i))) (fb meanb))]
+        (recur (+ i 1) (bf (f32-add (fb acc) (f32-mul d d))))))))
+
+;; y <- silu(groupnorm(x)) over c channels of hw positions, ng groups
+(defn- gn-silu [x :vector-i64 y :vector-i64 c :i64 hw :i64 ga :vector-i64 be :vector-i64] :i64
+  (let [n (* (quot c (ng)) hw)
+        invn (f32-div (fb 1065353216) (i64-to-f32-rounded n))
+        eps (f64-to-f32-rounded 0.00001)]
+    (loop [g 0 z 0]
+      (if (= g (ng)) z
+        (let [base (* g n)
+              meanb (bf (f32-mul (fb (grp-sum x base n)) invn))
+              var (f32-mul (fb (grp-sq x base n meanb)) invn)
+              invb (bf (f32-div (fb 1065353216) (f32-sqrt (f32-add var eps))))
+              w (loop [i 0 zz 0]
+                  (if (= i n) zz
+                    (let [ch (+ (* g (quot c (ng))) (quot i hw))
+                          v0 (f32-mul (f32-sub (fb (vector-at x (+ base i))) (fb meanb)) (fb invb))
+                          v (f32-add (f32-mul v0 (fb (vector-at ga ch))) (fb (vector-at be ch)))
+                          u (vector-assoc! y (+ base i) (silub (bf v)))]
+                      (recur (+ i 1) zz))))]
+          (recur (+ g 1) z))))))
+
+(defn- tap [x :vector-i64 w :vector-i64 acc :i64 wi :i64 xi :i64] :i64
+  (bf (f32-add (fb acc) (f32-mul (fb (vector-at w wi)) (fb (vector-at x xi))))))
+
+(defn- conv-at [x :vector-i64 w :vector-i64 b :vector-i64 ci :i64 ks :i64 co :i64 oy :i64 ox :i64] :i64
+  (let [kk (* ks ks)
+        pad (quot ks 2)
+        taps (* ci kk)]
+    (loop [t 0 acc (vector-at b co)]
+      (if (= t taps) acc
+        (let [i (quot t kk)
+              k (- t (* i kk))
+              ky (quot k ks)
+              kx (- k (* ky ks))
+              yy (- (+ oy ky) pad)
+              xp (- (+ ox kx) pad)]
+          (if (or (or (< yy 0) (>= yy (hh))) (or (< xp 0) (>= xp (ww))))
+            (recur (+ t 1) acc)
+            (recur (+ t 1)
+                   (tap x w acc (+ (* (+ (* co ci) i) kk) k)
+                        (+ (* (+ (* i (hh)) yy) (ww)) xp)))))))))
+
+;; out <- conv(x) + bias, stride 1, padding ks/2, ci -> co channels
+(defn- conv [x :vector-i64 w :vector-i64 b :vector-i64 out :vector-i64 ci :i64 co :i64 ks :i64] :i64
+  (loop [c 0 z 0]
+    (if (= c co) z
+      (let [q (loop [oy 0 zy 0]
+                (if (= oy (hh)) zy
+                  (let [r (loop [ox 0 zx 0]
+                            (if (= ox (ww)) zx
+                              (let [u (vector-assoc! out (+ (* (+ (* c (hh)) oy) (ww)) ox)
+                                                     (conv-at x w b ci ks c oy ox))]
+                                (recur (+ ox 1) zx))))]
+                    (recur (+ oy 1) zy))))]
+        (recur (+ c 1) z)))))
+
+;; tp[c] = bt[c] + sum_k silu(temb[k]) * wt[k*co+c]
+(defn- temb-proj [temb :vector-i64 wt :vector-i64 bt :vector-i64 tp :vector-i64] :i64
+  (loop [c 0 z 0]
+    (if (= c (nco)) z
+      (let [acc (loop [k 0 a (vector-at bt c)]
+                  (if (= k (nte)) a
+                    (recur (+ k 1)
+                           (bf (f32-add (fb a) (f32-mul (fb (silub (vector-at temb k))) (fb (vector-at wt (+ (* k (nco)) c)))))))))
+            u (vector-assoc! tp c acc)]
+        (recur (+ c 1) z)))))
+
+(defn- add-bias [h :vector-i64 tp :vector-i64] :i64
+  (let [hw (* (hh) (ww))]
+    (loop [c 0 z 0]
+      (if (= c (nco)) z
+        (let [q (loop [p 0 zp 0]
+                  (if (= p hw) zp
+                    (let [i (+ (* c hw) p)
+                          u (vector-assoc! h i (bf (f32-add (fb (vector-at h i)) (fb (vector-at tp c)))))]
+                      (recur (+ p 1) zp))))]
+          (recur (+ c 1) z))))))
+
+(defn- add-res [sk :vector-i64 h2 :vector-i64 out :vector-i64] :i64
+  (let [n (* (nco) (* (hh) (ww)))]
+    (loop [i 0 z 0]
+      (if (= i n) z
+        (let [u (vector-assoc! out i (bf (f32-add (fb (vector-at sk i)) (fb (vector-at h2 i)))))]
+          (recur (+ i 1) z))))))
+
+(defn main [] :i64
+  (let [hw (* (hh) (ww))
+        x (vector-alloc (* (nci) hw))
+        temb (vector-alloc (nte))
+        g1 (vector-alloc (nci))
+        b1 (vector-alloc (nci))
+        w1 (vector-alloc (* (* (nco) (nci)) 9))
+        c1 (vector-alloc (nco))
+        wt (vector-alloc (* (nte) (nco)))
+        bt (vector-alloc (nco))
+        g2 (vector-alloc (nco))
+        b2 (vector-alloc (nco))
+        w2 (vector-alloc (* (* (nco) (nco)) 9))
+        c2 (vector-alloc (nco))
+        ws (vector-alloc (* (nco) (nci)))
+        bs (vector-alloc (nco))
+        a (vector-alloc (* (nci) hw))
+        h1 (vector-alloc (* (nco) hw))
+        tp (vector-alloc (nco))
+        bb (vector-alloc (* (nco) hw))
+        h2 (vector-alloc (* (nco) hw))
+        sk (vector-alloc (* (nco) hw))
+        out (vector-alloc (* (nco) hw))
+        s1 (fill x (* (nci) hw) 12345 956301312 0)
+        s2 (fill temb (nte) s1 964689920 0)
+        s3 (fill g1 (nci) s2 931135488 1065353216)
+        s4 (fill b1 (nci) s3 947912704 0)
+        s5 (fill w1 (* (* (nco) (nci)) 9) s4 922746880 0)
+        s6 (fill c1 (nco) s5 947912704 0)
+        s7 (fill wt (* (nte) (nco)) s6 922746880 0)
+        s8 (fill bt (nco) s7 947912704 0)
+        s9 (fill g2 (nco) s8 931135488 1065353216)
+        s10 (fill b2 (nco) s9 947912704 0)
+        s11 (fill w2 (* (* (nco) (nco)) 9) s10 922746880 0)
+        s12 (fill c2 (nco) s11 947912704 0)
+        s13 (fill ws (* (nco) (nci)) s12 922746880 0)
+        s14 (fill bs (nco) s13 947912704 0)]
+    (loop [r 0 c (bit-and s14 (mask48))]
+      (if (= r (reps)) c
+        (let [z1 (gn-silu x a (nci) hw g1 b1)
+              z2 (conv a w1 c1 h1 (nci) (nco) 3)
+              z3 (temb-proj temb wt bt tp)
+              z4 (add-bias h1 tp)
+              z5 (gn-silu h1 bb (nco) hw g2 b2)
+              z6 (conv bb w2 c2 h2 (nco) (nco) 3)
+              z7 (conv x ws bs sk (nci) (nco) 1)
+              z8 (add-res sk h2 out)]
+          (recur (+ r 1)
+                 (loop [i 0 cc c]
+                   (if (= i (* (nco) hw)) cc
+                     (recur (+ i 1) (bit-and (+ (* cc 31) (bit-and (vector-at out i) 4294967295)) (mask48)))))))))))
