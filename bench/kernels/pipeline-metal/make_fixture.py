@@ -93,6 +93,7 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
                         ("first_stage_model.quant_conv.weight", (8, 8, 1, 1)), ("model_ema.decay", ()), ("model_ema.num_updates", ())):
             sd[k_] = (torch.randn(shp, generator=gen) * 0.05).half()
         sd["alphas_cumprod"] = torch.linspace(0.99, 0.01, 1000).float()
+        sd["conditioner.embedders.0.transformer.text_model.embeddings.position_ids"] = torch.arange(77, dtype=torch.int64).reshape(1, 77)   # an int64 buffer a real CLIP-L carries
         for k_ in ("model.diffusion_model.out.0.weight", "model.diffusion_model.out.0.bias", P + "ln_final.weight", P + "ln_final.bias"): sd[k_] = sd[k_].float()
         save_file(sd, os.path.join(d, "model.safetensors"))
     else:

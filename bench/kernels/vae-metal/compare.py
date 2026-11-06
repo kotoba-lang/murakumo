@@ -12,5 +12,6 @@ for name, n in stages:
     g = np.frombuffer(raw[off:off + 4 * n], dtype=np.float32); off += 4 * n
     r = np.fromfile("%s/expect_%s.f32" % (d, name), dtype=np.float32)
     assert g.size == r.size, (name, g.size, r.size)
-    out.append((name, float(np.max(np.abs(g - r) / np.maximum(1.0, np.abs(r)))), bool(np.isfinite(g).all()), float(np.abs(r).max())))
-print(" ".join("%s=%.3e" % (n, e) for n, e, _, _ in out) + "  finite=%d  ref|final|max=%.2f" % (int(all(f for _, _, f, _ in out)), out[-1][3]))
+    out.append((name, float(np.max(np.abs(g - r) / np.maximum(1.0, np.abs(r)))), bool(np.isfinite(g).all()), float(np.abs(r).max()), float(np.max(np.abs(g - r)) / max(1e-30, np.abs(r).max()))))
+print(" ".join("%s=%.3e" % (n, e) for n, e, _, _, _ in out) + "  finite=%d  ref|final|max=%.2f" % (int(all(f for _, _, f, _, _ in out)), out[-1][3]) +
+      " " + " ".join("rel_%s=%.3e" % (n, rl) for n, _, _, _, rl in out) + "  refmax=%.1f" % max(m for _, _, _, m, _ in out))
