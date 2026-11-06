@@ -9,14 +9,15 @@ This is a reduced research design, not a DeepSeek checkpoint reproduction.
 
 (defn config [[name "tiny"]]
   (setv presets
-    {"tiny" [64 4 8 32 4 4 512]
+    {"tiny" [64 12 8 32 4 4 512]
      "small" [256 8 16 128 4 16 32768]
      "1b" [768 16 64 416 12 64 32768]
-     "3b" [1024 24 64 608 16 64 32768]})
+     "3b" [1024 24 64 608 16 64 32768]
+     "30b-target" [3072 32 128 768 48 64 32768]})
   (setv [width layers experts ff heads head-dim vocab] (get presets name))
   {"name" name "width" width "layers" layers "experts" experts
    "ff" ff "heads" heads "head_dim" head-dim "vocab" vocab
-   "top_k" (if (= name "tiny") 2 4) "index_dim" 32
+   "top_k" (cond (= name "tiny") 2 (= name "30b-target") 9 True 4) "index_dim" 32
    "index_top_k" 16 "window" 128 "encoder_compression" 2
    "index_loss_weight" 0.01 "balance_loss_weight" 0.01})
 
