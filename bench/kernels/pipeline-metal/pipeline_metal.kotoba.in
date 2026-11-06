@@ -388,16 +388,16 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
                       device const float *Res [[buffer(3)]], device float *C [[buffer(4)]], device const uint *P [[buffer(5)]],
                       uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
                       uint tid [[thread_index_in_threadgroup]]) {
-  threadgroup half As[64 * 64];
-  threadgroup half Bs[64 * 64];
-  threadgroup float Cs[64 * 64];
+  threadgroup float Cs[128 * 64];
+  threadgroup half *As = (threadgroup half *)Cs;
+  threadgroup half *Bs = (threadgroup half *)(Cs + 64 * 64);
   uint CIN = P[0]; uint COUT = P[1]; uint IH = P[2]; uint IW = P[3];
   uint NP = P[7]; uint NPP = P[8]; uint MODE = P[9];
   uint KD = CIN * 9u;
   uint KDP = ((KD + 63u) / 64u) * 64u;
   bool vec4 = (KD & 3u) == 0u;
   uint HWI = IH * IW;
-  uint m0 = tg.y * 64u;
+  uint m0 = tg.y * 128u;
   uint n0 = tg.x * 64u;
   uint row0 = (sg / 2u) * 32u;
   uint col0 = (sg % 2u) * 32u;
@@ -420,7 +420,7 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
   for (uint k0 = 0u; k0 < KDP; k0 += 64u) {
     if (vec4) {
       for (uint it = 0u; it < 8u; it++) {
-        uint idx4 = tid + it * 128u;
+        uint idx4 = tid + it * 256u;
         uint r = idx4 >> 4;
         uint c = (idx4 & 15u) * 4u;
         uint m = m0 + r;
@@ -429,19 +429,21 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
         if (m < COUT && kc < KD) w = *((device const half4 *)(Wt + m * KD + kc));
         *((threadgroup half4 *)(As + r * 64u + c)) = w;
       }
-    }
-    uint k = k0 + kk0;
-    uint ci = k / 9u;
-    uint tap = k - ci * 9u;
-    for (uint it = 0u; it < 32u; it++) {
-      uint idx = tid + it * 128u;
-      if (!vec4) {
+    } else {
+      for (uint it = 0u; it < 32u; it++) {
+        uint idx = tid + it * 256u;
         uint r = idx >> 6;
         uint c = idx & 63u;
         uint m = m0 + r;
         uint kc = k0 + c;
         As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
       }
+    }
+    uint k = k0 + kk0;
+    uint ci = k / 9u;
+    uint tap = k - ci * 9u;
+    for (uint it = 0u; it < 16u; it++) {
+      uint idx = tid + it * 256u;
       half v = half(0.0f);
       if (k < KD && ((vmask >> tap) & 1u) != 0u) {
         uint ky = tap / 3u;
@@ -449,8 +451,8 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
         v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
       }
       Bs[idx] = v;
-      k += 2u;
-      tap += 2u;
+      k += 4u;
+      tap += 4u;
       if (tap >= 9u) { tap -= 9u; ci += 1u; }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -471,7 +473,7 @@ kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt 
     for (uint j = 0u; j < 4u; j++)
       simdgroup_store(acc[i][j], Cs + (row0 + i * 8u) * 64u + col0 + j * 8u, 64);
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  for (uint idx = tid; idx < 4096u; idx += 128u) {
+  for (uint idx = tid; idx < 8192u; idx += 256u) {
     uint m = m0 + idx / 64u;
     uint p = n0 + idx % 64u;
     if (m < COUT && p < NP) {
@@ -1192,7 +1194,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ow (+ (quot (- (+ iw (* 2 pad)) ks) str) 1)
         np (* oh ow)
         p (pu f R S cin cout ih iw ks str ow np np mode)]
-    (emit! S (vector-i64 xh wh bias res out p) (vector-i64 0 0 boff roff ooff 0) (if (and (= ks 3) (= str 1)) 31 5) 1 (quot (+ np 63) 64) (quot (+ cout 63) 64) 128)))
+    (emit! S (vector-i64 xh wh bias res out p) (vector-i64 0 0 boff roff ooff 0) (if (and (= ks 3) (= str 1)) 31 5) 1 (quot (+ np 63) 64) (if (and (= ks 3) (= str 1)) (quot (+ cout 127) 128) (quot (+ cout 63) 64)) (if (and (= ks 3) (= str 1)) 256 128))))
 
 ;; linear_t: P = {M, K, N, OUTH, RES, ACT}
 (defn- lin! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 a :i64 wh :i64 bias :i64 boff :i64 res :i64 roff :i64
