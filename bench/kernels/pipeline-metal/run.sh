@@ -29,10 +29,15 @@ MC=64; LAT=32; CH=32; STEPS=4
 LAYOUT=${LAYOUT:-hf}
 if [ "$LAYOUT" = single ]; then PRE_L=conditioner.embedders.0.transformer.; PRE_G=conditioner.embedders.1.model.; SCH_G=1; else PRE_L=clip_l.; PRE_G=clip_g.; SCH_G=0; fi
 PYTHONPATH="$STUBS" "$PYC" "$HERE/make_fixture.py" write "$WK/fx" "$COMFY" "$MC" "$LAT" "$CH" "$STEPS" "$TOKDIR" "$LAYOUT" > "$WK/fx.log" 2>&1
+# the pinned digest the program must find in the checkpoint before reading it (here taken from the fixture just written; for a real
+# checkpoint it comes from the source). bad.sha256 differs in the last character: the negative control below.
+shasum -a 256 "$WK/fx/model.safetensors" | cut -c1-64 > "$WK/fx/model.sha256"
+lastc=$(cut -c64 "$WK/fx/model.sha256"); [ "$lastc" = 0 ] && flip=1 || flip=0
+printf "%s%s" "$(cut -c1-63 "$WK/fx/model.sha256")" "$flip" > "$WK/fx/bad.sha256"
 SB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',($CH*4)**-0.5))[0])")
 CFGB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',4.0))[0])")
 build() { # name [from to]
-  sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@PRE_L@#$PRE_L#;s#@PRE_G@#$PRE_G#;s#@SCHEME_L@#0#;s#@SCHEME_G@#$SCH_G#;s#@X@#$WK/fx/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/fx/prompt_c.txt#;s#@PROMPTU@#$WK/fx/prompt_u.txt#;s#@SZ@#$WK/fx/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/$1.kotoba"
+  sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@EXPECT@#$WK/fx/model.sha256#;s#@PRE_L@#$PRE_L#;s#@PRE_G@#$PRE_G#;s#@SCHEME_L@#0#;s#@SCHEME_G@#$SCH_G#;s#@X@#$WK/fx/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/fx/prompt_c.txt#;s#@PROMPTU@#$WK/fx/prompt_u.txt#;s#@SZ@#$WK/fx/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/$1.kotoba"
   if [ -n "${2:-}" ]; then
     FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/$1.kotoba"
   fi
@@ -45,6 +50,10 @@ line=$(cmp_ clean)
 ok=$(echo "$line" | awk '{ok=1; for(i=1;i<=NF;i++){split($i,a,"="); if(a[1]=="finite"){if(a[2]!=1) ok=0} else if(a[1]=="ids_mismatch"){if(a[2]!=0) ok=0} else if(a[1] ~ /^(step|image)/){if(a[2]>0.05) ok=0} else if(a[1] ~ /^(ctx|y)_/){if(a[2]>0.05) ok=0}}; print ok}')
 [ "$ok" = 1 ] || fail=1
 echo "$STEPS Euler steps (2 UNet passes each) + VAE decode, 256 px, $(grep -a -o 'dispatches [0-9]*' "$WK/clean.err" | awk '{print $2}') recorded dispatches: $line $([ "$ok" = 1 ] && echo ok || echo FAIL) process wall $(cat "$WK/clean.sec") s"
+# digest-before-read negative control: the same program pointed at a digest that differs in one character must refuse the checkpoint,
+# so no render output (no "dispatches" line, no image) may exist
+build mbad '/model.sha256' '/bad.sha256'
+if grep -a -q 'dispatches' "$WK/mbad.err"; then echo "digest mismatch: render still ran (NOT refused)"; fail=1; else echo "digest mismatch: checkpoint refused, no render output (detected)"; fi
 mutant() { # label from to
   build "m$1" "$2" "$3"
   line=$(cmp_ "m$1"); worst=$(echo "$line" | awk '{m=0; for(i=1;i<=NF;i++){split($i,a,"="); if((a[1] ~ /^(step|image|ctx|y|ids)/) && a[2]+0>m) m=a[2]+0}; print m}')
