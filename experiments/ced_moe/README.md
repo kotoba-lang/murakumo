@@ -70,6 +70,11 @@ the archived checkout and its local commit were preserved.
 
 ## Public-corpus training pilot
 
+Owner correction on 2026-11-06: do not run training or GPU benchmarks on the
+developer's current Mac. The examples below are for designated fleet training
+hosts only, after admission. The local pilot figures below are historical
+controls completed before that instruction, not permission for further local runs.
+
 ```sh
 hy experiments/ced_moe/data.hy --output /path/to/task-data
 hy experiments/ced_moe/train.hy --data /path/to/task-data --output /path/to/run \
@@ -90,6 +95,10 @@ The runner uses FP32 optimizer/master state and BF16 or FP32 model weights,
 finite gradient/loss checks, clipping, an explicit MLX memory cap, maximum
 steps, a wall-clock budget checked between steps, and a task-output lock.
 These are experiment limits, not qualification of the shared resource governor.
+`bounded_trial.hy` supervises only its explicitly launched child process group
+with a wall deadline. It requires an already admitted trial and is not an
+alternative reservation or admission authority. The CLI's between-step budget
+alone does not enforce a hard deadline during a long kernel or initialization.
 Checkpoint directories are published by rename with component hashes; resume
 rejects changed corpus/config/optimizer options or corrupted tensor files.
 
