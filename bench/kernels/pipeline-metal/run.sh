@@ -53,4 +53,8 @@ mutant size-order 'float arg = Sz[v] *' 'float arg = Sz[5u - v] *'
 mutant vae-residual '(vector-i64 cout cout ih iw 3 1 2))
       (let [xh' '(vector-i64 cout cout ih iw 3 1 1))
       (let [xh'
-[ "$fail" = 0 ] && echo "gate passed, build dir $WK" || { echo "GATE FAILED, build dir $WK"; exit 1; }
+# the fixtures are large (up to 2.8 GB): on success the weight files are removed from the build dir unless KEEP=1
+if [ "$fail" = 0 ]; then
+  [ "${KEEP:-0}" = 1 ] || rm -f "$WK"/fx/model.safetensors
+  echo "gate passed, build dir $WK"
+else echo "GATE FAILED, build dir $WK (weights kept)"; exit 1; fi
