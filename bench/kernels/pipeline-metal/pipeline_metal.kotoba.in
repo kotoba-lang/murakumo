@@ -582,6 +582,30 @@ kernel void adm(device const float *Pool [[buffer(0)]], device const float *Sz [
   float arg = Sz[v] * precise::exp(-9.210340371976184f * float(kk) / 128.0f);
   O[i] = (k < 128u) ? precise::cos(arg) : precise::sin(arg);
 }
+kernel void embed(device const uint *Ids [[buffer(0)]], device const float *Tok [[buffer(1)]], device const float *Pos [[buffer(2)]],
+                  device float *O [[buffer(3)]], device const uint *P [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+  uint H = P[0]; uint T = P[1];
+  uint r = i / H; uint c = i % H;
+  O[i] = (r < T) ? Tok[Ids[r] * H + c] + Pos[r * H + c] : 0.0f;
+}
+// the row of Pr at the first position of the largest token id (the end token): HF CLIP's pooled output
+kernel void pool_row(device const uint *Ids [[buffer(0)]], device const float *Pr [[buffer(1)]], device float *O [[buffer(2)]], device const uint *P [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  uint H = P[0]; uint best = 0u; uint bi = 0u;
+  for (uint r = 0u; r < 77u; r++) { if (Ids[r] > best) { best = Ids[r]; bi = r; } }
+  O[i] = Pr[bi * H + i];
+}
+kernel void ln_f(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]],
+                 device float *O [[buffer(3)]], device const uint *P [[buffer(4)]],
+                 uint r [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                 uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  threadgroup float stat[2];
+  uint NN = P[0];
+  float mean; float inv;
+  ln_row(X, Ga, Be, r * NN, NN, tid, lane, sgi, part, stat, mean, inv);
+  for (uint i = tid; i < NN; i += 128u)
+    O[r * NN + i] = ((X[r * NN + i] - mean) * inv) * Ga[i] + Be[i];
+}
 kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[buffer(1)]], device const uint *P [[buffer(2)]], uint j [[thread_position_in_grid]]) {
   uint DIM = P[0]; uint half_ = DIM / 2u;
   float t = Tb[0];
@@ -1189,6 +1213,97 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
     (if (= st 4) 0 (refuse f R (msg f R cb "error" 0 0 0)))))
 
 
+
+(defn- lname2 [pre :string i :i64 suffix :string] :string
+  (nm pre (nm "text_model.encoder.layers." (nm (string-from-i64 i) (nm "." suffix)))))
+
+;; a CLIP text tower (slice 15) recorded with the shared recorder helpers: ids (77 token ids as uint, in a float-sized buffer) -> pen (float, 128 x HID: the
+;; output of layer NL-2, before the final LayerNorm: what SDXL conditions on); with proj = 1 also the pooled vector (final LayerNorm, text_projection at the
+;; end-token row) into pooled (HID floats)
+(defn- tower! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string ids :i64 NL :i64 HID :i64 HEADS :i64 INTER :i64 ACT :i64
+              pen :i64 pooled :i64 proj :i64] :i64
+  (let [d (vector-at S 3)
+        dummy (vector-at S 7)
+        A (* 128 HID)
+        xa (fbuf f R S A) xb (fbuf f R S A)
+        lnh (hbuf f R S A) qh (hbuf f R S A) kh (hbuf f R S A) vh (hbuf f R S A) ath (hbuf f R S A) f1h (hbuf f R S (* 128 INTER))
+        pemb (pu f R S HID 77 0 0 0 0 0 0 0 0)
+        e0 (emit! S (vector-i64 ids d d xa pemb)
+                  (vector-i64 0 (toff f R S (nm pre "text_model.embeddings.token_embedding.weight")) (toff f R S (nm pre "text_model.embeddings.position_embedding.weight")) 0 0)
+                  28 0 A 1 64)
+        pat (pu f R S 77 HEADS 1 0 0 0 0 0 0 0)
+        pl1 (pu f R S 128 HID INTER 1 0 ACT 0 0 0 0)
+        w (loop [l 0]
+            (if (= l NL) 0
+              (let [n1 (ln! f R S xa 0 (lname2 pre l "layer_norm1.weight") (lname2 pre l "layer_norm1.bias") lnh 128 HID)
+                    wq (cv32! f R S (lname2 pre l "self_attn.q_proj.weight")) wk (cv32! f R S (lname2 pre l "self_attn.k_proj.weight"))
+                    wv (cv32! f R S (lname2 pre l "self_attn.v_proj.weight")) wo (cv32! f R S (lname2 pre l "self_attn.out_proj.weight"))
+                    q1 (linH! f R S lnh wq d (toff f R S (lname2 pre l "self_attn.q_proj.bias")) qh 128 HID HID)
+                    k1 (linH! f R S lnh wk d (toff f R S (lname2 pre l "self_attn.k_proj.bias")) kh 128 HID HID)
+                    v1 (linH! f R S lnh wv d (toff f R S (lname2 pre l "self_attn.v_proj.bias")) vh 128 HID HID)
+                    a1 (emit! S (vector-i64 qh kh vh ath pat) (vector-i64 0 0 0 0 0) 8 1 4 HEADS 128)
+                    o1 (linF! f R S ath wo d (toff f R S (lname2 pre l "self_attn.out_proj.bias")) xa 0 xb 0 128 HID HID 1)
+                    n2 (ln! f R S xb 0 (lname2 pre l "layer_norm2.weight") (lname2 pre l "layer_norm2.bias") lnh 128 HID)
+                    w1 (cv32! f R S (lname2 pre l "mlp.fc1.weight")) w2 (cv32! f R S (lname2 pre l "mlp.fc2.weight"))
+                    m1 (emit! S (vector-i64 lnh w1 d dummy dummy f1h pl1) (vector-i64 0 0 (toff f R S (lname2 pre l "mlp.fc1.bias")) 0 0 0 0)
+                               6 1 (quot INTER 64) 2 128)
+                    m2 (linF! f R S f1h w2 d (toff f R S (lname2 pre l "mlp.fc2.bias")) xb 0 xa 0 128 INTER HID 1)
+                    sn (if (= l (- NL 2)) (emit! S (vector-i64 xa pen) (vector-i64 0 0) 18 0 A 1 64) 0)]
+                (recur (+ l 1)))))]
+    (if (= proj 0) 0
+      (let [fl (ln! f R S xa 0 (nm pre "text_model.final_layer_norm.weight") (nm pre "text_model.final_layer_norm.bias") lnh 128 HID)
+            wp (cv32! f R S (nm pre "text_projection.weight"))
+            pj (fbuf f R S A)
+            pl (linF! f R S lnh wp (vector-at S 6) 0 dummy 0 pj 0 128 HID HID 0)
+            ppo (pu f R S HID 0 0 0 0 0 0 0 0 0)]
+        (emit! S (vector-i64 ids pj pooled ppo) (vector-i64 0 0 0 0) 30 0 HID 1 64)))))
+
+(defn- vae-rec! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 X :i64 lat :i64 CH :i64 scalebits :i64] :i64
+  (let [dbuf (vector-at S 3)
+        dummy (vector-at S 7)
+        L lat
+        zh (cvfh! f R S X 0 (* 4 (* L L)))
+        wpq (cv32! f R S "post_quant_conv.weight")
+        zq (fbuf f R S (* 4 (* L L)))
+        cpq (conv! f R S zh wpq dbuf (toff f R S "post_quant_conv.bias") dummy 0 zq 0 (vector-i64 4 4 L L 1 1 1))
+        zqh (cvfh! f R S zq 0 (* 4 (* L L)))
+        wci2 (cv32! f R S "conv_in.weight")
+        VM (* CH 4)
+        FM (* (* CH 128) (* L L))
+        FA (fbuf f R S FM) FB2 (fbuf f R S FM) V1 (fbuf f R S FM) V2 (fbuf f R S FM)
+        VH0 (hbuf f R S FM) VH1 (hbuf f R S FM)
+        FB (vector-i64 FA FB2)
+        cci (conv! f R S zqh wci2 dbuf (toff f R S "conv_in.bias") dummy 0 FA 0 (vector-i64 4 VM L L 3 1 1))
+        vm1 (resv! f R S "mid.block_1." FA VM VM L L VH0 VH1 V1 V2 FB2)
+        TG (hbuf f R S (* VM (* L L))) TQ (hbuf f R S (* VM (* L L))) TK (hbuf f R S (* VM (* L L))) TV (hbuf f R S (* VM (* L L))) TA (hbuf f R S (* VM (* L L)))
+        FT (fbuf f R S (* VM (* L L)))
+        vm2 (attv! f R S "mid.attn_1." FB2 VM (* L L) scalebits TG TQ TK TV TA FT FA)
+        vm3 (resv! f R S "mid.block_2." FA VM VM L L VH0 VH1 V1 V2 FB2)
+        lv3 (level! f R S "up.3." FB 1 VM VM L VH0 VH1 V1 V2 1)
+        lv2 (level! f R S "up.2." FB lv3 VM VM (* 2 L) VH0 VH1 V1 V2 1)
+        lv1 (level! f R S "up.1." FB lv2 VM (* CH 2) (* 4 L) VH0 VH1 V1 V2 1)
+        lv0 (level! f R S "up.0." FB lv1 (* CH 2) CH (* 8 L) VH0 VH1 V1 V2 0)
+        vog (gn! f R S 2 (vector-at FB lv0) 0 "norm_out.weight" "norm_out.bias" VH0 CH (* 64 (* L L)) 32 897988541)
+        wco (cv32! f R S "conv_out.weight")
+        imgb (fbuf f R S (* 3 (* 64 (* L L))))
+        vco (conv! f R S VH0 wco dbuf (toff f R S "conv_out.bias") dummy 0 imgb 0 (vector-i64 CH 3 (* 8 L) (* 8 L) 3 1 1))
+        ]
+    imgb))
+
+(defn- emb-rec! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 MC :i64 TE :i64 Tbuf :i64 yv :i64] :i64
+  (let [dbuf (vector-at S 3)
+        tvec (fbuf f R S MC) e1 (fbuf f R S TE) te (fbuf f R S TE) l1b (fbuf f R S TE) le (fbuf f R S TE) emb (fbuf f R S TE)
+        pt (pu f R S MC 1140457472 0 0 0 0 0 0 0 0)
+        d0 (emit! S (vector-i64 tvec Tbuf pt) (vector-i64 0 0 0) 23 0 MC 1 64)
+        pm1 (pu f R S MC TE 1 0 0 0 0 0 0 0) pm2 (pu f R S TE TE 0 0 0 0 0 0 0 0) pm3 (pu f R S 2816 TE 1 0 0 0 0 0 0 0)
+        d1 (emit! S (vector-i64 tvec dbuf dbuf e1 pm1) (vector-i64 0 (toff f R S "time_embed.0.weight") (toff f R S "time_embed.0.bias") 0 0) 13 0 TE 1 64)
+        d2 (emit! S (vector-i64 e1 dbuf dbuf te pm2) (vector-i64 0 (toff f R S "time_embed.2.weight") (toff f R S "time_embed.2.bias") 0 0) 13 0 TE 1 64)
+        d3 (emit! S (vector-i64 yv dbuf dbuf l1b pm3) (vector-i64 0 (toff f R S "label_emb.0.0.weight") (toff f R S "label_emb.0.0.bias") 0 0) 13 0 TE 1 64)
+        d4 (emit! S (vector-i64 l1b dbuf dbuf le pm2) (vector-i64 0 (toff f R S "label_emb.0.2.weight") (toff f R S "label_emb.0.2.bias") 0 0) 13 0 TE 1 64)
+        d5 (emit! S (vector-i64 te le emb) (vector-i64 0 0 0) 16 0 TE 1 64)
+        ]
+    emb))
+
 (defn main [] :i64
   (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
         dlopen (sym f "dlopen")
@@ -1204,14 +1319,14 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         u0 (poke f errp 0)
         lib (msg f R dev "newLibraryWithSource:options:error:" (nsstring f R (kernel-source)) 0 errp)
         u1 (if (= lib 0) (refuse f R (peek f errp)) 0)
-        S (zeros 125000)
+        S (zeros 140000)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 28) 0
+             (if (= i 31) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
                           (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
-                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" "adm")))))))))))))))))))))))))))
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" "pool_row"))))))))))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
@@ -1223,7 +1338,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         hlen (peek f lenb)
         hdr (cc f (vector-at R 3) (+ hlen 16) 0 0 0 0)
         u4 (cc f (sym f "pread") fd hdr hlen 8 0)
-        TT (zeros 8192)
+        TT (zeros 16384)
         chk (zeros 2)
         nt (index-header f hdr hlen TT chk)
         total (cc f (sym f "lseek") fd 0 2 0 0)
@@ -1252,12 +1367,14 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         X (fbuf f R S (* 4 hw0)) hlx (half-load f R S "@X@" X (* 4 hw0))
         xin (fbuf f R S (* 4 hw0))
         ctxfc (fbuf f R S (* 128 2048)) ctxfu (fbuf f R S (* 128 2048))
-        lc (fbuf f R S (* 77 768)) hllc (half-load f R S "@LC@" lc (* 77 768))
-        gc (fbuf f R S (* 77 1280)) hlgc (half-load f R S "@GC@" gc (* 77 1280))
-        pc (fbuf f R S 1280) hlpc (half-load f R S "@PC@" pc 1280)
-        lu (fbuf f R S (* 77 768)) hllu (half-load f R S "@LU@" lu (* 77 768))
-        gu (fbuf f R S (* 77 1280)) hlgu (half-load f R S "@GU@" gu (* 77 1280))
-        pu2 (fbuf f R S 1280) hlpu (half-load f R S "@PU@" pu2 1280)
+        idlc (fbuf f R S 128) hli1 (half-load f R S "@IDLC@" idlc 78)
+        idgc (fbuf f R S 128) hli2 (half-load f R S "@IDGC@" idgc 78)
+        idlu (fbuf f R S 128) hli3 (half-load f R S "@IDLU@" idlu 78)
+        idgu (fbuf f R S 128) hli4 (half-load f R S "@IDGU@" idgu 78)
+        idl (fbuf f R S 128) idg (fbuf f R S 128)
+        penL (fbuf f R S (* 128 768)) penG (fbuf f R S (* 128 1280)) poolG (fbuf f R S 1280)
+        lc (fbuf f R S (* 128 768)) gc (fbuf f R S (* 128 1280)) pc (fbuf f R S 1280)
+        lu (fbuf f R S (* 128 768)) gu (fbuf f R S (* 128 1280)) pu2 (fbuf f R S 1280)
         sz (fbuf f R S 8) hlsz (half-load f R S "@SZ@" sz 6)
         yc (fbuf f R S 2816) yu (fbuf f R S 2816)
         yv (fbuf f R S 2816)
@@ -1270,6 +1387,25 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         iP (vector-at S 1)
         g1 (emit! S (vector-i64 ST) (vector-i64 0) 19 0 1 1 1)
         g2 (emit! S (vector-i64 ST SG PB) (vector-i64 0 0 0) 20 0 32 1 32)
+        mA (vector-at S 1)
+        ic1 (emit! S (vector-i64 idlc idl) (vector-i64 0 0) 18 0 78 1 64)
+        ic2 (emit! S (vector-i64 idgc idg) (vector-i64 0 0) 18 0 78 1 64)
+        mIc (vector-at S 1)
+        tl (tower! f R S "clip_l." idl 12 768 12 3072 1 penL dummy 0)
+        mTL (vector-at S 1)
+        tg (tower! f R S "clip_g." idg 32 1280 20 5120 2 penG poolG 1)
+        mTG (vector-at S 1)
+        oc1 (emit! S (vector-i64 penL lc) (vector-i64 0 0) 18 0 (* 128 768) 1 64)
+        oc2 (emit! S (vector-i64 penG gc) (vector-i64 0 0) 18 0 (* 128 1280) 1 64)
+        oc3 (emit! S (vector-i64 poolG pc) (vector-i64 0 0) 18 0 1280 1 64)
+        mOc (vector-at S 1)
+        iu1 (emit! S (vector-i64 idlu idl) (vector-i64 0 0) 18 0 78 1 64)
+        iu2 (emit! S (vector-i64 idgu idg) (vector-i64 0 0) 18 0 78 1 64)
+        mIu (vector-at S 1)
+        ou1 (emit! S (vector-i64 penL lu) (vector-i64 0 0) 18 0 (* 128 768) 1 64)
+        ou2 (emit! S (vector-i64 penG gu) (vector-i64 0 0) 18 0 (* 128 1280) 1 64)
+        ou3 (emit! S (vector-i64 poolG pu2) (vector-i64 0 0) 18 0 1280 1 64)
+        mOu (vector-at S 1)
         cx1 (emit! S (vector-i64 lc gc ctxfc) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
         cx2 (emit! S (vector-i64 lu gu ctxfu) (vector-i64 0 0 0) 26 0 (* 128 2048) 1 64)
         ad1 (emit! S (vector-i64 pc sz yc) (vector-i64 0 0 0) 27 0 2816 1 64)
@@ -1291,15 +1427,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         cat6 (fbuf f R S (* (+ C1 C0) hw0)) cat7 (fbuf f R S (* (* 2 C0) hw0)) cat8 (fbuf f R S (* (* 2 C0) hw0))
         o8 (fbuf f R S (* C0 hw0)) outb (fbuf f R S (* 4 hw0))
         ;; time + label embedding
-        tvec (fbuf f R S MC) e1 (fbuf f R S TE) te (fbuf f R S TE) l1b (fbuf f R S TE) le (fbuf f R S TE) emb (fbuf f R S TE)
-        pt (pu f R S MC 1140457472 0 0 0 0 0 0 0 0)
-        d0 (emit! S (vector-i64 tvec Tbuf pt) (vector-i64 0 0 0) 23 0 MC 1 64)
-        pm1 (pu f R S MC TE 1 0 0 0 0 0 0 0) pm2 (pu f R S TE TE 0 0 0 0 0 0 0 0) pm3 (pu f R S 2816 TE 1 0 0 0 0 0 0 0)
-        d1 (emit! S (vector-i64 tvec dbuf dbuf e1 pm1) (vector-i64 0 (toff f R S "time_embed.0.weight") (toff f R S "time_embed.0.bias") 0 0) 13 0 TE 1 64)
-        d2 (emit! S (vector-i64 e1 dbuf dbuf te pm2) (vector-i64 0 (toff f R S "time_embed.2.weight") (toff f R S "time_embed.2.bias") 0 0) 13 0 TE 1 64)
-        d3 (emit! S (vector-i64 yv dbuf dbuf l1b pm3) (vector-i64 0 (toff f R S "label_emb.0.0.weight") (toff f R S "label_emb.0.0.bias") 0 0) 13 0 TE 1 64)
-        d4 (emit! S (vector-i64 l1b dbuf dbuf le pm2) (vector-i64 0 (toff f R S "label_emb.0.2.weight") (toff f R S "label_emb.0.2.bias") 0 0) 13 0 TE 1 64)
-        d5 (emit! S (vector-i64 te le emb) (vector-i64 0 0 0) 16 0 TE 1 64)
+        emb (emb-rec! f R S MC TE Tbuf yv)
         ;; input_blocks.0 : conv 4 -> C0, skip h0
         xin-h (cvfh! f R S xin 0 (* 4 hw0))
         wci (cv32! f R S "input_blocks.0.0.weight")
@@ -1383,36 +1511,20 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ff1 (emit! S (vector-i64 X outb ec SG PB) (vector-i64 0 0 0 0 0) 22 0 (* 4 hw0) 1 64)
         iF2 (vector-at S 1)
         ;; G: the VAE decoder on the final latent
-        L lat
-        zh (cvfh! f R S X 0 (* 4 (* L L)))
-        wpq (cv32! f R S "post_quant_conv.weight")
-        zq (fbuf f R S (* 4 (* L L)))
-        cpq (conv! f R S zh wpq dbuf (toff f R S "post_quant_conv.bias") dummy 0 zq 0 (vector-i64 4 4 L L 1 1 1))
-        zqh (cvfh! f R S zq 0 (* 4 (* L L)))
-        wci2 (cv32! f R S "conv_in.weight")
-        VM (* CH 4)
-        FM (* (* CH 128) (* L L))
-        FA (fbuf f R S FM) FB2 (fbuf f R S FM) V1 (fbuf f R S FM) V2 (fbuf f R S FM)
-        VH0 (hbuf f R S FM) VH1 (hbuf f R S FM)
-        FB (vector-i64 FA FB2)
-        cci (conv! f R S zqh wci2 dbuf (toff f R S "conv_in.bias") dummy 0 FA 0 (vector-i64 4 VM L L 3 1 1))
-        vm1 (resv! f R S "mid.block_1." FA VM VM L L VH0 VH1 V1 V2 FB2)
-        TG (hbuf f R S (* VM (* L L))) TQ (hbuf f R S (* VM (* L L))) TK (hbuf f R S (* VM (* L L))) TV (hbuf f R S (* VM (* L L))) TA (hbuf f R S (* VM (* L L)))
-        FT (fbuf f R S (* VM (* L L)))
-        vm2 (attv! f R S "mid.attn_1." FB2 VM (* L L) @SCALEBITS@ TG TQ TK TV TA FT FA)
-        vm3 (resv! f R S "mid.block_2." FA VM VM L L VH0 VH1 V1 V2 FB2)
-        lv3 (level! f R S "up.3." FB 1 VM VM L VH0 VH1 V1 V2 1)
-        lv2 (level! f R S "up.2." FB lv3 VM VM (* 2 L) VH0 VH1 V1 V2 1)
-        lv1 (level! f R S "up.1." FB lv2 VM (* CH 2) (* 4 L) VH0 VH1 V1 V2 1)
-        lv0 (level! f R S "up.0." FB lv1 (* CH 2) CH (* 8 L) VH0 VH1 V1 V2 0)
-        vog (gn! f R S 2 (vector-at FB lv0) 0 "norm_out.weight" "norm_out.bias" VH0 CH (* 64 (* L L)) 32 897988541)
-        wco (cv32! f R S "conv_out.weight")
-        imgb (fbuf f R S (* 3 (* 64 (* L L))))
-        vco (conv! f R S VH0 wco dbuf (toff f R S "conv_out.bias") dummy 0 imgb 0 (vector-i64 CH 3 (* 8 L) (* 8 L) 3 1 1))
+        imgb (vae-rec! f R S X lat CH @SCALEBITS@)
         iG2 (vector-at S 1)
         ;; run: prep once; per step B, C, U, D, E, U, F; then G
         qa (poke f pp0 (i64-shift-left steps 32))
-        w0 (run-range f R queue S iP iP2)
+        w0a (run-range f R queue S iP mA)
+        w0b (run-range f R queue S mA mIc)
+        w0c (run-range f R queue S mIc mTL)
+        w0d (run-range f R queue S mTL mTG)
+        w0e (run-range f R queue S mTG mOc)
+        w0f (run-range f R queue S mOc mIu)
+        w0g (run-range f R queue S mIc mTL)
+        w0h (run-range f R queue S mTL mTG)
+        w0i (run-range f R queue S mIu mOu)
+        w0 (run-range f R queue S mOu iP2)
         dq1 (dump f (contents f R ctxfc) (* (* 77 2048) 4))
         dq2 (dump f (contents f R yc) (* 2816 4))
         dq3 (dump f (contents f R ctxfu) (* (* 77 2048) 4))
@@ -1431,7 +1543,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
                      x8 (dump f (contents f R X) (* (* 4 hw0) 4))]
                  (recur (+ i 1)))))
         w2 (run-range f R queue S iF2 iG2)
-        w3 (dump f (contents f R imgb) (* (* 3 (* 64 (* L L))) 4))
+        w3 (dump f (contents f R imgb) (* (* 3 (* 64 (* lat lat))) 4))
         kd (wr-text f R "dispatches ")
         ke (wr-num f R (vector-at S 1))
         kf (wr-text f R "\n")]
