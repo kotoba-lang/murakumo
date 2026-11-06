@@ -1,0 +1,11 @@
+constant uint IH = @H@u;
+constant uint IW = @W@u;
+kernel void op(device const float *X [[buffer(0)]], device const float *B1 [[buffer(1)]], device const float *B2 [[buffer(2)]],
+               device float *O [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  uint ow = 2u * IW;
+  uint oh = 2u * IH;
+  uint x = i % ow;
+  uint y = (i / ow) % oh;
+  uint c = i / (ow * oh);
+  O[i] = X[(c * IH + y / 2u) * IW + x / 2u];
+}

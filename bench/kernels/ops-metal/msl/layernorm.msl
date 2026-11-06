@@ -1,0 +1,26 @@
+constant uint NN = @N@u;
+kernel void op(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]],
+               device float *O [[buffer(3)]], uint r [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+               uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  threadgroup float stat[2];
+  uint base = r * NN;
+  float s = 0.0f;
+  for (uint i = tid; i < NN; i += 128u) s += X[base + i];
+  s = simd_sum(s);
+  if (lane == 0u) part[sgi] = s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[0] = (part[0] + part[1] + part[2] + part[3]) / float(NN);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float mean = stat[0];
+  float q = 0.0f;
+  for (uint i = tid; i < NN; i += 128u) { float d = X[base + i] - mean; q += d * d; }
+  q = simd_sum(q);
+  if (lane == 0u) part[sgi] = q;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[1] = 1.0f / precise::sqrt((part[0] + part[1] + part[2] + part[3]) / float(NN) + 0.00001f);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float inv = stat[1];
+  for (uint i = tid; i < NN; i += 128u)
+    O[base + i] = ((X[base + i] - mean) * inv) * Ga[i] + Be[i];
+}

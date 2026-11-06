@@ -1,0 +1,32 @@
+constant uint C = @C@u;
+constant uint HW = @HW@u;
+constant uint NG = @G@u;
+kernel void op(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]],
+               device float *O [[buffer(3)]], uint g [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+               uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  threadgroup float stat[2];
+  uint n = (C / NG) * HW;
+  uint base = g * n;
+  float s = 0.0f;
+  for (uint i = tid; i < n; i += 128u) s += X[base + i];
+  s = simd_sum(s);
+  if (lane == 0u) part[sgi] = s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[0] = (part[0] + part[1] + part[2] + part[3]) / float(n);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float mean = stat[0];
+  float q = 0.0f;
+  for (uint i = tid; i < n; i += 128u) { float d = X[base + i] - mean; q += d * d; }
+  q = simd_sum(q);
+  if (lane == 0u) part[sgi] = q;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[1] = 1.0f / precise::sqrt((part[0] + part[1] + part[2] + part[3]) / float(n) + 0.00001f);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float inv = stat[1];
+  for (uint i = tid; i < n; i += 128u) {
+    uint ch = g * (C / NG) + i / HW;
+    float v = ((X[base + i] - mean) * inv) * Ga[ch] + Be[ch];
+    O[base + i] = v / (1.0f + precise::exp(-v));
+  }
+}
