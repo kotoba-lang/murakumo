@@ -207,6 +207,8 @@ At 768 px that is ~1.1 TMAC/s overall, the same order as the ~1.3 TMAC/s ComfyUI
 
 **Stage M, slice 12: where the SDXL time goes, and a conv retune (2026-11-06).** Ablating single kernels puts the linear layers at about 0.65 to 0.9 s of a ~1.8 s call at 768 px, the convolution about 0.55 to 0.7 s, attention at noise level, the rest about 0.3 to 0.4 s. The runtime-parameter conv kernel got its pixel decode hoisted, constant-divisor index decode and a 64-wide K tile with vector weight loads; the mini-UNet correctness gate is unchanged (final 1.368e-3) and the SDXL-shaped call is probably modestly faster (about 15 percent at the median at 512 px; not resolved at 768 px under host load) ([record](../bench/results/2026-11-06-conv-tune/README.md)). Next: the linear (f16 GEMM) kernel.
 
+**Stage M, slice 13 (negative result, 2026-11-06).** Staging the linear kernel through threadgroup memory kept the ComfyUI gate unchanged but gave no measurable speedup under host load, so it was not merged ([record](../bench/results/2026-11-06-linear-staging-negative/README.md)). Further tuning of the linear and conv kernels needs a quiet host and the Metal counters, not more guessing.
+
 ## Audio stages
 
 | Stage | What | Gate | Needs |
