@@ -1,0 +1,13 @@
+;; A qualified private FS2 fixture provides register = "0 - 0 - -", over =
+;; 131073 bytes, empty = zero bytes, and no missing file. Separately inject
+;; bad frames, short reads, non-regular metadata, and changing sizes. These
+;; definitions alone do not execute voter recovery or concurrent requests.
+(ns murakumo.lease-register-bounded-cases (:export [test-lease-register-bounded]))
+
+(defn test-lease-register-bounded [root :string] :bool
+  (and (= (ln-load (str root "/register")) "0 - 0 - -")
+       (ln-state-ok? (ln-load (str root "/register")))
+       (= (ln-load (str root "/over")) "")
+       (not (ln-state-ok? (ln-load (str root "/over"))))
+       (= (ln-load (str root "/empty")) "")
+       (not (ln-state-ok? (ln-load (str root "/missing"))))))

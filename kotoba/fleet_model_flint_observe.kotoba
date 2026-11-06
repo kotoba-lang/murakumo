@@ -1,0 +1,65 @@
+;; Untrusted-source observation only. Compose after fleet_model_flint_assets_pack.
+;; The host must provide private exclusive directories, prevent aliases and
+;; concurrent writers, and independently decide whether a resulting pin is
+;; trusted. Hashing real weights requires the qualified resource governor.
+(ns murakumo.fleet-model-flint-observe (:export [model-flint-observe-main]))
+
+(defn- fo-name [id :i64] :string
+  (if (< id 7) (ft-name id) (case id 7 "model.safetensors" 8 "experts.safetensors" "")))
+(defn- fo-row [name :string digest :string size :i64] :string
+  (str "{\"path\":\"" name "\",\"sha256\":\"" digest "\",\"size\":" (ol-dec size) "}"))
+
+;; O and F are path-based; stable metadata is not a substitute for exclusive
+;; ownership or a pinned file descriptor. Empty or uncertain reads refuse.
+(defn- fo-observe-file [source :string id :i64] :string
+  (let [path (str source "/" (fo-name id)) limit (if (< id 7) 16777216 17179869184)
+        entry (if (md-path? path) (typed-cap-call 35 :string :string (ol-frame "O" path "")) "")
+        n (if (md-regular? entry) (ol-size entry limit) -1)
+        before (if (> n 0) (typed-cap-call 35 :string :string (ol-frame "F" path "")) "")]
+    (if (or (not (md-regular? before)) (not (= (ol-size before limit) n))) ""
+      (let [work (s2-work (s2-iv 8)) ok (md-stream path n work)
+            after (typed-cap-call 35 :string :string (ol-frame "F" path ""))]
+        (if (and ok (= before after)) (fo-row (fo-name id) (hex (s2-out work 8)) n) "")))))
+
+(defn- fo-rows [source :string] :string
+  (loop [i 0 out ""]
+    (if (= i 9) out
+      (let [row (fo-observe-file source i)]
+        (if (= row "") "" (recur (+ i 1) (str out (if (= i 0) "" ",") row)))))))
+
+;; The manifest bytes must still match their observed pin before interpreting
+;; its file list. This does not verify every Kapitsa field or unexpected files.
+(defn- fo-manifest-matches? [source :string observation :vector-i64 files :i64] :bool
+  (let [entry (pk-entry observation files ".kapitsa/manifest.json")
+        size (if (>= entry 0) (ol-int observation entry "size") -1)
+        digest (if (>= entry 0) (ol-text observation entry "sha256") "")
+        base (pk-entry observation files "model.safetensors")
+        experts (pk-entry observation files "experts.safetensors")
+        manifest (ma-read (str source "/.kapitsa/manifest.json") 16384)
+        sizes (fp-metadata-sizes observation files)]
+    (and (>= entry 0) (>= base 0) (>= experts 0) (ol-read-ok? manifest)
+         (= (vector-count manifest) size) (= (sha256-hex manifest) digest)
+         (fk-manifest-valid? manifest (ol-int observation base "size")
+                             (ol-int observation experts "size") sizes))))
+
+;; A new observation is evidence for review, not an independently trusted pin.
+;; No output is overwritten or removed after a partial/unknown write.
+(defn model-flint-observe-main [] :i64
+  (let [source (md-arg 0) output (md-arg 1)
+        valid (and (= (md-arg 2) "") (md-path? source) (md-path? output)
+                   (not (= (string-substring source (- (string-length source) 1) (string-length source)) "/"))
+                   (not (ta-overlap? source output)) (mp-mode? source "448" "1")
+                   (mp-mode? (str source "/.kapitsa") "448" "1")
+                   (mp-mode? (ta-parent output) "448" "1") (= (ta-fs "D" output "") "0"))
+        rows (if valid (fo-rows source) "")
+        text (if (not (= rows "")) (str "{\"files\":[" rows "],\"kind\":\"awai.flint-source-observation/1\"}") "")
+        b (if (not (= text "")) (ms-bytes text) (vector-alloc 0))
+        files (if (json-valid? b) (json-member b 0 "files") -1)
+        complete (and valid (>= files 0) (= (json-kind b files) 2) (= (json-count b files) 9)
+                      (fo-manifest-matches? source b files))]
+    (if (not complete) (let [x (md-out "flint-observation/input-or-read-unknown")] 1)
+      (let [saved (ms-write output text)
+            result (if saved (str "flint-observation/untrusted sha256:" (sha256-hex b))
+                     "flint-observation/write-unknown")
+            x (md-out result)]
+        (if saved 0 1)))))

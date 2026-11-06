@@ -1,0 +1,11 @@
+;; Lexical path overlap only; the host must also exclude filesystem aliases.
+(ns murakumo.fleet-model-path-overlap-test (:export [test-model-path-overlap]))
+
+(defn test-model-path-overlap [] :bool
+  (and (ta-overlap? "/layout/" "/layout/out")
+       (ta-overlap? "/layout/out" "/layout/")
+       (ta-overlap? "/layout/" "/layout")
+       (ta-overlap? "/" "/layout")
+       (ta-overlap? "" "/layout")
+       (not (ta-overlap? "/layout" "/layout-other"))
+       (not (ta-overlap? "/layout/" "/other/"))))
