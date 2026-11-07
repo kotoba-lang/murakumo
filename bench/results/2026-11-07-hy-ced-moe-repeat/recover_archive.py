@@ -1,4 +1,4 @@
-"""Reconcile only this study's timed-out archive; never rerun learners."""
+"""Reconcile only this study's interrupted archive; never rerun learners."""
 from archive_control import *
 seed=int(sys.argv[1]);mode=sys.argv[2];base=f'repeat-v1/s{seed}/{mode}'
 assert json.loads((HERE/'qualification-partial-recovery.json').read_text())['pass']
@@ -23,15 +23,15 @@ for host,row in enumerate(audit):
         prepared.append({'host':host,'archive':archive,'source_host':rank,'source':source,'result':r})
 write(HERE/f'seed{seed}-{mode}/archive-recovery-prepared.json',prepared)
 condition(seed,mode)
-retired=[]
-for p in prepared:
-    if not p['result'].get('incomplete_preserved'): continue
+def retire_one(p):
     e=next(e for e in catalog() if e['source']==p['source'] and e['source_host']==p['source_host'])
     full=json.loads(remote(e['archive_host'],PYTHON+' code/repeat_archive.py verify '+e['archive_path'],180));assert full['archive_sha256']==e['archive_sha256']
     full['archive_path']=e['archive_path'];full['archive_host']=e['archive_host']
     receipt='repeat-receipts-v1/retire-partial-'+hashlib.sha256(p['archive'].encode()).hexdigest()[:16]+'.json'
     receipt_on(p['host'],receipt,full)
-    retired.append(json.loads(remote(p['host'],PYTHON+' code/repeat_archive.py retire-partial '+p['archive']+' --receipt '+receipt,180)))
+    return json.loads(remote(p['host'],PYTHON+' code/repeat_archive.py retire-partial '+p['archive']+' --receipt '+receipt,180))
+with cf.ThreadPoolExecutor(max_workers=10) as pool:
+    retired=list(pool.map(retire_one,[p for p in prepared if p['result'].get('incomplete_preserved')]))
 write(HERE/f'seed{seed}-{mode}/archive-interrupted-retired.json',retired)
 entries=[e for e in catalog() if e['source'].startswith(base+'/')];assert len(entries)==20
 write(HERE/f'seed{seed}-{mode}/COMPLETE.json',{'pass':True,'seed':seed,'state_placement':mode,'primary_tokens':4096,'replay_tokens':2048,'full_generations_retained':2,'owner_archives':20,'raw_checkpoint_bytes':sum(e['raw_bytes'] for e in entries),'compressed_archive_bytes':sum(e['archive_bytes'] for e in entries),'interrupted_transfer_reconciled':True,'learner_retries':0})
