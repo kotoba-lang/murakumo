@@ -15,6 +15,11 @@ def receipt_on(rank,name,value):
     remote(rank,PYTHON+' -c '+shlex.quote("import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_text(sys.stdin.read())")+' '+shlex.quote(name),data=json.dumps(value))
 
 def transfer(source,target,path,archive,raw=True):
+    peer_proof=HERE/'qualification-peer.json'
+    if source!=target and peer_proof.exists():
+        assert json.loads(peer_proof.read_text())['pass']
+        from peer_control import transfer_peer
+        return transfer_peer(source,target,path,archive,raw)
     # stdout is binary only, stderr is a bounded stream receipt; no model tensor on manager.
     sourcecmd=(PYTHON+' code/repeat_archive.py stream '+shlex.quote(path)) if raw else ('cat '+shlex.quote(path))
     stderrpath=SCRATCH/('archive-stream-'+hashlib.sha256((str(source)+path+str(target)).encode()).hexdigest()[:16]+'.txt')
