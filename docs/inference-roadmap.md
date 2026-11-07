@@ -1,5 +1,7 @@
 # Roadmap: an inference-first Kotoba and Amu, on Apple silicon
 
+The single plan is now [engine-plan.md](engine-plan.md) (2026-11-07, JUN-1010). This page keeps the S0–S8 detail.
+
 Owner direction, 2026-11-03: plan on the premise that the Kotoba language spec
 and the Amu compiler are themselves optimized for inference, with Kotoba and
 Amu selfhost, built and run directly on this Mac's architecture

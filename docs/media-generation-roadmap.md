@@ -1,5 +1,7 @@
 # Roadmap: image, video and audio generation on Kotoba and Amu selfhost
 
+[engine-plan.md](engine-plan.md) (2026-11-07, JUN-1010) proposes pausing this roadmap and reusing its Metal tier for the LLM engine. This page keeps the record.
+
 Owner direction, 2026-11-06 (JUN-927): move murakumo's image, video and audio
 generation off Python ComfyUI / PyTorch and C++ `sd.cpp`, onto Kotoba built by
 Amu selfhost, running natively on the fleet's nodes. First scope: this design,

@@ -12,7 +12,7 @@ compiled by Amu selfhost. The goal is the fastest decode on the machine it
 runs on, measured in the open. It is not there yet: the poster above is
 today's record, murakumo's bars included.
 
-[Benchmarks](#benchmarks) · [Quick start](#quick-start) · [What murakumo is today](#what-murakumo-is-today) · [How it works](#how-it-works) · [Roadmap](docs/inference-roadmap.md) · [How we measure](docs/benchmarks.md) · [Press kit](docs/assets/brand/README.md)
+[Benchmarks](#benchmarks) · [Quick start](#quick-start) · [What murakumo is today](#what-murakumo-is-today) · [How it works](#how-it-works) · [Plan](docs/engine-plan.md) · [Roadmap](docs/inference-roadmap.md) · [How we measure](docs/benchmarks.md) · [Press kit](docs/assets/brand/README.md)
 
 ## Benchmarks
 
