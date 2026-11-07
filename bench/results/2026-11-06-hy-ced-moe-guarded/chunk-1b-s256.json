@@ -1,0 +1,175 @@
+{
+  "schema": "ced-moe-training-pilot/v1",
+  "config": {
+    "name": "1b",
+    "width": 768,
+    "layers": 16,
+    "experts": 64,
+    "ff": 416,
+    "heads": 12,
+    "head_dim": 64,
+    "vocab": 32768,
+    "top_k": 4,
+    "index_dim": 32,
+    "index_top_k": 16,
+    "window": 128,
+    "encoder_compression": 2,
+    "expert_token_chunk": 64,
+    "index_loss_weight": 0.01,
+    "balance_loss_weight": 0.01,
+    "activation_checkpoint": true
+  },
+  "parameters": {
+    "total_parameters": 1043698432,
+    "routed_parameters": 981467136,
+    "selected_parameters_upper_bound": 123572992,
+    "bf16_weight_bytes": 2087396864,
+    "adamw_training_state_bytes_16_per_parameter": 16699174912
+  },
+  "optimizer": "sgd",
+  "dtype": "bfloat16",
+  "master_offload": "nvme",
+  "offload_io": {
+    "logical_read_bytes": 16699174912,
+    "logical_write_bytes": 20873968640,
+    "checkpoint": false
+  },
+  "host": {
+    "device_name": "Apple M4",
+    "max_recommended_working_set_size": 12713115648,
+    "memory_size": 17179869184,
+    "architecture": "applegpu_g16g",
+    "max_buffer_length": 9534832640,
+    "resource_limit": 499000
+  },
+  "platform": "macOS-26.7.2-arm64-arm-64bit",
+  "hy_version": "1.1.0",
+  "mlx_version": "0.32.4",
+  "world_size": 1,
+  "rank": 0,
+  "data_manifest_sha256": "abbeeeac4e69931808c7a93774f346710a22dfd5d3977136ed49b7198264f82a",
+  "steps": 4,
+  "tokens": 1024,
+  "initial_validation_ce": 10.473758697509766,
+  "final_validation_ce": 10.463567733764648,
+  "training_phase_wall_seconds": 29.75960829097312,
+  "wall_seconds_including_setup_eval_checkpoint": 33.12635829200735,
+  "training_phase_tokens_per_second": 34.40905505166231,
+  "communication_logical_gradient_bytes": 0,
+  "communication_ring_tx_estimated_bytes": 0,
+  "communication_wire_bytes": null,
+  "communication_wire_bytes_note": "requires dedicated interface/counter measurement",
+  "mlx_peak_bytes": 7253135800,
+  "memory_limit_bytes": 10737418240,
+  "trace": [
+    {
+      "step": 1,
+      "tokens_seen": 256,
+      "loss": 10.981794357299805,
+      "forward_backward_seconds": 4.579897207964677,
+      "communication_seconds": 0.0,
+      "optimizer_seconds": 2.727689500025008,
+      "step_seconds": 7.307586707989685,
+      "gradient_norm": 17.503143310546875,
+      "logical_gradient_bytes_cumulative": 0,
+      "ring_tx_bytes_estimate_cumulative": 0,
+      "mlx_peak_bytes": 7252496824,
+      "process_memory": {
+        "resident_bytes": 200949760,
+        "phys_footprint_bytes": 2387035096,
+        "lifetime_peak_phys_footprint_bytes": 7373079392,
+        "disk_read_bytes": 792293376,
+        "disk_write_bytes": 8351047680
+      }
+    },
+    {
+      "step": 2,
+      "tokens_seen": 512,
+      "loss": 11.052970886230469,
+      "forward_backward_seconds": 4.850614624971058,
+      "communication_seconds": 0.0,
+      "optimizer_seconds": 2.6642963340273127,
+      "step_seconds": 7.514910958998371,
+      "gradient_norm": 13.565408706665039,
+      "logical_gradient_bytes_cumulative": 0,
+      "ring_tx_bytes_estimate_cumulative": 0,
+      "mlx_peak_bytes": 7253135800,
+      "process_memory": {
+        "resident_bytes": 201506816,
+        "phys_footprint_bytes": 2428453824,
+        "lifetime_peak_phys_footprint_bytes": 7374373728,
+        "disk_read_bytes": 1593704448,
+        "disk_write_bytes": 12526571520
+      }
+    },
+    {
+      "step": 3,
+      "tokens_seen": 768,
+      "loss": 11.035991668701172,
+      "forward_backward_seconds": 4.405374458001461,
+      "communication_seconds": 0.0,
+      "optimizer_seconds": 2.8852501249639317,
+      "step_seconds": 7.290624582965393,
+      "gradient_norm": 16.788969039916992,
+      "logical_gradient_bytes_cumulative": 0,
+      "ring_tx_bytes_estimate_cumulative": 0,
+      "mlx_peak_bytes": 7253135800,
+      "process_memory": {
+        "resident_bytes": 201457664,
+        "phys_footprint_bytes": 2387608512,
+        "lifetime_peak_phys_footprint_bytes": 7415202656,
+        "disk_read_bytes": 2457456640,
+        "disk_write_bytes": 16702095360
+      }
+    },
+    {
+      "step": 4,
+      "tokens_seen": 1024,
+      "loss": 10.959922790527344,
+      "forward_backward_seconds": 4.694962083012797,
+      "communication_seconds": 0.0,
+      "optimizer_seconds": 2.755413667007815,
+      "step_seconds": 7.450375750020612,
+      "gradient_norm": 15.511675834655762,
+      "logical_gradient_bytes_cumulative": 0,
+      "ring_tx_bytes_estimate_cumulative": 0,
+      "mlx_peak_bytes": 7253135800,
+      "process_memory": {
+        "resident_bytes": 201490432,
+        "phys_footprint_bytes": 2346599360,
+        "lifetime_peak_phys_footprint_bytes": 7415350112,
+        "disk_read_bytes": 3279405056,
+        "disk_write_bytes": 20877619200
+      }
+    }
+  ],
+  "memory_enforcer": {
+    "backend": "xnu-memorystatus-fatal-footprint",
+    "pid": 83355,
+    "uid": 501,
+    "active_limit_mib": 9216,
+    "inactive_limit_mib": 9216,
+    "active_fatal": true,
+    "inactive_fatal": true,
+    "readback_verified": true,
+    "requested_bytes": 10737418240,
+    "kernel_limit_bytes": 9663676416,
+    "safety_reserve_bytes": 1073741824,
+    "qualification_source_sha256": {
+      "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+      "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+      "check_kernel_limit.hy": "4b0726ca40aed85b2876baa9dc9801cce20f9f48b3b029020b69a8618cc9abdb"
+    },
+    "qualification_sha256": "0269a41390df500bab4ba824bb3ef0633559435fc2b23766dcca9bfee08bd8a8"
+  },
+  "process_memory": {
+    "resident_bytes": 112148480,
+    "phys_footprint_bytes": 2261173112,
+    "lifetime_peak_phys_footprint_bytes": 7415350112,
+    "disk_read_bytes": 3279405056,
+    "disk_write_bytes": 20877619200
+  },
+  "memory_limit_semantics": "kernel fatal process footprint with1GiB headroom; MLX advisory only",
+  "architecture": "reduced CSA2-style CED/SWA/Sparse MoE; see README",
+  "distributed_mode": "single-host"
+}
