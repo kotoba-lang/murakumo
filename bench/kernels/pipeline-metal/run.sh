@@ -29,7 +29,7 @@ MC=64; LAT=32; CH=32; STEPS=${STEPS:-4}
 LAYOUT=${LAYOUT:-hf}
 # scheduler (simple, normal, karras) and sampler (euler, dpmpp_2m) of the render; the fixture's oracle uses ComfyUI's own source for the same pair
 export SCHED=${SCHED:-simple} SAMPLER=${SAMPLER:-euler}
-case "$SCHED" in simple) SCHEDN=0;; normal) SCHEDN=1;; karras) SCHEDN=2;; *) echo "unknown SCHED $SCHED"; exit 1;; esac
+case "$SCHED" in simple) SCHEDN=0;; normal) SCHEDN=1;; karras) SCHEDN=2;; exponential) SCHEDN=3;; sgm_uniform) SCHEDN=4;; *) echo "unknown SCHED $SCHED"; exit 1;; esac
 case "$SAMPLER" in euler) SAMPLERN=0;; dpmpp_2m) SAMPLERN=1;; *) echo "unknown SAMPLER $SAMPLER"; exit 1;; esac
 # the conditional prompt mixes ASCII, Japanese, accented Latin, fullwidth forms and an emoji, so the whole path (tokenizer, towers, render) is exercised on non-ASCII text
 # ComfyUI prompt weighting in both prompts: nested and explicit weights, an escaped parenthesis, a weighted special token
@@ -89,6 +89,8 @@ if [ "$SAMPLER" = dpmpp_2m ]; then
   mutant dpmpp-step-ratio 'float r = hl / h;' 'float r = 1.0f;'
 fi
 if [ "$SCHED" = karras ]; then mutant karras-rho 'precise::pow(mx + ramp * (mn - mx), 7.0f)' 'precise::pow(mx + ramp * (mn - mx), 6.0f)'; fi
+if [ "$SCHED" = exponential ]; then mutant exponential-order 'float v = (i < steps / 2u) ? a + float(i) * step : b - float(steps - 1u - i) * step;' 'float v = (i < steps / 2u) ? b + float(i) * step : a - float(steps - 1u - i) * step;'; fi
+if [ "$SCHED" = sgm_uniform ]; then mutant sgm-points 'float step = (0.0f - 999.0f) / float(steps);' 'float step = (0.0f - 999.0f) / float(steps - 1u);'; fi
 if [ "$SCHED" = normal ]; then mutant normal-endpoint 'float step = (steps > 1u) ? (0.0f - 999.0f) / float(steps - 1u) : 0.0f;' 'float step = (steps > 1u) ? (0.0f - 899.0f) / float(steps - 1u) : 0.0f;'; fi
 mutant timestep-reversed '  Tb[0] = float(bj);' '  Tb[0] = float(999u - bj);'
 mutant uncond-context '(vector-i64 ctxhu ctxh) (vector-i64 0 0) 24' '(vector-i64 ctxhc ctxh) (vector-i64 0 0) 24'

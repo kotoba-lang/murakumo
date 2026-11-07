@@ -860,6 +860,29 @@ kernel void sched_karras(device const float *ST [[buffer(0)]], device float *SG 
   float mx = precise::pow(ST[999], 0.14285714285714285f);
   SG[i] = precise::pow(mx + ramp * (mn - mx), 7.0f);
 }
+// ComfyUI's exponential scheduler: exp(linspace(log(sigma_max), log(sigma_min), steps)), then 0
+kernel void sched_exp(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  float a = precise::log(ST[999]);
+  float b = precise::log(ST[0]);
+  float step = (steps > 1u) ? (b - a) / float(steps - 1u) : 0.0f;
+  float v = (i < steps / 2u) ? a + float(i) * step : b - float(steps - 1u - i) * step;
+  SG[i] = precise::exp(v);
+}
+// ComfyUI's sgm_uniform scheduler: the normal scheduler on linspace(999, 0, steps + 1) without its last point, then 0
+kernel void sched_sgm(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  float step = (0.0f - 999.0f) / float(steps);
+  float ts = (i < (steps + 1u) / 2u) ? 999.0f + float(i) * step : 0.0f - float(steps - i) * step;
+  ts = clamp(ts, 0.0f, 999.0f);
+  uint lo = uint(floor(ts)); uint hi = uint(ceil(ts)); float w = ts - floor(ts);
+  float ls = (1.0f - w) * precise::log(ST[lo]) + w * precise::log(ST[hi]);
+  SG[i] = precise::exp(ls);
+}
 // DPM-Solver++(2M) on the guided denoised values: OLD holds the previous step's denoised
 kernel void cfg_dpmpp2m(device float *X [[buffer(0)]], device const float *EU [[buffer(1)]], device const float *EC [[buffer(2)]], device const float *SG [[buffer(3)]],
                         device const uint *P [[buffer(4)]], device float *OLD [[buffer(5)]], uint i [[thread_position_in_grid]]) {
@@ -1518,7 +1541,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
   (let [d (vector-at S 3)
         z (vector-at S 6)
         fi (* C 4)
-        rows (if (< hw (vector-at S 60)) (vector-at S 60) hw)
+        rows (if (< hw (vector-at S 62)) (vector-at S 62) hw)
         ln-h (hbuf f R S (* hw C))
         q-h (hbuf f R S (* rows C)) k-h (hbuf f R S (* rows C)) v-h (hbuf f R S (* rows C)) at-h (hbuf f R S (* hw C))
         n1 (ln! f R S tin 0 (nm b "norm1.weight") (nm b "norm1.bias") ln-h hw C)
@@ -1531,8 +1554,8 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         n2 (ln! f R S t1 0 (nm b "norm2.weight") (nm b "norm2.bias") ln-h hw C)
         wq2 (cvl! f R S (nm b "attn2.to_q.weight") C C) wk2 (cvl! f R S (nm b "attn2.to_k.weight") C 2048)
         wv2 (cvl! f R S (nm b "attn2.to_v.weight") C 2048) wo2 (cvl! f R S (nm b "attn2.to_out.0.weight") C C)
-        q2 (linH! f R S ln-h wq2 z 0 q-h hw C C) k2 (linH! f R S ctxh wk2 z 0 k-h (vector-at S 60) 2048 C) v2 (linH! f R S ctxh wv2 z 0 v-h (vector-at S 60) 2048 C)
-        a2 (attn! f R S q-h k-h v-h at-h (vector-at S 61) nh hw)
+        q2 (linH! f R S ln-h wq2 z 0 q-h hw C C) k2 (linH! f R S ctxh wk2 z 0 k-h (vector-at S 62) 2048 C) v2 (linH! f R S ctxh wv2 z 0 v-h (vector-at S 62) 2048 C)
+        a2 (attn! f R S q-h k-h v-h at-h (vector-at S 63) nh hw)
         t2 (fbuf f R S (* hw C))
         o2 (linF! f R S at-h wo2 d (toff f R S (nm b "attn2.to_out.0.bias")) t1 0 t2 0 hw C C 1)
         n3 (ln! f R S t2 0 (nm b "norm3.weight") (nm b "norm3.bias") ln-h hw C)
@@ -2851,11 +2874,11 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         S (zeros 152000)
         s2 (vector-assoc! S 2 dev)
         pp (loop [i 0]
-             (if (= i 50) 0
+             (if (= i 52) 0
                (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
                           (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
                           (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
-                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" (if (= i 32) "cvt32h_t" (if (= i 33) "cph" (if (= i 34) "cph_t" (if (= i 35) "h2f" (if (= i 36) "amax_part" (if (= i 37) "amax_fin" (if (= i 38) "cvfh_sc" (if (= i 39) "upsample_hs" (if (= i 40) "axpb" (if (= i 41) "gn_psum" (if (= i 42) "gn_fin" (if (= i 43) "gn_apply" (if (= i 44) "blend_l" (if (= i 45) "blend_g" (if (= i 46) "embov" (if (= i 47) "sched_normal" (if (= i 48) "sched_karras" "cfg_dpmpp2m")))))))))))))))))))))))))))))))))))))))))))))))))
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" (if (= i 32) "cvt32h_t" (if (= i 33) "cph" (if (= i 34) "cph_t" (if (= i 35) "h2f" (if (= i 36) "amax_part" (if (= i 37) "amax_fin" (if (= i 38) "cvfh_sc" (if (= i 39) "upsample_hs" (if (= i 40) "axpb" (if (= i 41) "gn_psum" (if (= i 42) "gn_fin" (if (= i 43) "gn_apply" (if (= i 44) "blend_l" (if (= i 45) "blend_g" (if (= i 46) "embov" (if (= i 47) "sched_normal" (if (= i 48) "sched_karras" (if (= i 49) "cfg_dpmpp2m" (if (= i 50) "sched_exp" "sched_sgm")))))))))))))))))))))))))))))))))))))))))))))))))))
                      p (pso f R dev lib name)
                      u (vector-assoc! S (+ (oPS) i) p)]
                  (recur (+ i 1)))))
@@ -2914,7 +2937,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ;; the context length: both prompts are repeated to the least common multiple of their block counts (attention over a repeated sequence is the same)
         LL (lcm-blocks tk1 tk3)
         RC (* 64 (quot (+ (* 77 LL) 63) 64))
-        ss1 (vector-assoc! S 60 RC) ss2 (vector-assoc! S 61 (* 77 LL))
+        ss1 (vector-assoc! S 62 RC) ss2 (vector-assoc! S 63 (* 77 LL))
         idl (fbuf f R S 128) idg (fbuf f R S 128)
         penL (fbuf f R S (* 128 768)) penG (fbuf f R S (* 128 1280)) poolG (fbuf f R S 1280)
         lcx (fbuf f R S (* 320 768)) gc (fbuf f R S (* 320 1280)) pc (fbuf f R S 1280)
@@ -2930,7 +2953,7 @@ kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[bu
         ;; prep segment: sigma table, schedule, half copies of the two contexts
         iP (vector-at S 1)
         g1 (emit! S (vector-i64 ST) (vector-i64 0) 19 0 1 1 1)
-        g2 (emit! S (vector-i64 ST SG PB) (vector-i64 0 0 0) (if (= @SCHED@ 1) 47 (if (= @SCHED@ 2) 48 20)) 0 32 1 32)
+        g2 (emit! S (vector-i64 ST SG PB) (vector-i64 0 0 0) (if (= @SCHED@ 1) 47 (if (= @SCHED@ 2) 48 (if (= @SCHED@ 3) 50 (if (= @SCHED@ 4) 51 20)))) 0 32 1 32)
         mA (vector-at S 1)
         mT0 (vector-at S 1)
         tl (tower! f R S "@PRE_L@" idl 12 768 12 3072 1 penL dummy 0 @SCHEME_L@ (vector-at WB 11) (vector-at WB 9))
