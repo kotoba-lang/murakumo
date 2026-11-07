@@ -111,16 +111,18 @@ def write(d, comfy_src, mc, lat, ch, steps, tokdir, layout="hf"):
         for n in ast.parse(src).body:
             if isinstance(n, ast.FunctionDef) and n.name in names: out[n.name] = ast.get_source_segment(src, n)
         return out
-    sdr = grab("/comfy/samplers.py", {"simple_scheduler", "normal_scheduler"}); kd = grab("/comfy/k_diffusion/sampling.py", {"to_d", "sample_euler", "sample_dpmpp_2m", "get_sigmas_karras", "append_zero"}); ut = grab("/comfy/k_diffusion/utils.py", {"append_dims"})
+    sdr = grab("/comfy/samplers.py", {"simple_scheduler", "normal_scheduler"}); kd = grab("/comfy/k_diffusion/sampling.py", {"to_d", "sample_euler", "sample_dpmpp_2m", "get_sigmas_karras", "get_sigmas_exponential", "append_zero"}); ut = grab("/comfy/k_diffusion/utils.py", {"append_dims"})
     import math; ns = {"torch": torch, "math": math}; exec(sdr["simple_scheduler"], ns); exec(sdr["normal_scheduler"], ns)
     class U: pass
     u = U(); uns = {"torch": torch}; exec(ut["append_dims"], uns); u.append_dims = uns["append_dims"]
-    kns = {"torch": torch, "trange": trange, "utils": u}; exec(kd["to_d"], kns); exec(kd["sample_euler"], kns); exec(kd["sample_dpmpp_2m"], kns); exec(kd["append_zero"], kns); exec(kd["get_sigmas_karras"], kns)
+    kns = {"torch": torch, "math": math, "trange": trange, "utils": u}; exec(kd["to_d"], kns); exec(kd["sample_euler"], kns); exec(kd["sample_dpmpp_2m"], kns); exec(kd["append_zero"], kns); exec(kd["get_sigmas_karras"], kns); exec(kd["get_sigmas_exponential"], kns)
     # the scheduler and sampler under test (ComfyUI's own source text): simple / normal / karras, euler / dpmpp_2m
     sched = os.environ.get("SCHED", "simple"); sampler = os.environ.get("SAMPLER", "euler")
     if sched == "simple": sigmas = ns["simple_scheduler"](msd, steps)
     elif sched == "normal": sigmas = ns["normal_scheduler"](msd, steps)
     elif sched == "karras": sigmas = kns["get_sigmas_karras"](n=steps, sigma_min=float(msd.sigma_min), sigma_max=float(msd.sigma_max))
+    elif sched == "exponential": sigmas = kns["get_sigmas_exponential"](n=steps, sigma_min=float(msd.sigma_min), sigma_max=float(msd.sigma_max))
+    elif sched == "sgm_uniform": sigmas = ns["normal_scheduler"](msd, steps, sgm=True)
     else: raise SystemExit("unknown scheduler " + sched)
     # the conditioning, as ComfyUI builds it for SDXL: the two towers' penultimate states concatenated L then G (SDXLClipModel.encode_token_weights),
     # the pooled vector of the G tower, and SDXL.encode_adm (pooled, then Timestep(256) embeddings of height, width, crop_h, crop_w, target_height,
