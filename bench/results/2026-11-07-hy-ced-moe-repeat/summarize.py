@@ -29,6 +29,8 @@ def group(seed,mode,phase):
             assert io['read_bytes'][k]==34*sb #32 updates + initial/final fingerprints
             assert r['fingerprint_state_reads']['initial'][k]==r['fingerprint_state_reads']['final'][k]==sb
             assert io['write_bytes'][k]==(33 if phase=='prefix' else 32)*sb
+            if phase=='prefix':assert io['restore_file_bytes'][k]==0
+            else:assert io['restore_file_bytes'][k]>sb
         assert len(r['trace'])==32 and r['global_training_tokens_counted_once']==2048
         assert all(math.isfinite(x['objective']) and math.isfinite(x['global_gradient_norm']) and x['learning_rate']==.0003*min(1,x['step']/4) for x in r['trace'])
         assert r['trace'][0]['first_update_gradient_sha256'] and all(x['first_update_gradient_sha256'] is None for x in r['trace'][1:])
@@ -79,6 +81,8 @@ for seed in [936,937,938]:
                 windows.append({'rank':rank,'phase':phase_,'start_utc':aa['utc'],'end_utc':bb['utc'],'device_wide_reported_MB_delta':bm-am,'device_wide_transfer_count_delta':bc-ac,'host_swap_mib_delta':swap(bb)-swap(aa)})
         r['device_wide_io_windows']=windows
         checks=[read(f'phases/actual-s{seed}-{mode}-readback/rank{i}.json') for i in range(10)]
+        check_sup=[read(f'phases/actual-s{seed}-{mode}-readback/rank{i}-supervisor.json') for i in range(10)]
+        assert all(x['exit_status']==0 and x['child_reaped'] and not x['timed_out'] for x in check_sup)
         assert all(x['pass'] and x['sampler_states_exact'] and x['training_inputs_exact'] and x['boundary_ce_exact'] and x['optimizer_step_schedule_exact'] for x in checks)
         assert sum(x['owned_tensor_shards_per_generation'] for x in checks)==1216
         r['checkpoint_readback']={'files_per_generation':1216,'tensor_bytes_per_generation':[sum(x['file_bytes_per_generation'][i] for x in checks) for i in range(2)],'changed_shards_32_to_64':{k:sum(x['changed_shards_32_to_64'][k] for x in checks) for k in KINDS},'all_file_headers_hashes_global_seals_checked':True}

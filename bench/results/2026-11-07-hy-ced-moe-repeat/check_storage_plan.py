@@ -6,7 +6,8 @@ inputs=json.loads((a.SCRATCH/'storage-plan-input.json').read_text())
 space=[x for x in json.loads((root/'seed936-ram/disk-admission.json').read_text())['free_bytes']]
 initial=sum(space);entries=[];events=[];lock=threading.Lock()
 raw=inputs['checkpoint_bytes']
-observed=json.loads((root/'archive-catalog.json').read_text())
+observed=[e for e in json.loads((root/'archive-catalog.json').read_text()) if e['source'].startswith('repeat-v1/s936/ram/')]
+assert len(observed)==20
 compressed=[round(sum(e['archive_bytes'] for e in observed if e['source_host']==r)/2) for r in range(10)]
 
 def no_network(*args,**kwargs):raise AssertionError('simulation cannot access SSH')
