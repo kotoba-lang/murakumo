@@ -1,0 +1,119 @@
+// 3x3, stride 1, pad 1 implicit-GEMM convolution specialised from the general `conv` kernel (stage M slices 23 and 30): the 9 tap validity bits and the pixel
+// offset are computed once per thread, the (channel, tap) index advances incrementally instead of dividing per element, and a threadgroup of 8 simdgroups (256
+// threads) computes 128 output channels x 64 pixels so the gathered input tile, the expensive part, is reused for twice the channels of the 64 x 64 first version
+// (about 40 percent less GPU time). A 128-channel tile with only 4 simdgroups (each 64 x 32) was 4 to 5 times SLOWER (register pressure). Same arguments and
+// epilogue as `conv`; requires OW == IW and NP == IH * IW (stride 1, pad 1). The next tile's gather loads are issued before the current tile's matrix multiplies and stored to threadgroup memory at the top of the next iteration (software pipelining; about 10 to 15 percent faster). Dispatch with 256 threads per threadgroup and grid y = ceil(COUT / 128).
+kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt [[buffer(1)]], device const float *Bias [[buffer(2)]],
+                      device const float *Res [[buffer(3)]], device float *C [[buffer(4)]], device const uint *P [[buffer(5)]],
+                      uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                      uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float Cs[128 * 64];
+  threadgroup half *As = (threadgroup half *)Cs;
+  threadgroup half *Bs = (threadgroup half *)(Cs + 64 * 64);
+  uint CIN = P[0]; uint COUT = P[1]; uint IH = P[2]; uint IW = P[3];
+  uint NP = P[7]; uint NPP = P[8]; uint MODE = P[9];
+  uint KD = CIN * 9u;
+  uint KDP = ((KD + 63u) / 64u) * 64u;
+  bool vec4 = (KD & 3u) == 0u;
+  uint HWI = IH * IW;
+  uint m0 = tg.y * 128u;
+  uint n0 = tg.x * 64u;
+  uint row0 = (sg / 2u) * 32u;
+  uint col0 = (sg % 2u) * 32u;
+  simdgroup_float8x8 acc[4][4];
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  uint pg = n0 + (tid & 63u);
+  bool pok = pg < NP;
+  int oy = int(pg / IW);
+  int ox = int(pg % IW);
+  uint vmask = 0u;
+  for (uint tap = 0u; tap < 9u; tap++) {
+    int yy = oy + int(tap / 3u) - 1;
+    int xx = ox + int(tap % 3u) - 1;
+    if (pok && yy >= 0 && yy < int(IH) && xx >= 0 && xx < int(IW)) vmask |= (1u << tap);
+  }
+  int pix = oy * int(IW) + ox;
+  uint kk0 = tid >> 6;
+  half vv[16];
+  uint k = kk0;
+  uint ci = k / 9u;
+  uint tap = k - ci * 9u;
+  for (uint it = 0u; it < 16u; it++) {
+    half v = half(0.0f);
+    if (k < KD && ((vmask >> tap) & 1u) != 0u) {
+      uint ky = tap / 3u;
+      uint kx = tap - ky * 3u;
+      v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
+    }
+    vv[it] = v;
+    k += 4u;
+    tap += 4u;
+    if (tap >= 9u) { tap -= 9u; ci += 1u; }
+  }
+  for (uint k0 = 0u; k0 < KDP; k0 += 64u) {
+    if (vec4) {
+      for (uint it = 0u; it < 8u; it++) {
+        uint idx4 = tid + it * 256u;
+        uint r = idx4 >> 4;
+        uint c = (idx4 & 15u) * 4u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        half4 w = half4(0.0h);
+        if (m < COUT && kc < KD) w = *((device const half4 *)(Wt + m * KD + kc));
+        *((threadgroup half4 *)(As + r * 64u + c)) = w;
+      }
+    } else {
+      for (uint it = 0u; it < 32u; it++) {
+        uint idx = tid + it * 256u;
+        uint r = idx >> 6;
+        uint c = idx & 63u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
+      }
+    }
+    for (uint it = 0u; it < 16u; it++) Bs[tid + it * 256u] = vv[it];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // software pipelining: the next tile's gather loads are issued here and consumed (stored to Bs) at the top of the next iteration, behind this tile's matrix multiplies
+    for (uint it = 0u; it < 16u; it++) {
+      half v = half(0.0f);
+      if (k < KD && ((vmask >> tap) & 1u) != 0u) {
+        uint ky = tap / 3u;
+        uint kx = tap - ky * 3u;
+        v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
+      }
+      vv[it] = v;
+      k += 4u;
+      tap += 4u;
+      if (tap >= 9u) { tap -= 9u; ci += 1u; }
+    }
+    for (uint ks = 0u; ks < 8u; ks++) {
+      simdgroup_half8x8 a[4];
+      simdgroup_half8x8 b[4];
+      for (uint i = 0u; i < 4u; i++)
+        simdgroup_load(a[i], As + (row0 + i * 8u) * 64u + ks * 8u, 64u);
+      for (uint j = 0u; j < 4u; j++)
+        simdgroup_load(b[j], Bs + ks * 8u * 64u + col0 + j * 8u, 64u);
+      for (uint i = 0u; i < 4u; i++)
+        for (uint j = 0u; j < 4u; j++)
+          simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      simdgroup_store(acc[i][j], Cs + (row0 + i * 8u) * 64u + col0 + j * 8u, 64);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint idx = tid; idx < 8192u; idx += 256u) {
+    uint m = m0 + idx / 64u;
+    uint p = n0 + idx % 64u;
+    if (m < COUT && p < NP) {
+      float v = Cs[idx];
+      if (MODE >= 1u) v += Bias[m];
+      if (MODE == 2u) v += Res[m * NP + p];
+      C[m * NPP + p] = v;
+    }
+  }
+}

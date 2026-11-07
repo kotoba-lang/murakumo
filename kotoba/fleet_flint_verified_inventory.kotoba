@@ -1,0 +1,74 @@
+;; Compose after Flint OCI stage and Flint directory inventory. The host must
+;; bind both frames and IDs to held FDs, verify their no-follow parent-child
+;; relationship, and exclude writers, aliases and replacement through use.
+;; This candidate is not a durable publication or a model execution grant.
+(ns murakumo.fleet-flint-verified-inventory (:export [model-flint-verified-inventory? model-flint-parent-verified-inventory?]))
+
+;; Compare all seven pinned tar entries with the stage while hashing the full
+;; archive, including padding and terminal blocks. The metadata file helper
+;; also checks staged size, regular-file mode and its stable metadata.
+(defn- fv-tar-match? [source :string dest :string size :i64 digest :string] :bool
+  (let [entry (typed-cap-call 35 :string :string (ol-frame "O" source ""))
+        before (if (and (md-regular? entry) (= (ol-size entry 67108864) size))
+                 (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")]
+    (if (or (not (md-regular? before)) (not (= (ol-size before 67108864) size))) false
+      (let [work (s2-work (s2-iv 8)) k (s2-k) summary (vector-alloc 3)
+            ok (loop [offset 0 seen 0 zeros 0]
+                 (if (= offset size)
+                   (and (>= zeros 2) (= seen 127) (md-pad work (vector-alloc 0) 0 0 size k)
+                        (= (str "sha256:" (hex (s2-out work 8))) digest))
+                   (let [read-ok (arena-scope
+                                   (let [h (ta-read source offset 512)]
+                                     (if (not (= (vector-count h) 512)) false
+                                       (let [hashed (md-blocks work h 512 k) zero (ta-zero? h 0 512)
+                                             id (if zero -1 (ft-id h)) n (if zero 0 (ta-octal h 124 136))
+                                             valid (or zero (ta-header? h))
+                                             a (vector-assoc! summary 0 (if zero 0 1))
+                                             b (vector-assoc! summary 1 id) c (vector-assoc! summary 2 n)]
+                                         (and hashed valid)))))
+                         zero (= (vector-at summary 0) 0) id (vector-at summary 1) n (vector-at summary 2)
+                         padded (if (and (> n 0) (<= n 16777216)) (* (quot (+ n 511) 512) 512) -1)
+                         next (+ offset 512 padded)]
+                     (cond (not read-ok) false
+                           zero (recur (+ offset 512) seen (+ zeros 1))
+                           (or (> zeros 0) (< id 0) (< padded 0) (> next size)
+                               (not (= (bit-and seen (i64-shift-left 1 id)) 0))) false
+                           (tv-file source (str dest "/" (ft-name id)) (+ offset 512) n work k)
+                           (recur next (bit-or seen (i64-shift-left 1 id)) 0)
+                           :else false))))
+            after (typed-cap-call 35 :string :string (ol-frame "F" source ""))]
+        (and ok (= before after))))))
+
+;; Frames may be forged; the caller must supply trusted FD-bound evidence.
+;; Receipt mode is intentionally not accepted because no Flint receipt format
+;; or recovery procedure has yet been verified.
+(defn model-flint-verified-inventory? [layout :string manifest :string manifest-size :i64
+                                     base :string base-size :i64 experts :string experts-size :i64
+                                     assets :string assets-size :i64 stage :string
+                                     root-frame :string root-dev :string root-ino :string
+                                     child-frame :string child-dev :string child-ino :string] :bool
+  (let [valid (and (md-path? layout) (md-path? stage) (not (ta-overlap? layout stage))
+                   (>= assets-size 1024) (<= assets-size 67108864) (= (rem assets-size 512) 0)
+                   (= root-dev child-dev) (not (= root-ino child-ino))
+                   (mp-mode? stage "448" "1") (mp-mode? (str stage "/.kapitsa") "448" "1")
+                   (flint-bound-inventory? root-frame true false root-dev root-ino)
+                   (flint-bound-inventory? child-frame false false child-dev child-ino))
+        checked (if valid (mf-check layout manifest manifest-size base base-size experts experts-size assets assets-size false) "")]
+    (and (= checked "flint-artifact/descriptors-observed")
+         (mp-mode? (str stage "/model.safetensors") "384" "0")
+         (mp-mode? (str stage "/experts.safetensors") "384" "0")
+         (= (md-observe (str stage "/model.safetensors") base base-size) "model/digest-observed")
+         (= (md-observe (str stage "/experts.safetensors") experts experts-size) "model/digest-observed")
+         (fv-tar-match? (ol-blob-path layout assets) stage assets-size assets)
+         (fk-stage-manifest? stage base-size experts-size) (fk-stage-index? stage))))
+
+;; This composes frame checks only; actual FD provenance, helper identity,
+;; output/exit binding and no-mutation enforcement are trusted host duties.
+(defn model-flint-parent-verified-inventory? [layout :string manifest :string manifest-size :i64
+                                            base :string base-size :i64 experts :string experts-size :i64
+                                            assets :string assets-size :i64 stage :string
+                                            parent-frame :string root-frame :string root-dev :string root-ino :string
+                                            child-frame :string child-ino :string] :bool
+  (and (flint-parent-frame? parent-frame root-dev root-ino root-dev child-ino)
+       (model-flint-verified-inventory? layout manifest manifest-size base base-size experts experts-size
+                                       assets assets-size stage root-frame root-dev root-ino child-frame root-dev child-ino)))

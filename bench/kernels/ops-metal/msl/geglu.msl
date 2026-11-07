@@ -1,0 +1,21 @@
+constant uint NN = @N@u;
+float erf_as(float x) {
+  float ax = fabs(x);
+  float t = 1.0f / (1.0f + 0.3275911f * ax);
+  float p = 1.061405429f;
+  p = p * t + (-1.453152027f);
+  p = p * t + 1.421413741f;
+  p = p * t + (-0.284496736f);
+  p = p * t + 0.254829592f;
+  p = p * t;
+  float r = 1.0f - p * precise::exp(-(ax * ax));
+  return x < 0.0f ? -r : r;
+}
+kernel void op(device const float *X [[buffer(0)]], device const float *B1 [[buffer(1)]], device const float *B2 [[buffer(2)]],
+               device float *O [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  uint r = i / NN;
+  uint c = i % NN;
+  float a = X[r * 2u * NN + c];
+  float g = X[r * 2u * NN + NN + c];
+  O[i] = a * ((0.5f * g) * (1.0f + erf_as(g * 0.70710678f)));
+}

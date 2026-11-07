@@ -1,0 +1,922 @@
+(ns murakumo.clip-tokenizer-metal (:export [main]))
+
+;; I3b, first slice (JUN-927, ADR-261106): the CLIP byte-pair tokenizer in Kotoba, on the Metal route (amu ADR 0405,
+;; profile amu-program-metal: libSystem through dyld, so open / pread are ordinary C calls). It reads
+;; ComfyUI's tokenizer files (vocab.json: @VOCAB@; merges.txt: @MERGES@) and a prompts file (@PROMPTS@,
+;; one ASCII prompt per line), builds a hash table of the vocabulary and one of the merge ranks, and prints for each
+;; prompt the token ids to stderr, space separated: <|startoftext|> (49406), the prompt's tokens, <|endoftext|> (49407),
+;; truncated to 77 as the CLIP towers expect. Pre-tokenization is the CLIP regex for ASCII text: lowercase; skip
+;; whitespace; the contractions 's 't 're 've 'm 'll 'd; a run of letters; one digit; a run of anything else.
+;; Words are split into characters, the last one carrying </w>, and merged by lowest rank until no merge applies.
+;; Not supported (refused): non-ASCII bytes, the special-token spellings inside a prompt, HTML entities, ComfyUI's
+;; prompt weighting and embeddings syntax. Vocabulary entries with non-ASCII keys are skipped (no ASCII prompt needs them).
+
+(defn- hsize [] :i64 131072)
+(defn- psize [] :i64 262144)
+
+(defn- byte-at [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (bit-and (peek f p) 255))
+
+;; read the whole file at path into a fresh malloc'd buffer (NUL padded); returns the address, size in sz[0]
+(defn- slurp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 path :string sz :vector-i64] :i64
+  (let [fd (cc f (sym f "open") (cstr f (vector-at R 3) path) 0 0 0 0)
+        u0 (if (< fd 0) (vector-at [0] 1) 0)
+        total (cc f (sym f "lseek") fd 0 2 0 0)
+        buf (cc f (vector-at R 3) (+ total 16) 0 0 0 0)
+        got (cc f (sym f "pread") fd buf total 0 0)
+        u1 (if (= got total) 0 (vector-at [0] 1))
+        z (loop [i 0] (if (= i 16) 0 (let [u (poke8 f (+ buf (+ total i)) 0)] (recur (+ i 1)))))
+        s (vector-assoc! sz 0 total)]
+    buf))
+
+(defn- fnv [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64] :i64
+  (loop [i 0 h 2166136261]
+    (if (= i n) h
+      (recur (+ i 1) (bit-and (* (bit-xor h (byte-at f (+ p i))) 16777619) 4294967295)))))
+
+(defn- bytes-eq [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 q :i64 n :i64] :i64
+  (loop [i 0]
+    (if (= i n) 1
+      (if (= (byte-at f (+ p i)) (byte-at f (+ q i))) (recur (+ i 1)) 0))))
+
+;; vocabulary table: slot s holds [arena offset + 1 (0 = empty), length, id] at VT[3s..3s+2]; keys live in the arena
+(defn- vt-find [f [:fn [[:i64 :i64 :i64] :i64]] VT :vector-i64 arena :i64 p :i64 n :i64] :i64
+  (let [mask (- (hsize) 1)]
+    (loop [s (bit-and (fnv f p n) mask)]
+      (let [off (vector-at VT (* s 3))]
+        (if (= off 0) -1
+          (if (and (= (vector-at VT (+ (* s 3) 1)) n) (= (bytes-eq f p (+ arena (- off 1)) n) 1))
+            (vector-at VT (+ (* s 3) 2))
+            (recur (bit-and (+ s 1) mask))))))))
+
+;; insert the key at p (n bytes) with id; its bytes are copied to the arena at st[0]
+(defn- vt-insert [f [:fn [[:i64 :i64 :i64] :i64]] VT :vector-i64 arena :i64 st :vector-i64 p :i64 n :i64 id :i64] :i64
+  (let [mask (- (hsize) 1)
+        top (vector-at st 0)
+        c (loop [i 0] (if (= i n) 0 (let [u (poke8 f (+ arena (+ top i)) (byte-at f (+ p i)))] (recur (+ i 1)))))
+        s0 (bit-and (fnv f p n) mask)
+        s (loop [s s0] (if (= (vector-at VT (* s 3)) 0) s (recur (bit-and (+ s 1) mask))))
+        a (vector-assoc! VT (* s 3) (+ top 1))
+        b (vector-assoc! VT (+ (* s 3) 1) n)
+        d (vector-assoc! VT (+ (* s 3) 2) id)
+        e (vector-assoc! st 0 (+ top n))]
+    0))
+
+;; decode the JSON string whose content starts at p+i into the scratch area at tmp; returns the index after the
+;; closing quote, with the decoded length in out[0] and 1 in out[1] if it held an escape this reader does not decode
+(defn- json-string [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 tmp :i64 out :vector-i64] :i64
+  (loop [j i k 0 bad 0]
+    (let [c (byte-at f (+ p j))]
+      (cond
+        (= c 34) (let [a (vector-assoc! out 0 k) b (vector-assoc! out 1 bad)] (+ j 1))
+        (= c 92)
+        (let [d (byte-at f (+ p (+ j 1)))]
+          (cond
+            (= d 34) (let [u (poke8 f (+ tmp k) 34)] (recur (+ j 2) (+ k 1) bad))
+            (= d 92) (let [u (poke8 f (+ tmp k) 92)] (recur (+ j 2) (+ k 1) bad))
+            (= d 117) (recur (+ j 6) k 1)
+            :else (recur (+ j 2) k 1)))
+        :else (let [u (poke8 f (+ tmp k) c)] (recur (+ j 1) (+ k 1) bad))))))
+
+(defn- parse-uint [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 out :vector-i64] :i64
+  (let [s (loop [j i] (if (= (byte-at f (+ p j)) 32) (recur (+ j 1)) j))]
+    (loop [j s v 0]
+      (let [b (byte-at f (+ p j))]
+        (if (and (>= b 48) (<= b 57))
+          (recur (+ j 1) (+ (* v 10) (- b 48)))
+          (let [u (vector-assoc! out 0 v)] j))))))
+
+;; vocab.json: {"key": id, ...}
+(defn- load-vocab [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 st :vector-i64 tmp :i64] :i64
+  (let [out (vector-alloc 2)
+        num (vector-alloc 1)]
+    (loop [j 0 count 0]
+      (if (>= j n) count
+        (if (= (byte-at f (+ p j)) 34)
+          (let [e (json-string f p (+ j 1) tmp out)
+                len (vector-at out 0)
+                bad (vector-at out 1)
+                colon (loop [q e] (if (= (byte-at f (+ p q)) 58) q (recur (+ q 1))))
+                e2 (parse-uint f p (+ colon 1) num)
+                u (if (= bad 0) (vt-insert f VT arena st tmp len (vector-at num 0)) 0)]
+            (recur e2 (if (= bad 0) (+ count 1) count)))
+          (recur (+ j 1) count))))))
+
+;; merge-rank table: slot s holds [key + 1 (0 = empty), rank] at PT[2s..2s+1], key = idA * 65536 + idB
+(defn- pt-find [PT :vector-i64 key :i64] :i64
+  (let [mask (- (psize) 1)]
+    (loop [s (bit-and (* key 2654435761) mask)]
+      (let [k (vector-at PT (* s 2))]
+        (if (= k 0) -1
+          (if (= k (+ key 1)) (vector-at PT (+ (* s 2) 1))
+            (recur (bit-and (+ s 1) mask))))))))
+
+(defn- pt-insert [PT :vector-i64 key :i64 rank :i64] :i64
+  (let [mask (- (psize) 1)
+        s (loop [s (bit-and (* key 2654435761) mask)]
+            (if (= (vector-at PT (* s 2)) 0) s (recur (bit-and (+ s 1) mask))))
+        a (vector-assoc! PT (* s 2) (+ key 1))
+        b (vector-assoc! PT (+ (* s 2) 1) rank)]
+    0))
+
+;; merges.txt: a header line, then "a b" per line, rank = line number after the header
+(defn- load-merges [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 PT :vector-i64] :i64
+  (let [first (loop [j 0] (if (= (byte-at f (+ p j)) 10) (+ j 1) (recur (+ j 1))))]
+    (loop [j first rank 0 stored 0]
+      (if (>= j n) stored
+        (let [le (loop [q j] (if (or (= (byte-at f (+ p q)) 10) (>= q n)) q (recur (+ q 1))))
+              sp (loop [q j] (if (or (= (byte-at f (+ p q)) 32) (>= q le)) q (recur (+ q 1))))
+              ia (vt-find f VT arena (+ p j) (- sp j))
+              ib (vt-find f VT arena (+ p (+ sp 1)) (- le (+ sp 1)))
+              ok (if (and (>= ia 0) (>= ib 0)) 1 0)
+              u (if (= ok 1) (pt-insert PT (+ (* ia 65536) ib) rank) 0)]
+          (recur (+ le 1) (+ rank 1) (+ stored ok)))))))
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+(defn- peek [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (f 0 p 0))
+(defn- poke [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 1 p v))
+(defn- poke8 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 2 p v))
+(defn- scratch [f [:fn [[:i64 :i64 :i64] :i64]]] :i64 (f 4 0 0))
+
+(defn- cc [f [:fn [[:i64 :i64 :i64] :i64]] fn :i64 a :i64 b :i64 c :i64 d :i64 e :i64] :i64
+  (let [s (+ (scratch f) 64)
+        u0 (poke f s a) u1 (poke f (+ s 8) b) u2 (poke f (+ s 16) c)
+        u3 (poke f (+ s 24) d) u4 (poke f (+ s 32) e)]
+    (f 3 fn s)))
+
+(defn- put-text [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s)) n (vector-count v)]
+    (loop [i 0]
+      (if (= i n) (poke8 f (+ p n) 0)
+        (let [u (poke8 f (+ p i) (vector-at v i))] (recur (+ i 1)))))))
+
+(defn- sym [f [:fn [[:i64 :i64 :i64] :i64]] name :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) name)
+        p (cc f (peek f base) -2 (+ base 256) 0 0 0)]
+    (if (= p 0) (vector-at [0] 1) p)))
+
+(defn- cstr [f [:fn [[:i64 :i64 :i64] :i64]] malloc :i64 s :string] :i64
+  (let [p (cc f malloc (+ (string-length s) 1) 0 0 0 0)
+        u (put-text f p s)]
+    p))
+
+
+(defn- refuse-text [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (let [p (cstr f (vector-at R 3) s)
+        w (cc f (sym f "write") 2 p (string-length s) 0 0)]
+    (vector-at [0] 1)))
+
+;; BPE of the word at w (n bytes, lowercase), with "</w>" appended to the buffer; appends its ids to OUT (count in OUT[0])
+(defn- bpe-word [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 arena :i64 PT :vector-i64 w :i64 nb :i64 n :i64
+                 OFF :vector-i64 SS :vector-i64 SE :vector-i64 SI :vector-i64 OUT :vector-i64] :i64
+  (let [u0 (if (> nb 400) (refuse-text f R "refused: a word longer than 400 bytes\n") 0)
+        s0 (poke8 f (+ w nb) 60) s1 (poke8 f (+ w (+ nb 1)) 47) s2 (poke8 f (+ w (+ nb 2)) 119) s3 (poke8 f (+ w (+ nb 3)) 62)
+        init (loop [i 0]
+               (if (= i n) 0
+                 (let [st (vector-at OFF i)
+                       en (if (= i (- n 1)) (+ nb 4) (vector-at OFF (+ i 1)))
+                       id (vt-find f VT arena (+ w st) (- en st))
+                       u (if (< id 0) (refuse-text f R "refused: a symbol missing from the vocabulary\n") 0)
+                       a (vector-assoc! SS i st) b (vector-assoc! SE i en) c (vector-assoc! SI i id)]
+                   (recur (+ i 1)))))
+        m (loop [m n]
+            (let [best (loop [i 0 br 2147483647 bi -1]
+                         (if (>= i (- m 1)) bi
+                           (let [r (pt-find PT (+ (* (vector-at SI i) 65536) (vector-at SI (+ i 1))))]
+                             (if (and (>= r 0) (< r br)) (recur (+ i 1) r i) (recur (+ i 1) br bi)))))]
+              (if (< best 0) m
+                (let [ia (vector-at SI best)
+                      ib (vector-at SI (+ best 1))
+                      m2 (loop [i 0 k 0]
+                           (if (>= i m) k
+                             (if (and (< i (- m 1)) (and (= (vector-at SI i) ia) (= (vector-at SI (+ i 1)) ib)))
+                               (let [st (vector-at SS i)
+                                     en (vector-at SE (+ i 1))
+                                     id (vt-find f VT arena (+ w st) (- en st))
+                                     u (if (< id 0) (refuse-text f R "refused: a merged symbol missing from the vocabulary\n") 0)
+                                     a (vector-assoc! SS k st) b (vector-assoc! SE k en) c (vector-assoc! SI k id)]
+                                 (recur (+ i 2) (+ k 1)))
+                               (let [a (vector-assoc! SS k (vector-at SS i)) b (vector-assoc! SE k (vector-at SE i)) c (vector-assoc! SI k (vector-at SI i))]
+                                 (recur (+ i 1) (+ k 1))))))]
+                  (recur m2)))))
+        out (loop [i 0 c (vector-at OUT 0)]
+              (if (= i m) (vector-assoc! OUT 0 c)
+                (let [u (vector-assoc! OUT (+ 1 c) (vector-at SI i))] (recur (+ i 1) (+ c 1)))))]
+    0))
+
+(defn- within [c :i64 a :i64 b :i64] :bool (and (>= c a) (<= c b)))
+;; generated by gen_script_tables.py (31 class runs, 24 lower-case runs)
+(defn- scls-t0 [] :vector-i64
+  (vector-i64 922761009 926955332 928003923 929052529 931149716 933246929 937441252 938489841 939538484 943732819 945829985 946878580 947927201 951072948 952121537 953170132 954219025 975190580 977289041 1063272291 1064323089 1210075171 1211123860 1218466545 1393579361 1433425284 1435522449 1436571123 1442863233 1485854883 1560305313))
+(defn- slow-t0 [] :vector-i64
+  (vector-i64 472453629185 475674886913 480506798964 484264952614 485338727205 487486227264 488559993663 490170753824 500371383072 523457127176 528289219841 543321653956 544932291329 546006049529 546542928641 548153582206 549764326224 558354522912 601304859905 623853946113 652844991247 653381969153 661435827457 713512633136))
+
+;; class and lower-case of the alphabetic scripts beyond Latin (Greek, Cyrillic, Armenian, Hebrew letters), from generated run tables
+(defn- scls [c :i64] :i64
+  (let [T (scls-t0)]
+    (loop [i 0]
+      (if (= i (vector-count T)) 4
+        (let [e (vector-at T i)]
+          (if (and (>= c (i64-shift-right e 20)) (<= c (bit-and (i64-shift-right e 4) 65535))) (bit-and e 15) (recur (+ i 1))))))))
+(defn- slow [c :i64] :i64
+  (let [T (slow-t0)]
+    (loop [i 0]
+      (if (= i (vector-count T)) c
+        (let [e (vector-at T i)
+              lo (i64-shift-right e 29)]
+          (if (and (>= c lo) (<= c (bit-and (i64-shift-right e 13) 65535)))
+            (if (= (bit-and (i64-shift-right e 9) 15) 1) (+ c (- (bit-and e 511) 256)) (if (= (bit-and (- c lo) 1) 0) (+ c 1) c))
+            (recur (+ i 1))))))))
+;; Unicode class of a code point, for the supported set only: 0 whitespace (str.isspace), 1 letter (\p{L}), 2 number (\p{N}),
+;; 3 other, 4 not supported (the program refuses it rather than tokenizing it differently from the Hugging Face tokenizer). The Hugging Face
+;; tokenizer NFC-normalizes first. A letter followed by one combining mark (U+0300-036F, U+3099, U+309A) is composed with the table below
+;; (the same as NFC); any other use of a mark, and the singleton / exclusion characters U+2329, U+232A, U+2ADC, are refused. Whitespace is the
+;; White_Space property (not str.isspace: U+001C-001F are not whitespace). Latin-1 and the other supported letters are NFC-stable.
+(defn- cls [c :i64] :i64
+  (cond
+    (< c 128) (cond (or (= c 32) (within c 9 13)) 0 (or (within c 97 122) (within c 65 90)) 1 (within c 48 57) 2 :else 3)
+    (or (= c 133) (or (= c 160) (or (= c 5760) (or (within c 8192 8202) (or (= c 8232) (or (= c 8233) (or (= c 8239) (or (= c 8287) (= c 12288))))))))) 0
+    (< c 256) (cond (or (= c 170) (or (= c 181) (or (= c 186) (or (within c 192 214) (or (within c 216 246) (within c 248 255)))))) 1
+                    (or (within c 178 179) (or (= c 185) (within c 188 190))) 2
+                    :else 3)
+    (within c 256 383) (if (= c 304) 4 1)
+    (or (within c 880 1327) (or (within c 1329 1418) (within c 1488 1514))) (scls c)
+    (within c 8203 8303) 3
+    (within c 8400 8447) 3
+    (or (= c 9001) (or (= c 9002) (= c 10972))) 4
+    (or (within c 8592 9311) (or (within c 9472 10101) (within c 10132 11263))) 3
+    (within c 11776 11903) (if (= c 11823) 1 3)
+    (within c 12288 12351) (cond (or (= c 12293) (or (= c 12294) (or (= c 12347) (or (= c 12348) (within c 12337 12341))))) 1
+                             (or (= c 12295) (or (within c 12321 12329) (within c 12344 12346))) 2
+                             :else 3)
+    (within c 12352 12447) (cond (= c 12352) 3 (within c 12439 12440) 3 (within c 12441 12442) 4 (within c 12443 12444) 3 :else 1)
+    (within c 12448 12543) (cond (or (= c 12448) (= c 12539)) 3 :else 1)
+    (within c 12593 12686) 1
+    (within c 13312 19903) 1
+    (within c 19968 40959) 1
+    (within c 44032 55203) 1
+    (within c 65024 65039) 3
+    (within c 65281 65295) 3
+    (within c 65296 65305) 2
+    (within c 65306 65312) 3
+    (within c 65313 65338) 1
+    (within c 65339 65344) 3
+    (within c 65345 65370) 1
+    (within c 65371 65381) 3
+    (within c 65382 65439) 1
+    (within c 65504 65518) 3
+    (or (within c 127744 128591) (or (within c 128640 128767) (within c 129280 129535))) 3
+    :else 4))
+;; str.lower for the supported letters: ASCII, Latin-1, Latin Extended-A, fullwidth Latin
+(defn- lcp [c :i64] :i64
+  (cond
+    (< c 128) (if (within c 65 90) (+ c 32) c)
+    (or (within c 192 214) (within c 216 222)) (+ c 32)
+    (< c 256) c
+    (or (within c 256 303) (or (within c 306 311) (within c 330 375))) (if (= (bit-and c 1) 0) (+ c 1) c)
+    (or (within c 313 328) (within c 377 382)) (if (= (bit-and c 1) 1) (+ c 1) c)
+    (= c 376) 255
+    (or (within c 880 1327) (or (within c 1329 1418) (within c 1488 1514))) (slow c)
+    (within c 65313 65338) (+ c 32)
+    :else c))
+;; mapped character of a byte (GPT-2/CLIP bytes_to_unicode)
+(defn- bmap [b :i64] :i64
+  (cond (or (within b 33 126) (or (within b 161 172) (within b 174 255))) b
+        (<= b 32) (+ 256 b)
+        (<= b 160) (+ 256 (+ 33 (- b 127)))
+        :else 323))
+(defn- sym-bytes [c :i64] :i64 (if (< c 128) 1 2))
+
+;; the length, in code points, of the token starting at cp index i within [0, e): CL holds the classes, CP the lowered code points
+(defn- token-len [CP :vector-i64 CL :vector-i64 i :i64 e :i64] :i64
+  (let [c (vector-at CP i)
+        k (vector-at CL i)
+        n1 (if (< (+ i 1) e) (vector-at CP (+ i 1)) 0)
+        n2 (if (< (+ i 2) e) (vector-at CP (+ i 2)) 0)]
+    (cond
+      (= k 5) 1
+      (= c 39)
+      (cond
+        (or (= n1 115) (or (= n1 116) (or (= n1 109) (= n1 100)))) 2
+        (or (and (= n1 114) (= n2 101)) (or (and (= n1 118) (= n2 101)) (and (= n1 108) (= n2 108)))) 3
+        :else (loop [j (+ i 1)]
+                (if (and (< j e) (= (vector-at CL j) 3)) (recur (+ j 1)) (- j i))))
+      (= k 1)
+      (loop [j (+ i 1)] (if (and (< j e) (= (vector-at CL j) 1)) (recur (+ j 1)) (- j i)))
+      (= k 2) 1
+      :else
+      (loop [j (+ i 1)]
+        (if (and (< j e) (= (vector-at CL j) 3)) (recur (+ j 1)) (- j i))))))
+
+;; NFC for a letter followed by one combining mark: entries base << 28 | mark << 14 | composed, generated by gen_nfc_table.py (210 entries)
+(defn- nfc-t0 [] :vector-i64
+  (vector-i64 26050822368 26050838753 26050855138 26050871523 26050887937 26050920707 26050953444 26050986213 26051477765 26051870944 26051887329 26587709703 26587726089 26587808011 26587889933 26588332263 26588758279 26856325391 27124564200 27124580585 27124596970 27124629779 27124662549 27124678935 27124695275 27124760859 27125219609 27125612776 27125629161 27661467933 27661533471 27661549857 27662074147 27929903397 28198306028 28198322413 28198338798 28198355241 28198371627 28198404397 28198437103 28198961455 28199354604 28199370989 28466774325 28735815991 29003628858 29003809086 29004251452 29004677434 29540499780 29540532465 29540680008 29541122374 29541548356 29808918770 29808935155 29808951540 29808967925 29808984397))
+(defn- nfc-t1 [] :vector-i64
+  (vector-i64 29809017167 29809049846 29809099089 29809967346 29809983731 30614241621 30614421849 30614864215 30615290197 30882677083 30882693469 30882857313 30883299679 30883725659 31151292773 31151735139 31419531513 31419547898 31419564283 31419580777 31419597163 31419629933 31419662588 31419695471 31419711857 31420186995 31420580089 31420596474 31956435317 32493289725 32493306231 32493404415 32494338301 32761725306 32761823612 32761905534 32762773882 253684106156 253685154732 254757847981 254758896557 255294718894 255295767470 255831589807 255831704522 255832638383 255832687504 257442202572 257443251148 259052815309 259052929995 259053863885 259053913008 260126557134 260127605710 260394992528 260396041104 260663428016 260664476592 262542476243))
+(defn- nfc-t2 [] :vector-i64
+  (vector-i64 262542590932 262543524819 287775491281 287775524051 288580715603 288581764179 289117570128 289117668567 289117701201 289118618704 289386104002 289386136797 289654572255 289922876509 289922942179 289922974777 289923007717 289923925085 290459763804 290460812380 291533620455 292875732207 292875764830 292875797745 292875846899 293949539573 295023281401 295560152301 297976071255 306297685111 333141116123 337436083435 3317529211028 3318871388236 3319408259150 3319945130064 3320482000978 3321018871892 3321555742806 3322092613720 3322629484634 3323166355548 3323703226462 3324240097376 3324776968290 3325582274661 3326119145575 3326656016489 3328535064688 3328535081073 3329340371059 3329340387444 3330145677430 3330145693815 3330950983801 3330951000186 3331756290172 3331756306557 3340883095710 3343299014900))
+(defn- nfc-t3 [] :vector-i64
+  (vector-i64 3344641192108 3345178063022 3345714933936 3346251804850 3346788675764 3347325546678 3347862417592 3348399288506 3348936159420 3349473030334 3350009901248 3350546772162 3351352078533 3351888949447 3352425820361 3354304868560 3354304884945 3355110174931 3355110191316 3355915481302 3355915497687 3356720787673 3356720804058 3357526094044 3357526110429 3362894803191 3363163238648 3363431674105 3363700109562 3366652899582))
+(defn- nfc-scan [T :vector-i64 key :i64] :i64
+  (loop [i 0]
+    (if (= i (vector-count T)) -1
+      (let [e (vector-at T i)]
+        (if (= (i64-shift-right e 14) key) (bit-and e 16383) (recur (+ i 1)))))))
+;; the composed code point of base + mark, or -1
+(defn- nfc-find [base :i64 mark :i64] :i64
+  (let [key (+ (* base 16384) mark)
+        r0 (nfc-scan (nfc-t0) key)]
+    (if (>= r0 0) r0
+      (let [r1 (nfc-scan (nfc-t1) key)]
+    (if (>= r1 0) r1
+      (let [r2 (nfc-scan (nfc-t2) key)]
+    (if (>= r2 0) r2
+      (let [r3 (nfc-scan (nfc-t3) key)]
+        r3))))))))
+
+
+;; the special tokens <|startoftext|> and <|endoftext|> written in a prompt are matched case-insensitively (the Hugging Face tokenizer matches added
+;; tokens on the normalized text) and stand for the ids BOS (1) / EOS (2), splitting the text around them
+(defn- match-lit [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s))
+        n (vector-count v)]
+    (if (> (+ i n) e) 0
+      (loop [k 0]
+        (if (= k n) 1
+          (let [b (byte-at f (+ p (+ i k)))
+                l (if (within b 65 90) (+ b 32) b)]
+            (if (= l (vector-at v k)) (recur (+ k 1)) 0)))))))
+(defn- special-at [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64] :i64
+  (if (= (byte-at f (+ p i)) 60)
+    (if (= (match-lit f p i e "<|startoftext|>") 1) 1 (if (= (match-lit f p i e "<|endoftext|>") 1) 2 0))
+    0))
+
+(defn- bad-utf8 [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64] :i64 (refuse-text f R "refused: invalid UTF-8 in a prompt\n"))
+;; decode the UTF-8 sequence at p: code point * 8 + length; refuses invalid UTF-8 (overlong forms, surrogates, truncation)
+(defn- utf8-at [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 i :i64 e :i64] :i64
+  (let [b0 (byte-at f (+ p i))
+        b1 (if (< (+ i 1) e) (byte-at f (+ p (+ i 1))) 0)
+        b2 (if (< (+ i 2) e) (byte-at f (+ p (+ i 2))) 0)
+        b3 (if (< (+ i 3) e) (byte-at f (+ p (+ i 3))) 0)
+        d0 0]
+    (cond
+      (< b0 128) (+ (* b0 8) 1)
+      (and (within b0 194 223) (= (bit-and b1 192) 128)) (+ (* (+ (* (bit-and b0 31) 64) (bit-and b1 63)) 8) 2)
+      (and (within b0 224 239) (and (= (bit-and b1 192) 128) (= (bit-and b2 192) 128)))
+      (let [c (+ (* (+ (* (bit-and b0 15) 64) (bit-and b1 63)) 64) (bit-and b2 63))]
+        (if (or (< c 2048) (within c 55296 57343)) (bad-utf8 f R) (+ (* c 8) 3)))
+      (and (within b0 240 244) (and (= (bit-and b1 192) 128) (and (= (bit-and b2 192) 128) (= (bit-and b3 192) 128))))
+      (let [c (+ (* (+ (* (+ (* (bit-and b0 7) 64) (bit-and b1 63)) 64) (bit-and b2 63)) 64) (bit-and b3 63))]
+        (if (or (< c 65536) (> c 1114111)) (bad-utf8 f R) (+ (* c 8) 4)))
+      :else (bad-utf8 f R))))
+
+;; UTF-8 of code point c at q; returns its length
+(defn- utf8-put [f [:fn [[:i64 :i64 :i64] :i64]] q :i64 c :i64] :i64
+  (cond
+    (< c 128) (let [u (poke8 f q c)] 1)
+    (< c 2048) (let [u (poke8 f q (+ 192 (i64-shift-right c 6))) v (poke8 f (+ q 1) (+ 128 (bit-and c 63)))] 2)
+    (< c 65536) (let [u (poke8 f q (+ 224 (i64-shift-right c 12))) v (poke8 f (+ q 1) (+ 128 (bit-and (i64-shift-right c 6) 63))) w (poke8 f (+ q 2) (+ 128 (bit-and c 63)))] 3)
+    :else (let [u (poke8 f q (+ 240 (i64-shift-right c 18))) v (poke8 f (+ q 1) (+ 128 (bit-and (i64-shift-right c 12) 63)))
+                w (poke8 f (+ q 2) (+ 128 (bit-and (i64-shift-right c 6) 63))) x (poke8 f (+ q 3) (+ 128 (bit-and c 63)))] 4)))
+
+;; the byte-level symbols of cps [a, a+len) of CP into wbuf (each byte of the UTF-8 text as its mapped character, UTF-8 encoded),
+;; OFF[k] the start of symbol k; returns the byte length of wbuf's content, the symbol count goes to OFF[ns] slot via the caller
+(defn- word-symbols [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 CP :vector-i64 a :i64 len :i64 wbuf :i64 tmp :i64 OFF :vector-i64] :vector-i64
+  (let [nsb (loop [k 0 q 0]
+              (if (= k len) q
+                (recur (+ k 1) (+ q (utf8-put f (+ tmp q) (vector-at CP (+ a k)))))))
+        r (loop [m 0 q 0]
+            (if (= m nsb) (vector-i64 q nsb)
+              (let [c (bmap (byte-at f (+ tmp m)))
+                    u (vector-assoc! OFF m q)
+                    nbytes (if (< c 128) 1 2)
+                    w1 (if (< c 128) (poke8 f (+ wbuf q) c) (let [x (poke8 f (+ wbuf q) (+ 192 (i64-shift-right c 6)))] (poke8 f (+ wbuf (+ q 1)) (+ 128 (bit-and c 63)))))]
+                (recur (+ m 1) (+ q nbytes)))))
+        e (vector-assoc! OFF nsb (vector-at r 0))]
+    r))
+
+;; ---- prompt weighting (ComfyUI's escape_important / parse_parentheses / token_weights), weights as fixed point with 16 fractional bits ----
+;; A prompt is cut into segments (start, end, weight): the pieces between parentheses and inside them, nested as in ComfyUI: "(x)" multiplies the
+;; weight by 1.1, "(x:1.3)" sets it to 1.3. "\\(" and "\\)" are ordinary characters. Each segment is tokenized on its own (words never join across a segment).
+(defn- wsent [] :i64 -4611686018427387904)
+(defn- is-pyspace [b :i64] :bool (or (= b 32) (or (within b 9 13) (within b 28 31))))
+;; the ASCII letters of a trimmed byte range equal to the lower-case word s (nan, inf, infinity), ignoring a sign
+(defn- word-eq [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :i64 e :i64 w :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 w))
+        n (vector-count v)]
+    (if (= (- e s) n)
+      (loop [k 0] (if (= k n) 1 (let [b (byte-at f (+ p (+ s k)))
+                                      l (if (within b 65 90) (+ b 32) b)]
+                                  (if (= l (vector-at v k)) (recur (+ k 1)) 0))))
+      0)))
+;; Python's float() of the bytes [s, e), as a fixed-point weight; wsent when it is not a number (ComfyUI then keeps 1.1 x the weight and the text)
+;; and a refusal for the forms this program does not read (nan, inf, underscores, more than 12 digits, huge exponents)
+(defn- parse-fp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s0 :i64 e0 :i64] :i64
+  (let [s (loop [i s0] (if (and (< i e0) (is-pyspace (byte-at f (+ p i)))) (recur (+ i 1)) i))
+        e (loop [i e0] (if (and (> i s) (is-pyspace (byte-at f (+ p (- i 1))))) (recur (- i 1)) i))
+        neg (if (and (< s e) (= (byte-at f (+ p s)) 45)) 1 0)
+        s1 (if (and (< s e) (or (= (byte-at f (+ p s)) 45) (= (byte-at f (+ p s)) 43))) (+ s 1) s)
+        spec (if (or (= (word-eq f p s1 e "nan") 1) (or (= (word-eq f p s1 e "inf") 1) (= (word-eq f p s1 e "infinity") 1))) 1 0)
+        und (if (and (> (loop [i s a 0] (if (>= i e) a (recur (+ i 1) (if (= (byte-at f (+ p i)) 95) 1 a)))) 0)
+                     (= (loop [i s a 1] (if (>= i e) a (let [b (byte-at f (+ p i))] (recur (+ i 1) (if (or (within b 48 57) (or (= b 95) (or (= b 46) (or (= b 101) (or (= b 69) (or (= b 43) (= b 45))))))) a 0))))) 1))
+              1 0)
+        u0 (if (or (= spec 1) (= und 1)) (refuse-text f R "refused: a weight written as nan, inf or with underscores\n") 0)
+        ;; digits before the point
+        ie (loop [i s1] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        has-dot (if (and (< ie e) (= (byte-at f (+ p ie)) 46)) 1 0)
+        fs (if (= has-dot 1) (+ ie 1) ie)
+        fe (loop [i fs] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        nd (+ (- ie s1) (- fe fs))
+        has-exp (if (and (< fe e) (or (= (byte-at f (+ p fe)) 101) (= (byte-at f (+ p fe)) 69))) 1 0)
+        xs (if (= has-exp 1) (+ fe 1) fe)
+        xneg (if (and (= has-exp 1) (and (< xs e) (= (byte-at f (+ p xs)) 45))) 1 0)
+        xd0 (if (and (= has-exp 1) (and (< xs e) (or (= (byte-at f (+ p xs)) 45) (= (byte-at f (+ p xs)) 43)))) (+ xs 1) xs)
+        xe (loop [i xd0] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        ok (if (and (> nd 0) (and (= xe e) (or (= has-exp 0) (> xe xd0)))) 1 0)]
+    (if (= ok 0) (wsent)
+      (let [nint (- ie s1)
+            nfrac (- fe fs)
+            ;; the mantissa digits as one integer (at most 12 of them)
+            u1 (if (> nd 12) (refuse-text f R "refused: a weight with more than 12 digits\n") 0)
+            m (loop [i s1 acc 0]
+                (if (>= i fe) acc
+                  (let [b (byte-at f (+ p i))]
+                    (if (within b 48 57) (recur (+ i 1) (+ (* acc 10) (- b 48))) (recur (+ i 1) acc)))))
+            xv (loop [i xd0 acc 0] (if (>= i xe) acc (recur (+ i 1) (+ (* acc 10) (- (byte-at f (+ p i)) 48)))))
+            u2 (if (> xv 30) (refuse-text f R "refused: a weight with a huge exponent\n") 0)
+            dexp (- (if (= xneg 1) (- 0 xv) xv) nfrac)
+            val (if (>= dexp 0)
+                  (let [pw (loop [k 0 a 1] (if (= k dexp) a (recur (+ k 1) (* a 10))))
+                        u3 (if (> (* m pw) 1000000) (refuse-text f R "refused: a weight above 1,000,000\n") 0)]
+                    (* (* m pw) 65536))
+                  (if (< dexp -18) 0
+                    (let [pw (loop [k 0 a 1] (if (= k (- 0 dexp)) a (recur (+ k 1) (* a 10))))]
+                      (quot (+ (* m 65536) (quot pw 2)) pw))))]
+        (if (= neg 1) (- 0 val) val)))))
+
+;; a weight times 1.1
+(defn- fp-mul11 [w :i64] :i64 (quot (+ (* w 11) (if (>= w 0) 5 -5)) 10))
+
+;; ComfyUI's parse_parentheses on [s, e): pieces (start, end, is_paren) into PCS, returns the count
+(defn- find-pieces [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s :i64 e :i64 PCS :vector-i64] :i64
+  (let [r (loop [i s cur -1 level 0 lastreal 0 n 0]
+            (if (>= i e)
+              (if (>= cur 0)
+                (let [u (vector-assoc! PCS (* n 3) cur) v (vector-assoc! PCS (+ (* n 3) 1) e)
+                      w (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (- e cur) 2) (and (= (byte-at f (+ p cur)) 40) (= lastreal 1))) 1 0))]
+                  (+ n 1))
+                n)
+              (let [b (byte-at f (+ p i))
+                    nb (if (< (+ i 1) e) (byte-at f (+ p (+ i 1))) 0)
+                    esc (if (and (= b 92) (or (= nb 40) (= nb 41))) 1 0)
+                    w (if (= esc 1) 2 1)
+                    u0 (if (> (+ n 2) 300) (refuse-text f R "refused: more than 300 weighted pieces in a prompt\n") 0)]
+                (cond
+                  (and (= esc 0) (= b 40))
+                  (if (= level 0)
+                    (if (>= cur 0)
+                      (let [u (vector-assoc! PCS (* n 3) cur) v (vector-assoc! PCS (+ (* n 3) 1) i)
+                            x (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (- i cur) 2) (and (= (byte-at f (+ p cur)) 40) (= lastreal 1))) 1 0))]
+                        (recur (+ i 1) i 1 0 (+ n 1)))
+                      (recur (+ i 1) i 1 0 n))
+                    (recur (+ i 1) (if (>= cur 0) cur i) (+ level 1) 0 n))
+                  (and (= esc 0) (= b 41))
+                  (if (= (- level 1) 0)
+                    (let [c0 (if (>= cur 0) cur i)
+                          u (vector-assoc! PCS (* n 3) c0) v (vector-assoc! PCS (+ (* n 3) 1) (+ i 1))
+                          x (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (+ (- i c0) 1) 2) (= (byte-at f (+ p c0)) 40)) 1 0))]
+                      (recur (+ i 1) -1 0 1 (+ n 1)))
+                    (recur (+ i 1) (if (>= cur 0) cur i) (- level 1) 1 n))
+                  :else (recur (+ i w) (if (>= cur 0) cur i) level 0 n)))))]
+    r))
+
+;; the segments (start, end, weight) of the prompt [s, e), in order, into SEG; STK and PCS are scratch; returns the count
+(defn- segments [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s :i64 e :i64 SEG :vector-i64 STK :vector-i64 PCS :vector-i64] :i64
+  (if (= @WEIGHTS@ 0)
+    (let [a (vector-assoc! SEG 0 s) b (vector-assoc! SEG 1 e) c (vector-assoc! SEG 2 65536)] 1)
+  (let [u (vector-assoc! STK 0 s) v (vector-assoc! STK 1 e) w (vector-assoc! STK 2 65536) x (vector-assoc! STK 3 0)]
+    (loop [sp 1 n 0]
+      (if (= sp 0) n
+        (let [t (* (- sp 1) 4)
+              ts (vector-at STK t) te (vector-at STK (+ t 1)) tw (vector-at STK (+ t 2)) tk (vector-at STK (+ t 3))]
+          (if (= tk 1)
+            ;; an emit entry: the segment itself
+            (let [a (vector-assoc! SEG (* n 3) ts) b (vector-assoc! SEG (+ (* n 3) 1) te) c (vector-assoc! SEG (+ (* n 3) 2) tw)
+                  u0 (if (>= n 600) (refuse-text f R "refused: more than 600 segments in a prompt\n") 0)]
+              (recur (- sp 1) (+ n 1)))
+            ;; a parse entry: cut it into pieces and push them back to front
+            (let [np (find-pieces f R p ts te PCS)
+                  sp2 (loop [k (- np 1) q (- sp 1)]
+                        (if (< k 0) q
+                          (let [ps (vector-at PCS (* k 3)) pe (vector-at PCS (+ (* k 3) 1)) pp (vector-at PCS (+ (* k 3) 2))
+                                u1 (if (>= q 395) (refuse-text f R "refused: prompt parentheses nested too deeply\n") 0)]
+                            (if (= pp 1)
+                              (let [is (+ ps 1) ie (- pe 1)
+                                    colon (loop [i (- ie 1)] (if (< i is) -1 (if (= (byte-at f (+ p i)) 58) i (recur (- i 1)))))
+                                    fp (if (> (- colon is) 0) (parse-fp f R p (+ colon 1) ie) (wsent))
+                                    w2 (if (= fp (wsent)) (fp-mul11 tw) fp)
+                                    e2 (if (= fp (wsent)) ie colon)
+                                    a (vector-assoc! STK (* q 4) is) b (vector-assoc! STK (+ (* q 4) 1) e2)
+                                    c (vector-assoc! STK (+ (* q 4) 2) w2) d (vector-assoc! STK (+ (* q 4) 3) 0)]
+                                (recur (- k 1) (+ q 1)))
+                              (let [a (vector-assoc! STK (* q 4) ps) b (vector-assoc! STK (+ (* q 4) 1) pe)
+                                    c (vector-assoc! STK (+ (* q 4) 2) tw) d (vector-assoc! STK (+ (* q 4) 3) 1)]
+                                (recur (- k 1) (+ q 1)))))))]
+              (recur sp2 n)))))))))
+
+;; the code points of the bytes [s, e) (with "\\(" and "\\)" as plain parentheses) into CP / CL / WT from index k, lower-cased, classified,
+;; NFC-composed, special tokens marked; then one boundary entry (class 0) so that nothing joins across a segment; returns the new k
+(defn- decode-seg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 s :i64 e :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k0 :i64 w :i64 g :i64] :i64
+  (let [k (loop [q s k k0]
+            (if (>= q e) k
+              (let [b0 (byte-at f (+ pbuf q))
+                    nb (if (< (+ q 1) e) (byte-at f (+ pbuf (+ q 1))) 0)
+                    esc (if (and (= @WEIGHTS@ 1) (and (= b0 92) (or (= nb 40) (= nb 41)))) 1 0)
+                    d (if (= esc 1) (+ (* nb 8) 2) (utf8-at f R pbuf q e))
+                    sp (if (= esc 1) 0 (special-at f pbuf q e))
+                    c (if (> sp 0) (+ 2097152 sp) (lcp (i64-shift-right d 3)))
+                    u0 (if (>= k 8190) (refuse-text f R "refused: a prompt line longer than 8190 characters\n") 0)
+                    m (if (or (within c 768 879) (within c 12441 12442)) 1 0)
+                    pc (if (and (= m 1) (> k 0)) (nfc-find (vector-at CP (- k 1)) c) -1)
+                    u2 (if (and (= m 1) (< pc 0)) (refuse-text f R "refused: a combining mark that does not compose with the character before it\n") 0)
+                    cl (if (> sp 0) 5 (if (= m 1) 1 (cls c)))
+                    u1 (if (= cl 4) (refuse-text f R "refused: a character outside the supported set (ASCII, Latin-1, Latin Extended-A, CJK, kana, Hangul, fullwidth forms, common symbols and emoji)\n") 0)
+                    k2 (if (= m 1) (- k 1) k)
+                    a (vector-assoc! CP k2 (if (= m 1) pc c)) b (vector-assoc! CL k2 cl) x (vector-assoc! WT k2 w) y (vector-assoc! SGI k2 g)]
+                (recur (+ q (if (> sp 0) (if (= sp 1) 15 13) (bit-and d 7))) (+ k2 1)))))
+        a (vector-assoc! CP k 32) b (vector-assoc! CL k 0) x (vector-assoc! WT k 0) y (vector-assoc! SGI k g)]
+    (+ k 1)))
+
+
+;; ComfyUI's batching of the token groups (one group per segment) into blocks of 77: BOS, tokens, EOS, padding. A group of fewer than 8 tokens is kept
+;; whole (the block is closed with EOS and padding and a new one started when it does not fit); a longer group is cut where the block is full.
+;; OUT / OUTW / OUTG: the tokens, their weights and group numbers (count in OUT[0], token k at index k + 1); fills IDS / WTS (block * 77 + position)
+;; for at most 4 blocks and returns the block count
+(defn- batch-blocks [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 OUT :vector-i64 OUTW :vector-i64 OUTG :vector-i64 IDS :vector-i64 WTS :vector-i64
+                     bos :i64 eos :i64 pad :i64] :i64
+  (let [cnt (vector-at OUT 0)
+        u0 (vector-assoc! IDS 0 bos) u1 (vector-assoc! WTS 0 65536)
+        r (loop [p 0 c 0 len 1]
+            (if (>= p cnt)
+              (vector-i64 c len)
+              (let [g (vector-at OUTG (+ 1 p))
+                    e (loop [q p] (if (and (< q cnt) (= (vector-at OUTG (+ 1 q)) g)) (recur (+ q 1)) q))
+                    st (loop [q p] (if (and (> q 0) (= (vector-at OUTG q) g)) (recur (- q 1)) q))
+                    large (if (>= (- e st) 8) 1 0)
+                    base (+ (* c 77) len)
+                    u2 (if (>= c 3) (refuse-text f R "refused: a prompt of more than 4 blocks of 75 tokens\n") 0)]
+                (if (> (+ (- e p) len) 76)
+                  (let [rem (- 76 len)]
+                    (if (= large 1)
+                      (let [x (loop [j 0] (if (= j rem) 0 (let [a (vector-assoc! IDS (+ base j) (vector-at OUT (+ 1 (+ p j))))
+                                                                b (vector-assoc! WTS (+ base j) (vector-at OUTW (+ 1 (+ p j))))] (recur (+ j 1)))))
+                            a (vector-assoc! IDS (+ (* c 77) 76) eos) b (vector-assoc! WTS (+ (* c 77) 76) 65536)
+                            a2 (vector-assoc! IDS (* (+ c 1) 77) bos) b2 (vector-assoc! WTS (* (+ c 1) 77) 65536)]
+                        (recur (+ p rem) (+ c 1) 1))
+                      (let [a (vector-assoc! IDS base eos) b (vector-assoc! WTS base 65536)
+                            x (loop [j (+ len 1)] (if (>= j 77) 0 (let [a1 (vector-assoc! IDS (+ (* c 77) j) pad) b1 (vector-assoc! WTS (+ (* c 77) j) 65536)] (recur (+ j 1)))))
+                            a2 (vector-assoc! IDS (* (+ c 1) 77) bos) b2 (vector-assoc! WTS (* (+ c 1) 77) 65536)]
+                        (recur p (+ c 1) 1))))
+                  (let [x (loop [j 0] (if (= j (- e p)) 0 (let [a (vector-assoc! IDS (+ base j) (vector-at OUT (+ 1 (+ p j))))
+                                                                b (vector-assoc! WTS (+ base j) (vector-at OUTW (+ 1 (+ p j))))] (recur (+ j 1)))))]
+                    (recur e c (+ len (- e p))))))))
+        c (vector-at r 0)
+        len (vector-at r 1)
+        a (vector-assoc! IDS (+ (* c 77) len) eos) b (vector-assoc! WTS (+ (* c 77) len) 65536)
+        x (loop [j (+ len 1)] (if (>= j 77) 0 (let [a1 (vector-assoc! IDS (+ (* c 77) j) pad) b1 (vector-assoc! WTS (+ (* c 77) j) 65536)] (recur (+ j 1)))))]
+    (+ c 1)))
+
+;; ---- textual-inversion embeddings (ComfyUI's "embedding:name" words), slice 48 ----
+;; A word "embedding:name" (at the start of a segment or after whitespace) is replaced by the rows of the file name / name.safetensors in the embedding
+;; directory (keys clip_l and clip_g, F32 or F16, the same number of rows, at most 32 in all); the text that follows the name is tokenized on its own.
+(defn- embdir [] :string "@EMBDIR@")
+(defn- is-asp [b :i64] :bool (or (= b 32) (or (within b 9 13) (within b 28 31))))
+
+;; first index of the literal lit in [s, e), or -1
+(defn- sub-find [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :i64 e :i64 lit :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 lit))
+        n (vector-count v)]
+    (loop [i s]
+      (if (> (+ i n) e) -1
+        (if (= (loop [k 0] (if (= k n) 1 (if (= (byte-at f (+ p (+ i k))) (vector-at v k)) (recur (+ k 1)) 0))) 1) i (recur (+ i 1)))))))
+
+;; write dir + "/" + name + ext as a C string at PB
+(defn- mk-path! [f [:fn [[:i64 :i64 :i64] :i64]] PB :i64 name :i64 len :i64 ext :string] :i64
+  (let [dn (string-length (embdir))
+        u0 (put-text f PB (embdir))
+        u1 (poke8 f (+ PB dn) 47)
+        u2 (loop [k 0] (if (= k len) 0 (let [x (poke8 f (+ PB (+ dn (+ 1 k))) (byte-at f (+ name k)))] (recur (+ k 1)))))
+        u3 (put-text f (+ PB (+ dn (+ 1 len))) ext)]
+    0))
+
+;; the descriptor of path PB if it is a regular file, else -1
+(defn- open-reg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 PB :i64] :i64
+  (let [fd (cc f (sym f "open") PB 0 0 0 0)]
+    (if (< fd 0) -1
+      (let [sb (cc f (vector-at R 3) 160 0 0 0 0)
+            r (cc f (sym f "fstat") fd sb 0 0 0)
+            mode (bit-and (peek f (+ sb 4)) 65535)]
+        (if (and (= r 0) (= (bit-and mode 61440) 32768)) fd (let [x (cc f (sym f "close") fd 0 0 0 0)] -1))))))
+
+;; ComfyUI's search order: the name itself, then .safetensors, .pt, .bin; returns descriptor * 4 + kind (1 = safetensors, 2 = other), or -1
+(defn- emb-find-file [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 name :i64 len :i64] :i64
+  (let [PB (cc f (vector-at R 3) 1200 0 0 0 0)
+        m0 (mk-path! f PB name len "")
+        fd0 (open-reg f R PB)
+        endsst (if (and (>= len 12) (= (sub-find f name (- len 12) len ".safetensors") (- len 12))) 1 0)]
+    (if (>= fd0 0) (+ (* fd0 4) (if (= endsst 1) 1 2))
+      (let [m1 (mk-path! f PB name len ".safetensors")
+            fd1 (open-reg f R PB)]
+        (if (>= fd1 0) (+ (* fd1 4) 1)
+          (let [m2 (mk-path! f PB name len ".pt")
+                fd2 (open-reg f R PB)]
+            (if (>= fd2 0) (+ (* fd2 4) 2)
+              (let [m3 (mk-path! f PB name len ".bin")
+                    fd3 (open-reg f R PB)]
+                (if (>= fd3 0) (+ (* fd3 4) 2) -1)))))))))
+
+;; the integers of the list that starts after the "[" at i, into OUTV (at most 4), count returned
+(defn- parse-ints [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 OUTV :vector-i64] :i64
+  (loop [j i k 0 cur 0 have 0]
+    (let [b (byte-at f (+ p j))]
+      (cond
+        (within b 48 57) (recur (+ j 1) k (+ (* cur 10) (- b 48)) 1)
+        (= b 44) (let [u (vector-assoc! OUTV k cur)] (recur (+ j 1) (+ k 1) 0 0))
+        :else (if (= have 1) (let [u (vector-assoc! OUTV k cur)] (+ k 1)) k)))))
+
+;; half precision bits to float32 bits
+(defn- half-bits [h :i64] :i64
+  (let [sg (i64-shift-left (bit-and (i64-shift-right h 15) 1) 31)
+        ex (bit-and (i64-shift-right h 10) 31)
+        mn (bit-and h 1023)]
+    (cond
+      (= ex 31) (bit-or sg (bit-or 2139095040 (i64-shift-left mn 13)))
+      (> ex 0) (bit-or sg (bit-or (i64-shift-left (+ ex 112) 23) (i64-shift-left mn 13)))
+      (= mn 0) sg
+      :else (loop [m mn e 113]
+              (if (>= m 1024) (bit-or sg (bit-or (i64-shift-left e 23) (i64-shift-left (bit-and m 1023) 13)))
+                (recur (i64-shift-left m 1) (- e 1)))))))
+
+;; the rows of the tensor `key` of a safetensors header: checks dtype (F32 or F16) and width, copies the rows to dst + row * width * 4 when dst is set; returns the row count
+(defn- emb-tensor! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 hdr :i64 hlen :i64 key :string width :i64 dst :i64 base :i64 IV :vector-i64] :i64
+  (let [ks (sub-find f hdr 0 hlen key)
+        u0 (if (< ks 0) (refuse-text f R "refused: an embedding without both clip_l and clip_g\n") 0)
+        oe (sub-find f hdr ks hlen "}")
+        f32 (sub-find f hdr ks oe "\"F32\"")
+        f16 (sub-find f hdr ks oe "\"F16\"")
+        u1 (if (and (< f32 0) (< f16 0)) (refuse-text f R "refused: an embedding that is neither F32 nor F16\n") 0)
+        sh (sub-find f hdr ks oe "\"shape\":[")
+        u2 (if (< sh 0) (refuse-text f R "refused: an embedding header without a shape\n") 0)
+        rank (parse-ints f hdr (+ sh 9) IV)
+        rows (if (= rank 1) 1 (if (= rank 2) (vector-at IV 0) (refuse-text f R "refused: an embedding of rank other than 1 or 2\n")))
+        dim (vector-at IV (- rank 1))
+        u3 (if (= dim width) 0 (refuse-text f R "refused: an embedding of the wrong width\n"))
+        od (sub-find f hdr ks oe "\"data_offsets\":[")
+        u4 (if (< od 0) (refuse-text f R "refused: an embedding header without offsets\n") 0)
+        no (parse-ints f hdr (+ od 16) IV)
+        off (+ (+ 8 hlen) (vector-at IV 0))
+        u5 (if (> (+ base rows) 32) (refuse-text f R "refused: more than 32 embedding rows in a prompt\n") 0)
+        u6 (if (= dst 0) 0
+             (if (>= f32 0)
+               (cc f (sym f "pread") fd (+ dst (* (* base width) 4)) (* (* rows width) 4) off 0)
+               (let [tmp (cc f (vector-at R 3) (+ (* (* rows width) 2) 16) 0 0 0 0)
+                     g (cc f (sym f "pread") fd tmp (* (* rows width) 2) off 0)
+                     o (+ dst (* (* base width) 4))]
+                 (loop [i 0]
+                   (if (= i (* rows width)) 0
+                     (let [hb (bit-or (byte-at f (+ tmp (* i 2))) (i64-shift-left (byte-at f (+ tmp (+ (* i 2) 1))) 8))
+                           fb (half-bits hb)
+                           w0 (poke8 f (+ o (* i 4)) (bit-and fb 255))
+                           w1 (poke8 f (+ o (+ (* i 4) 1)) (bit-and (i64-shift-right fb 8) 255))
+                           w2 (poke8 f (+ o (+ (* i 4) 2)) (bit-and (i64-shift-right fb 16) 255))
+                           w3 (poke8 f (+ o (+ (* i 4) 3)) (bit-and (i64-shift-right fb 24) 255))]
+                       (recur (+ i 1))))))))]
+    rows))
+
+;; the registry EM: [0] embeddings, [1] rows so far, then (name hash, first row, rows) per embedding. Returns the first row of the embedding `name`, loading
+;; it (and, when the tables EM[3] / EM[4] are set, copying its rows there as float32) on first use; -1 when there is no such file
+(defn- emb-load! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 EM :vector-i64 name :i64 len :i64] :i64
+  (let [bad (if (or (= len 0) (or (= (byte-at f name) 47) (>= (sub-find f name 0 len "..") 0))) 1 0)]
+    (if (= bad 1) -1
+      (let [h (fnv f name len)
+            reg (loop [i 0] (if (= i (vector-at EM 0)) -1 (if (= (vector-at EM (+ 2 (* i 3))) h) i (recur (+ i 1)))))]
+        (if (>= reg 0) (vector-at EM (+ 3 (* reg 3)))
+          (let [r (emb-find-file f R name len)]
+            (if (< r 0) -1
+              (let [fd (i64-shift-right r 2)
+                    u0 (if (= (bit-and r 3) 1) 0 (refuse-text f R "refused: an embedding file that is not .safetensors\n"))
+                    lb (cc f (vector-at R 3) 16 0 0 0 0)
+                    u1 (cc f (sym f "pread") fd lb 8 0 0)
+                    hlen (peek f lb)
+                    hdr (cc f (vector-at R 3) (+ hlen 16) 0 0 0 0)
+                    u2 (cc f (sym f "pread") fd hdr hlen 8 0)
+                    IV (vector-alloc 8)
+                    base (vector-at EM 1)
+                    nl (emb-tensor! f R fd hdr hlen "\"clip_l\"" 768 (vector-at EM 67) base IV)
+                    ng (emb-tensor! f R fd hdr hlen "\"clip_g\"" 1280 (vector-at EM 68) base IV)
+                    u3 (if (= nl ng) 0 (refuse-text f R "refused: an embedding whose clip_l and clip_g have different numbers of rows\n"))
+                    u4 (if (> (+ base nl) 32) (refuse-text f R "refused: more than 32 embedding rows in a prompt\n") 0)
+                    u5 (if (>= (vector-at EM 0) 15) (refuse-text f R "refused: more than 15 different embeddings\n") 0)
+                    q (+ 2 (* (vector-at EM 0) 3))
+                    a (vector-assoc! EM q h) b (vector-assoc! EM (+ q 1) base) c (vector-assoc! EM (+ q 2) nl)
+                    d (vector-assoc! EM 0 (+ (vector-at EM 0) 1)) e (vector-assoc! EM 1 (+ base nl))
+                    cl (cc f (sym f "close") fd 0 0 0 0)]
+                base))))))))
+
+;; rows of the embedding whose first row is base
+(defn- emb-rows [EM :vector-i64 base :i64] :i64
+  (loop [i 0] (if (= i (vector-at EM 0)) 0 (if (= (vector-at EM (+ 3 (* i 3))) base) (vector-at EM (+ 4 (* i 3))) (recur (+ i 1))))))
+
+;; one text group over the bytes [s, e) of src
+(defn- text-group! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 src :i64 s :i64 e :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                   EM :vector-i64] :i64
+  (let [g (vector-at EM 64)
+        u (vector-assoc! EM 64 (+ g 1))]
+    (decode-seg f R src s e CP CL WT SGI k w g)))
+
+;; one group of n embedding rows (class 6, the code point is the row), then a boundary
+(defn- emb-group! [CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64 EM :vector-i64 base :i64 n :i64 w :i64] :i64
+  (let [g (vector-at EM 64)
+        u (vector-assoc! EM 64 (+ g 1))
+        d (loop [j 0] (if (= j n) 0 (let [a (vector-assoc! CP (+ k j) (+ base j)) b (vector-assoc! CL (+ k j) 6) c (vector-assoc! WT (+ k j) w) e (vector-assoc! SGI (+ k j) g)] (recur (+ j 1)))))
+        a (vector-assoc! CP (+ k n) 32) b (vector-assoc! CL (+ k n) 0) c (vector-assoc! WT (+ k n) 0) e (vector-assoc! SGI (+ k n) g)]
+    (+ k (+ n 1))))
+
+;; ComfyUI's handling of one "embedding:..." word [ps, pe) of weight w (_try_get_embedding and the code after it)
+(defn- emb-word! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 ps :i64 pe :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                  EM :vector-i64] :i64
+  (let [r0 (+ ps 10)
+        a0 (loop [i r0] (if (and (< i pe) (= (byte-at f (+ pbuf i)) 10)) (recur (+ i 1)) i))
+        e2 (loop [i pe] (if (and (> i a0) (= (byte-at f (+ pbuf (- i 1))) 10)) (recur (- i 1)) i))
+        n0 (loop [i a0] (if (and (< i e2) (is-asp (byte-at f (+ pbuf i)))) (recur (+ i 1)) i))
+        u0 (if (>= n0 e2) (refuse-text f R "refused: an embedding word without a name\n") 0)
+        n1 (loop [i n0] (if (and (< i e2) (not (is-asp (byte-at f (+ pbuf i))))) (recur (+ i 1)) i))
+        ;; the rest of the word, its tokens joined by single spaces, into the scratch buffer
+        xb (vector-at EM 65)
+        x0 (vector-at EM 66)
+        xe (loop [i n1 x x0 first 1]
+             (let [t0 (loop [q i] (if (and (< q e2) (is-asp (byte-at f (+ pbuf q)))) (recur (+ q 1)) q))]
+               (if (>= t0 e2) x
+                 (let [t1 (loop [q t0] (if (and (< q e2) (not (is-asp (byte-at f (+ pbuf q))))) (recur (+ q 1)) q))
+                       sp1 (if (= first 1) 0 (poke8 f (+ xb x) 32))
+                       x1 (if (= first 1) x (+ x 1))
+                       cp1 (loop [q 0] (if (= q (- t1 t0)) 0 (let [y1 (poke8 f (+ xb (+ x1 q)) (byte-at f (+ pbuf (+ t0 q))))] (recur (+ q 1)))))]
+                   (recur t1 (+ x1 (- t1 t0)) 0)))))
+        ;; a name with "<" or "[" in it ends there, the rest goes in front of the leftover
+        cut (loop [i n0] (if (>= i n1) -1 (if (or (= (byte-at f (+ pbuf i)) 60) (= (byte-at f (+ pbuf i)) 91)) i (recur (+ i 1)))))
+        nameend (if (< cut 0) n1 cut)
+        lt (if (< cut 0) (- xe x0)
+             (let [rest (- xe x0)
+                   shift (loop [q (- rest 1)] (if (< q 0) 0 (let [y2 (poke8 f (+ xb (+ x0 (+ q (+ (- n1 cut) (if (> rest 0) 1 0))))) (byte-at f (+ xb (+ x0 q))))] (recur (- q 1)))))
+                   head (loop [q 0] (if (= q (- n1 cut)) 0 (let [y3 (poke8 f (+ xb (+ x0 q)) (byte-at f (+ pbuf (+ cut q))))] (recur (+ q 1)))))
+                   sp2 (if (> rest 0) (poke8 f (+ xb (+ x0 (- n1 cut))) 32) 0)]
+               (+ (- n1 cut) (if (> rest 0) (+ rest 1) 0))))
+        base (emb-load! f R EM (+ pbuf n0) (- nameend n0))]
+    (if (>= base 0)
+      (let [n (emb-rows EM base)
+            k2 (emb-group! CP CL WT SGI k EM base n w)
+            u1 (vector-assoc! EM 66 (+ x0 lt))]
+        (if (> lt 0) (text-group! f R xb x0 (+ x0 lt) w CP CL WT SGI k2 EM) k2))
+      ;; not found: with commas around the name, ComfyUI tries the name without them and glues the commas in front of the leftover (this also when that fails)
+      (let [cs (loop [i n0] (if (and (< i nameend) (= (byte-at f (+ pbuf i)) 44)) (recur (+ i 1)) i))
+            ce (loop [i nameend] (if (and (> i cs) (= (byte-at f (+ pbuf (- i 1))) 44)) (recur (- i 1)) i))
+            slen (- ce cs)
+            tlen (- nameend n0)]
+        (if (< slen tlen)
+          (let [b2 (emb-load! f R EM (+ pbuf cs) slen)
+                ;; leftover := name[len(stripped):] + " " + leftover
+                sufflen (- tlen slen)
+                ox (+ x0 lt)
+                nbuf (+ ox 0)
+                c1 (loop [q 0] (if (= q sufflen) 0 (let [y4 (poke8 f (+ xb (+ nbuf q)) (byte-at f (+ pbuf (+ n0 (+ slen q)))))] (recur (+ q 1)))))
+                c2 (poke8 f (+ xb (+ nbuf sufflen)) 32)
+                c3 (loop [q 0] (if (= q lt) 0 (let [y5 (poke8 f (+ xb (+ nbuf (+ sufflen (+ 1 q)))) (byte-at f (+ xb (+ x0 q))))] (recur (+ q 1)))))
+                tot (+ sufflen (+ 1 lt))
+                u2 (vector-assoc! EM 66 (+ nbuf tot))
+                k3 (if (>= b2 0) (emb-group! CP CL WT SGI k EM b2 (emb-rows EM b2) w) k)]
+            (text-group! f R xb nbuf (+ nbuf tot) w CP CL WT SGI k3 EM))
+          (let [u3 (vector-assoc! EM 66 (+ x0 lt))]
+            (if (> lt 0) (text-group! f R xb x0 (+ x0 lt) w CP CL WT SGI k EM) k)))))))
+
+;; a segment [s, e): cut before every "embedding:" that follows whitespace, each piece is its own group; with no embedding directory it is one group
+(defn- emit-segment! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 s :i64 e :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                      EM :vector-i64] :i64
+  (if (= (string-length (embdir)) 0)
+    (text-group! f R pbuf s e w CP CL WT SGI k EM)
+    (let [SPV (vector-alloc 66)
+          n (loop [i (+ s 1) c 0]
+              (if (> (+ i 10) e) c
+                (if (and (is-asp (byte-at f (+ pbuf (- i 1)))) (= (sub-find f pbuf i (+ i 10) "embedding:") i))
+                  (let [u0 (if (>= c 64) (refuse-text f R "refused: more than 64 embedding words in a segment\n") 0)
+                        u (vector-assoc! SPV c i)]
+                    (recur (+ i 1) (+ c 1)))
+                  (recur (+ i 1) c))))]
+      (loop [j 0 kk k]
+        (if (> j n) kk
+          (let [ps (if (= j 0) s (vector-at SPV (- j 1)))
+                pe (if (= j n) e (vector-at SPV j))
+                isemb (if (and (> pe ps) (and (>= (- pe ps) 10) (= (sub-find f pbuf ps (+ ps 10) "embedding:") ps))) 1 0)]
+            (if (<= pe ps) (recur (+ j 1) kk)
+              (if (= isemb 1)
+                (recur (+ j 1) (emb-word! f R pbuf ps pe w CP CL WT SGI kk EM))
+                (recur (+ j 1) (text-group! f R pbuf ps pe w CP CL WT SGI kk EM))))))))))
+
+(defn- wr-num [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 v :i64] :i64
+  (let [t (string-from-i64 v)
+        p (cstr f (vector-at R 3) t)]
+    (cc f (sym f "write") 2 p (string-length t) 0 0)))
+(defn- wr-text [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (cc f (sym f "write") 2 (cstr f (vector-at R 3) s) (string-length s) 0 0))
+
+(defn main [] :i64
+  (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
+        dlopen (sym f "dlopen")
+        R (vector-i64 (sym f "objc_msgSend") (sym f "sel_registerName") (sym f "objc_getClass") (sym f "malloc"))
+        sz (vector-alloc 1)
+        vbuf (slurp f R "@VOCAB@" sz)
+        vlen (vector-at sz 0)
+        mbuf (slurp f R "@MERGES@" sz)
+        mlen (vector-at sz 0)
+        pbuf (slurp f R "@PROMPTS@" sz)
+        plen (vector-at sz 0)
+        arena (cc f (vector-at R 3) 4194304 0 0 0 0)
+        tmp (cc f (vector-at R 3) 4096 0 0 0 0)
+        wbuf (cc f (vector-at R 3) 1024 0 0 0 0)
+        VT (vector-alloc (* (hsize) 3))
+        PT (vector-alloc (* (psize) 2))
+        z1 (loop [i 0] (if (= i (* (hsize) 3)) 0 (let [u (vector-assoc! VT i 0)] (recur (+ i 1)))))
+        z2 (loop [i 0] (if (= i (* (psize) 2)) 0 (let [u (vector-assoc! PT i 0)] (recur (+ i 1)))))
+        st (vector-alloc 1)
+        z3 (vector-assoc! st 0 0)
+        nv (load-vocab f vbuf vlen VT arena st tmp)
+        nm (load-merges f mbuf mlen VT arena PT)
+        bos (vt-find f VT arena (cstr f (vector-at R 3) "<|startoftext|>") 15)
+        eos (vt-find f VT arena (cstr f (vector-at R 3) "<|endoftext|>") 13)
+        u0 (wr-text f R "vocab ")
+        u1 (wr-num f R nv)
+        u2 (wr-text f R " merges ")
+        u3 (wr-num f R nm)
+        u4 (wr-text f R "\n")
+        SS (vector-alloc 512) SE (vector-alloc 512) SI (vector-alloc 512)
+        OFF (vector-alloc 520)
+        CP (vector-alloc 8192) CL (vector-alloc 8192)
+        tmpw (cc f (vector-at R 3) 1024 0 0 0 0)
+        EM (vector-alloc 80) XBP (cc f (vector-at R 3) 65536 0 0 0 0)
+        stx (vector-assoc! EM 65 XBP)
+        OUT (vector-alloc 4096) OUTW (vector-alloc 4096) OUTG (vector-alloc 4096) SGI (vector-alloc 8192) IDS (vector-alloc 320) WTS (vector-alloc 320)
+        SEG (vector-alloc 1840) STK (vector-alloc 1600) PCS (vector-alloc 920) WT (vector-alloc 8192)]
+    ;; one output line per prompt line
+    (loop [ls 0]
+      (if (>= ls plen) 0
+        (let [le (loop [q ls] (if (or (>= q plen) (= (byte-at f (+ pbuf q)) 10)) q (recur (+ q 1))))
+              u (vector-assoc! OUT 0 0)
+              st0 (vector-assoc! EM 64 0) st2 (vector-assoc! EM 66 0)
+              nseg (segments f R pbuf ls le SEG STK PCS)
+              ncp (loop [g 0 k 0]
+                    (if (= g nseg) k
+                      (recur (+ g 1) (emit-segment! f R pbuf (vector-at SEG (* g 3)) (vector-at SEG (+ (* g 3) 1)) (vector-at SEG (+ (* g 3) 2)) CP CL WT SGI k EM))))
+              walk (loop [i 0]
+                     (if (>= i ncp) 0
+                       (if (= (vector-at CL i) 0) (recur (+ i 1))
+                         (if (= (vector-at CL i) 6)
+                           (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (+ 1000000 (vector-at CP i)))
+                                 ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) gg (vector-assoc! OUTG (+ 1 cc) (vector-at SGI i)) v (vector-assoc! OUT 0 (+ cc 1))]
+                             (recur (+ i 1)))
+                         (if (= (vector-at CL i) 5)
+                           (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (if (= (vector-at CP i) 2097153) bos eos))
+                                 ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) gg (vector-assoc! OUTG (+ 1 cc) (vector-at SGI i)) v (vector-assoc! OUT 0 (+ cc 1))]
+                             (recur (+ i 1)))
+                           (let [n (token-len CP CL i ncp)
+                                 r (word-symbols f R CP i n wbuf tmpw OFF)
+                                 c0 (vector-at OUT 0)
+                                 b (bpe-word f R VT arena PT wbuf (vector-at r 0) (vector-at r 1) OFF SS SE SI OUT)
+                                 c1 (vector-at OUT 0)
+                                 ws (loop [j c0] (if (>= j c1) 0 (let [x (vector-assoc! OUTW (+ 1 j) (vector-at WT i)) y (vector-assoc! OUTG (+ 1 j) (vector-at SGI i))] (recur (+ j 1)))))]
+                             (recur (+ i n))))))))
+              cnt (vector-at OUT 0)
+              nb (batch-blocks f R OUT OUTW OUTG IDS WTS bos eos eos)
+              keep (if (> cnt 75) 75 cnt)
+              pr (if (= @BLOCKS@ 1)
+                   (loop [b 0]
+                     (if (= b nb) 0
+                       (let [a (loop [k 0] (if (= k 77) 0 (let [x (if (= k 0) 0 (wr-text f R " ")) y (wr-num f R (vector-at IDS (+ (* b 77) k)))] (recur (+ k 1)))))
+                             a1 (wr-text f R "\n")
+                             w1 (if (= @WLINES@ 1)
+                                  (let [c (wr-text f R "w")
+                                        d (loop [k 0] (if (= k 77) 0 (let [x (wr-text f R " ") y (wr-num f R (vector-at WTS (+ (* b 77) k)))] (recur (+ k 1)))))
+                                        e (wr-text f R "\n")]
+                                    0)
+                                  0)]
+                         (recur (+ b 1)))))
+                   (let [p0 (wr-num f R bos)
+                         p1 (loop [k 0] (if (= k keep) 0 (let [a (wr-text f R " ") b (wr-num f R (vector-at OUT (+ 1 k)))] (recur (+ k 1)))))
+                         p2 (wr-text f R " ")
+                         p3 (wr-num f R eos)
+                         p4 (wr-text f R "\n")
+                         pw (if (= @WLINES@ 1)
+                              (let [a (wr-text f R "w")
+                                    b (loop [k 0] (if (= k keep) 0 (let [x (wr-text f R " ") y (wr-num f R (vector-at OUTW (+ 1 k)))] (recur (+ k 1)))))
+                                    c (wr-text f R "\n")]
+                                0)
+                              0)]
+                     0))]
+          (recur (+ le 1)))))))

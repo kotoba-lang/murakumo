@@ -1,0 +1,47 @@
+(ns murakumo.upsample (:export [main]))
+
+;; Nearest-neighbour 2x upsample of a [@C@, @H@, @W@] f32 tensor to
+;; [@C@, 2*@H@, 2*@W@]: the Upsample in front of the 3x3 conv in every UNet and VAE
+;; decoder stage. Pure data movement, so the result is exact; the gate guards the
+;; indexing. Values travel as i64 bit patterns.
+
+(defn- nc [] :i64 @C@)
+(defn- hh [] :i64 @H@)
+(defn- ww [] :i64 @W@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-add (f32-mul (i64-to-f32-rounded iv) (fb scale)) (fb 0))))]
+        (recur (+ i 1) t)))))
+
+(defn- pass [x :vector-i64 c0 :i64] :i64
+  (loop [c 0 cs c0]
+    (if (= c (nc)) cs
+      (recur (+ c 1)
+             (loop [y 0 cy cs]
+               (if (= y (* 2 (hh))) cy
+                 (recur (+ y 1)
+                        (loop [xx 0 cx cy]
+                          (if (= xx (* 2 (ww))) cx
+                            (recur (+ xx 1)
+                                   (bit-and (+ (* cx 31)
+                                               (bit-and (vector-at x (+ (* (+ (* c (hh)) (quot y 2)) (ww)) (quot xx 2))) 4294967295))
+                                            (mask48))))))))))))
+
+(defn main [] :i64
+  (let [x (vector-alloc (* (nc) (* (hh) (ww))))
+        s1 (fill x (* (nc) (* (hh) (ww))) 12345 956301312)]
+    (loop [i 0 c (bit-and s1 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (pass x c))))))

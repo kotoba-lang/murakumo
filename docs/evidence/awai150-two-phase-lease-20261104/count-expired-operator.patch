@@ -1,0 +1,21 @@
+--- operator.py
++++ operator.py
+@@ -2 +2 @@
+-source=pathlib.Path('/private/tmp/awai-flint-two-phase-quorum.kotoba').read_bytes()
++source=pathlib.Path('/private/tmp/awai-flint-count-expired.kotoba').read_bytes()
+@@ -77 +77 @@
+-  e=dict(env,KEXE_ALLOW='7,20,35,37,38,39,45,46,47',KEXE_CAP_RESOURCES_20='/usr/bin/systemctl',KEXE_SPAWN_ENV='DBUS_SESSION_BUS_ADDRESS:XDG_RUNTIME_DIR',KEXE_CAP_RESOURCES_45=ports)
++  e=dict(env,KEXE_ALLOW='7,20,35,37,38,39,45,46,47',KEXE_CAP_RESOURCES_20='/usr/bin/systemctl:/usr/bin/sleep',KEXE_SPAWN_ENV='DBUS_SESSION_BUS_ADDRESS:XDG_RUNTIME_DIR',KEXE_CAP_RESOURCES_45=ports)
+@@ -82,0 +83 @@
++  if mode=='expired-count' and stats!=[4,4,4]:raise RuntimeError('unexpected quorum round count')
+@@ -96 +97 @@
+- r=subprocess.run(['/usr/bin/systemd-run','--user','--quiet','--no-block','--unit='+unit,'--property=Type=oneshot','--property=RemainAfterExit=yes','/usr/bin/true'],capture_output=True,text=True,timeout=8)
++ r=subprocess.run(['/usr/bin/systemd-run','--user','--quiet','--no-block','--unit='+unit,'--property=Type=oneshot','--property=RemainAfterExit=yes','/usr/bin/sleep','4'],capture_output=True,text=True,timeout=8)
+@@ -99 +100 @@
+-  if show('SubState')=='exited':break
++  if show('SubState')=='start':break
+@@ -101,2 +102,2 @@
+- if show('SubState')!='exited':raise RuntimeError('test unit did not exit')
+- for mode in ('same','changed','badmac'):scenario(mode)
++ if show('SubState')!='start':raise RuntimeError('test unit did not start')
++ for mode in ('expired-count','same'):scenario(mode)

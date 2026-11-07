@@ -1,0 +1,77 @@
+(ns murakumo.conv2d (:export [main]))
+
+;; 2D convolution, NCHW, batch 1, bias, f32, square window @KS@ (1 or 3), stride
+;; @STRIDE@ (1 or 2), padding @KS@/2: the 1x1 projections, the 3x3 stride-1 convs and
+;; the 3x3 stride-2 downsample of an SDXL UNet and VAE. Channels @CI@ -> @CO@, input
+;; @H@ x @W@. The accumulator starts at the bias and adds one product per in-bounds
+;; tap in (ci, ky, kx) order, each rounded alone, as kernel.c does; padded taps
+;; are skipped, not multiplied by zero. Values travel as i64 bit patterns.
+
+(defn- nci [] :i64 @CI@)
+(defn- nco [] :i64 @CO@)
+(defn- hh [] :i64 @H@)
+(defn- ww [] :i64 @W@)
+(defn- ks [] :i64 @KS@)
+(defn- stride [] :i64 @STRIDE@)
+(defn- pad [] :i64 (quot (ks) 2))
+(defn- oh [] :i64 (+ (quot (- (+ (hh) (* 2 (pad))) (ks)) (stride)) 1))
+(defn- ow [] :i64 (+ (quot (- (+ (ww) (* 2 (pad))) (ks)) (stride)) 1))
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-add (f32-mul (i64-to-f32-rounded iv) (fb scale)) (fb 0))))]
+        (recur (+ i 1) t)))))
+
+(defn- tap [x :vector-i64 w :vector-i64 acc :i64 wi :i64 xi :i64] :i64
+  (bf (f32-add (fb acc) (f32-mul (fb (vector-at w wi)) (fb (vector-at x xi))))))
+
+(defn- conv-at [x :vector-i64 w :vector-i64 b :vector-i64 co :i64 oy :i64 ox :i64] :i64
+  (let [kk (* (ks) (ks))
+        taps (* (nci) kk)]
+    (loop [t 0 acc (vector-at b co)]
+      (if (= t taps) acc
+        (let [ci (quot t kk)
+              k (- t (* ci kk))
+              ky (quot k (ks))
+              kx (- k (* ky (ks)))
+              yy (- (+ (* oy (stride)) ky) (pad))
+              xp (- (+ (* ox (stride)) kx) (pad))]
+          (if (or (or (< yy 0) (>= yy (hh))) (or (< xp 0) (>= xp (ww))))
+            (recur (+ t 1) acc)
+            (recur (+ t 1)
+                   (tap x w acc (+ (* (+ (* co (nci)) ci) kk) k)
+                        (+ (* (+ (* ci (hh)) yy) (ww)) xp)))))))))
+
+(defn- pass [x :vector-i64 w :vector-i64 b :vector-i64 c0 :i64] :i64
+  (loop [co 0 c c0]
+    (if (= co (nco)) c
+      (recur (+ co 1)
+             (loop [oy 0 cy c]
+               (if (= oy (oh)) cy
+                 (recur (+ oy 1)
+                        (loop [ox 0 cx cy]
+                          (if (= ox (ow)) cx
+                            (recur (+ ox 1)
+                                   (bit-and (+ (* cx 31) (bit-and (conv-at x w b co oy ox) 4294967295)) (mask48))))))))))))
+
+(defn main [] :i64
+  (let [x (vector-alloc (* (nci) (* (hh) (ww))))
+        w (vector-alloc (* (* (nco) (nci)) (* (ks) (ks))))
+        b (vector-alloc (nco))
+        s1 (fill x (* (nci) (* (hh) (ww))) 12345 947912704)
+        s2 (fill w (* (* (nco) (nci)) (* (ks) (ks))) s1 931135488)
+        s3 (fill b (nco) s2 947912704)]
+    (loop [i 0 c (bit-and s3 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (pass x w b c))))))

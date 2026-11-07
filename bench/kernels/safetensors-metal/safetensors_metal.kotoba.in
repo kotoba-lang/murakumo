@@ -1,0 +1,244 @@
+(ns murakumo.safetensors-metal (:export [main]))
+
+;; I3a, first slice (JUN-927, ADR-261106): read a safetensors file from a Kotoba program on the Metal route
+;; (amu ADR 0405, profile amu-program-metal, which gives the program libSystem through dyld, so open / pread
+;; are ordinary C calls). It reads the 8-byte header length and the JSON header, parses the tensor catalog
+;; (name, dtype, shape, data_offsets; the "__metadata__" entry is skipped) with a small byte scanner, and prints
+;; one line per tensor to stderr in file order: `name dtype d0xd1x... begin end`. It then reads the whole data
+;; region into a Metal buffer (newBufferWithLength + pread into its contents), folds it eight bytes at a time
+;; and prints `data-bytes N checksum C` where C = (C * 31 + word) mod 2^48. The path is @PATH@.
+;; Refused before the data is read (a message on stderr, then a trap): a tensor whose data_offsets span differs from
+;; product(shape) * dtype size, an unknown dtype, a largest data_offsets end that is not the data region's size.
+;; Not implemented: sha256 of the file (the language has a hash/sha256 capability, not wired on this route),
+;; entries with backslash escapes in names, files whose data region is not a multiple of 8 bytes, overlap checks.
+
+(defn- mask48 [] :i64 281474976710655)
+
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+(defn- peek [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (f 0 p 0))
+(defn- poke [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 1 p v))
+(defn- poke8 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 2 p v))
+(defn- scratch [f [:fn [[:i64 :i64 :i64] :i64]]] :i64 (f 4 0 0))
+
+(defn- cc [f [:fn [[:i64 :i64 :i64] :i64]] fn :i64 a :i64 b :i64 c :i64 d :i64 e :i64] :i64
+  (let [s (+ (scratch f) 64)
+        u0 (poke f s a) u1 (poke f (+ s 8) b) u2 (poke f (+ s 16) c)
+        u3 (poke f (+ s 24) d) u4 (poke f (+ s 32) e)]
+    (f 3 fn s)))
+
+(defn- put-text [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s)) n (vector-count v)]
+    (loop [i 0]
+      (if (= i n) (poke8 f (+ p n) 0)
+        (let [u (poke8 f (+ p i) (vector-at v i))] (recur (+ i 1)))))))
+
+(defn- sym [f [:fn [[:i64 :i64 :i64] :i64]] name :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) name)
+        p (cc f (peek f base) -2 (+ base 256) 0 0 0)]
+    (if (= p 0) (vector-at [0] 1) p)))
+
+(defn- cstr [f [:fn [[:i64 :i64 :i64] :i64]] malloc :i64 s :string] :i64
+  (let [p (cc f malloc (+ (string-length s) 1) 0 0 0 0)
+        u (put-text f p s)]
+    p))
+
+(defn- open-framework [f [:fn [[:i64 :i64 :i64] :i64]] dlopen :i64 path :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) path)
+        h (cc f dlopen (+ base 256) 2 0 0 0)]
+    (if (= h 0) (vector-at [0] 1) h)))
+
+;; R: 0 objc_msgSend, 1 sel_registerName, 2 objc_getClass, 3 malloc
+(defn- sel [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 name :string] :i64
+  (cc f (vector-at R 1) (cstr f (vector-at R 3) name) 0 0 0 0))
+(defn- msg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 self :i64 name :string a :i64 b :i64 c :i64] :i64
+  (cc f (vector-at R 0) self (sel f R name) a b c))
+(defn- nsstring [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (msg f R (cc f (vector-at R 2) (cstr f (vector-at R 3) "NSString") 0 0 0 0)
+       "stringWithUTF8String:" (cstr f (vector-at R 3) s) 0 0))
+
+(defn- refuse [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 err :i64] :i64
+  (let [d (msg f R err "localizedDescription" 0 0 0)
+        t (msg f R d "UTF8String" 0 0 0)
+        strlen (sym f "strlen")
+        n (cc f strlen t 0 0 0 0)
+        w (cc f (sym f "write") 2 t n 0 0)]
+    (vector-at [0] 1)))
+
+
+(defn- byte-at [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (bit-and (peek f p) 255))
+
+;; index of the closing quote of the string whose first content byte is at p+i
+(defn- str-end [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64] :i64
+  (loop [j i]
+    (if (= (byte-at f (+ p j)) 34) j (recur (+ j 1)))))
+
+;; first index >= i whose byte is c
+(defn- find-byte [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 c :i64] :i64
+  (loop [j i]
+    (if (= (byte-at f (+ p j)) c) j (recur (+ j 1)))))
+
+;; unsigned decimal at p+i (after optional spaces): value into out[0], index after the digits returned
+(defn- parse-uint [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 out :vector-i64] :i64
+  (let [s (loop [j i] (if (= (byte-at f (+ p j)) 32) (recur (+ j 1)) j))]
+    (loop [j s v 0]
+      (let [b (byte-at f (+ p j))]
+        (if (and (>= b 48) (<= b 57))
+          (recur (+ j 1) (+ (* v 10) (- b 48)))
+          (let [u (vector-assoc! out 0 v)] j))))))
+
+;; write n bytes at p to stderr
+(defn- wr [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64] :i64
+  (cc f (sym f "write") 2 p n 0 0))
+
+(defn- wr-text [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (wr f (cstr f (vector-at R 3) s) (string-length s)))
+
+(defn- wr-num [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 v :i64] :i64
+  (wr-text f R (string-from-i64 v)))
+
+;; shape list at p+lb (its '['): dims into rec[5..], count into rec[4], returns the index after ']'
+(defn- parse-shape [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 lb :i64 rec :vector-i64 tmp :vector-i64] :i64
+  (loop [q (+ lb 1) n 0]
+    (let [c (byte-at f (+ p q))]
+      (cond
+        (= c 93) (let [u (vector-assoc! rec 4 n)] (+ q 1))
+        (= c 44) (recur (+ q 1) n)
+        (= c 32) (recur (+ q 1) n)
+        :else (let [nx (parse-uint f p q tmp)
+                    u (vector-assoc! rec (+ 5 n) (vector-at tmp 0))]
+                (recur nx (+ n 1)))))))
+
+;; parse the object starting at p+i (its '{'): fills rec = [dtype-begin dtype-end begin end ndims d0..d7],
+;; returns the index just after its '}'
+(defn- tensor-body [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 rec :vector-i64 tmp :vector-i64] :i64
+  (loop [j (+ i 1)]
+    (let [b (byte-at f (+ p j))]
+      (cond
+        (= b 125) (+ j 1)
+        (= b 34)
+        (let [ke (str-end f p (+ j 1))
+              klen (- ke (+ j 1))
+              k0 (byte-at f (+ p (+ j 1)))
+              after (+ ke 1)]
+          (if (= klen 12)
+            (let [lb (find-byte f p after 91)
+                  n1 (parse-uint f p (+ lb 1) tmp)
+                  u0 (vector-assoc! rec 2 (vector-at tmp 0))
+                  cm (find-byte f p n1 44)
+                  n2 (parse-uint f p (+ cm 1) tmp)
+                  u1 (vector-assoc! rec 3 (vector-at tmp 0))]
+              (recur (+ (find-byte f p n2 93) 1)))
+            (if (= k0 100)
+              (let [vs (+ (find-byte f p after 34) 1)
+                    ve (str-end f p vs)
+                    u0 (vector-assoc! rec 0 vs)
+                    u1 (vector-assoc! rec 1 ve)]
+                (recur (+ ve 1)))
+              (recur (parse-shape f p (find-byte f p after 91) rec tmp)))))
+        :else (recur (+ j 1))))))
+
+;; skip a balanced {...} starting at p+i, returns the index after it (strings hold no braces here)
+(defn- skip-object [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64] :i64
+  (loop [j (+ i 1) depth 1]
+    (let [b (byte-at f (+ p j))]
+      (cond
+        (= depth 0) j
+        (= b 123) (recur (+ j 1) (+ depth 1))
+        (= b 125) (if (= depth 1) (+ j 1) (recur (+ j 1) (- depth 1)))
+        :else (recur (+ j 1) depth)))))
+
+;; bytes per element of the dtype string at p+s .. p+e, 0 if not one this reader knows
+(defn- dsize [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :i64 e :i64] :i64
+  (let [n (- e s)
+        b0 (byte-at f (+ p s))
+        b1 (byte-at f (+ p (+ s 1)))
+        b2 (byte-at f (+ p (+ s 2)))]
+    (cond
+      (= n 2) (if (= b1 56) 1 (if (= b1 49) 0 0))
+      (= n 4) (if (= b0 66) (if (= b1 70) 2 1) 0)
+      (= n 3) (if (= b1 49) (if (= b2 54) 2 0) (if (= b1 51) (if (= b2 50) 4 0) (if (= b1 54) (if (= b2 52) 8 0) 0)))
+      :else 0)))
+
+(defn- dims-product [rec :vector-i64] :i64
+  (loop [d 0 pr 1]
+    (if (= d (vector-at rec 4)) pr (recur (+ d 1) (* pr (vector-at rec (+ 5 d)))))))
+
+;; print the catalog (one line per tensor, file order), return the tensor count; chk[0] = largest data_offsets end,
+;; chk[1] = number of tensors whose size does not equal product(shape) * dtype size or whose dtype is unknown
+
+(defn- catalog [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 n :i64 chk :vector-i64] :i64
+  (let [rec (vector-alloc 16)
+        tmp (vector-alloc 2)]
+    (loop [j (+ (find-byte f p 0 123) 1) count 0]
+      (let [b (byte-at f (+ p j))]
+        (cond
+          (>= j n) count
+          (= b 125) count
+          (= b 34)
+          (let [ne (str-end f p (+ j 1))
+                ns (+ j 1)
+                after (+ (find-byte f p (+ ne 1) 123) 0)]
+            (if (and (= (- ne ns) 12) (= (byte-at f (+ p ns)) 95))
+              (recur (skip-object f p after) count)
+              (let [nx (tensor-body f p after rec tmp)
+                    u0 (wr f (+ p ns) (- ne ns))
+                    u1 (wr-text f R " ")
+                    u2 (wr f (+ p (vector-at rec 0)) (- (vector-at rec 1) (vector-at rec 0)))
+                    u3 (wr-text f R " ")
+                    u4 (loop [d 0]
+                         (if (= d (vector-at rec 4)) 0
+                           (let [x (if (= d 0) 0 (wr-text f R "x"))
+                                 y (wr-num f R (vector-at rec (+ 5 d)))]
+                             (recur (+ d 1)))))
+                    u5 (wr-text f R " ")
+                    u6 (wr-num f R (vector-at rec 2))
+                    u7 (wr-text f R " ")
+                    u8 (wr-num f R (vector-at rec 3))
+                    u9 (wr-text f R "\n")
+                    ds (dsize f p (vector-at rec 0) (vector-at rec 1))
+                    ok (if (= ds 0) 0 (if (= (* (dims-product rec) ds) (- (vector-at rec 3) (vector-at rec 2))) 1 0))
+                    u10 (if (= ok 1) 0 (let [w (vector-assoc! chk 1 (+ (vector-at chk 1) 1))] 0))
+                    u11 (if (> (vector-at rec 3) (vector-at chk 0)) (let [w (vector-assoc! chk 0 (vector-at rec 3))] 0) 0)]
+                (recur nx (+ count 1)))))
+          :else (recur (+ j 1) count))))))
+
+(defn main [] :i64
+  (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
+        dlopen (sym f "dlopen")
+        h1 (open-framework f dlopen "/System/Library/Frameworks/Foundation.framework/Foundation")
+        h2 (open-framework f dlopen "/System/Library/Frameworks/Metal.framework/Metal")
+        R (vector-i64 (sym f "objc_msgSend") (sym f "sel_registerName") (sym f "objc_getClass") (sym f "malloc"))
+        device (cc f (sym f "MTLCreateSystemDefaultDevice") 0 0 0 0 0)
+        dev (if (= device 0) (vector-at [0] 1) device)
+        fd (cc f (sym f "open") (cstr f (vector-at R 3) "@PATH@") 0 0 0 0)
+        u0 (if (< fd 0) (vector-at [0] 1) 0)
+        lenb (cc f (vector-at R 3) 16 0 0 0 0)
+        u1 (cc f (sym f "pread") fd lenb 8 0 0)
+        hlen (peek f lenb)
+        hdr (cc f (vector-at R 3) (+ hlen 16) 0 0 0 0)
+        u2 (cc f (sym f "pread") fd hdr hlen 8 0)
+        chk (vector-alloc 2)
+        ntensors (catalog f R hdr hlen chk)
+        u3 (wr-text f R "tensors ")
+        u4 (wr-num f R ntensors)
+        u5 (wr-text f R "\n")
+        total (cc f (sym f "lseek") fd 0 2 0 0)
+        dlen (- total (+ 8 hlen))
+        r1 (if (= (vector-at chk 1) 0) 0 (let [w (wr-text f R "refused: a tensor's size differs from its shape and dtype\n")] (vector-at [0] 1)))
+        r2 (if (= (vector-at chk 0) dlen) 0 (let [w (wr-text f R "refused: data_offsets do not match the data region size\n")] (vector-at [0] 1)))
+        buf (msg f R dev "newBufferWithLength:options:" dlen 0 0)
+        u6 (if (= buf 0) (vector-at [0] 1) 0)
+        data (msg f R buf "contents" 0 0 0)
+        got (cc f (sym f "pread") fd data dlen (+ 8 hlen) 0)
+        u7 (if (= got dlen) 0 (vector-at [0] 1))
+        c (loop [i 0 c 0]
+            (if (>= i dlen) c
+              (recur (+ i 8) (bit-and (+ (* c 31) (peek f (+ data i))) (mask48)))))
+        u8 (wr-text f R "data-bytes ")
+        u9 (wr-num f R dlen)
+        u10 (wr-text f R " checksum ")
+        u11 (wr-num f R c)
+        u12 (wr-text f R "\n")]
+    c))

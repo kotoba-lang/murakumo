@@ -1,0 +1,18 @@
+# Textual-inversion embeddings: `embedding:name` (stage M slice 48, JUN-927)
+
+Recorded 2026-11-07T06:07:22+0900, M1 Max, load average 5.33 8.96 11.71. Programs: `bench/kernels/clip-tokenizer-metal/` (standalone) and `bench/kernels/pipeline-metal/pipeline_metal.kotoba.in`; oracle: ComfyUI v0.44.0's own `SDTokenizer` with an embedding directory, and the Hugging Face towers.
+
+A prompt word `embedding:name` (at the start of a segment, or after whitespace) stands for the rows of a textual-inversion file instead of text. Until now both programs tokenized it as the letters `embedding:name`. They now do what ComfyUI does:
+- The file is `name`, then `name.safetensors`, in the embedding directory (the new `@EMBDIR@` placeholder; empty means embeddings are off and the words stay text). A name that is absolute or contains `..` is not loaded (ComfyUI checks the same with `commonpath`). Sub-directories work (`sub/tri`). `.pt` and `.bin` files are refused with a message.
+- ComfyUI's `_try_get_embedding` rules are ported exactly: the name is the first whitespace-separated token, the rest of the word is the leftover text, a name is cut at `<` or `[` (so `embedding:one<lora:x:1>` keeps the tail as text), and when the name is not found and has commas around it ComfyUI retries without them and glues the commas in front of the leftover (including its slicing quirk). A missing embedding drops the name and keeps the leftover. The leftover is tokenized as its own group, the embedding rows form one group (they count one slot each in the 77-token blocks, and carry the segment's weight).
+- Files: SDXL layout, tensors `clip_l` (width 768) and `clip_g` (width 1280), F32 or F16, rank 1 or 2, the same number of rows in both; at most 32 rows and 15 different embeddings per run. The rows are copied (F16 converted) into two float tables at first use.
+- On the GPU a new kernel `embov` overwrites the embedded-token row of every position that holds an embedding row with the table row plus the position embedding; the tower's id for that position is 0, so the pooled vector (first end token) is unaffected. The id and the row index of each block are copied into the tower inputs like the ids.
+
+| check | result |
+|---|---|
+| standalone, 16 prompts (one and several rows, F16, 1-D, sub-directory, missing, commas, `<lora`, weighted, repeated, adjacent, `../x`, a file outside the directory, `aembedding:` glued to text) against ComfyUI's tokenizer | every id and embedding row exact, every weight within 8/65536 |
+| 4 embedding mutants (comma retry, the `<` cut, the `..` check, the whitespace condition) | all detected |
+| render program, hf and single-file layouts, an F16 embedding in the conditional prompt, F32 ones (one of them in a sub-directory, after a comma) in the unconditional prompt, against ComfyUI's tokenizer and the Hugging Face towers with the embedding rows put into spare rows of the token embedding | gate passed in both; ids exact; ctx 1.05e-2 / 8.8e-3 (hf) and 6.4e-3 / 7.0e-3 (single-file), image 1.7e-2 |
+| 2 render mutants (embedding rows ignored, row index off by one) | detected (worst error 1.7 and 0.39) |
+
+Honest notes: the hf layout's conditional context error is 1.05e-2, a little above the 1e-2 that earlier slices reached and well inside this gate's limit (0.05); the single-file layout is 6.4e-3. Two files named `foo` and `foo.safetensors` would be loaded as two embeddings (the rows duplicated, not wrong). A bug found on the way: the new kernel took pipeline slot 46, which overlapped the two state slots (56 and 57) that slice 45 uses for the context length; they moved to 60 and 61, below the dispatch tables at 64. `.pt` / `.bin` embeddings, embeddings with other widths, and more than 32 rows are refused, not guessed.

@@ -1,12 +1,13 @@
 ;; JUN-156: a bounded, model-only Itonami profile step and automatic recovery.
 ;; Compose after git_checkpoint and its pinned native dependency closure.
+;; A complete source lock and project-level import qualification remain required.
 ;; The host supplies reviewed immutable profile/runtime pins and fresh tool
 ;; grants. SOUL and itonami.edn are data, never an authority source. No model
 ;; output is dispatched as a tool. This adapter does not run legacy cron scripts.
 ;; Transport is an explicitly admitted curl oneshot in the existing user
 ;; manager, not a detached child escaping the native spawn's 10-second budget.
 (ns murakumo.profile-recovery
-  (:export [profile-recovery-main]))
+  (:export [profile-recovery-main flint-response-problem flint-compact]))
 
 (defn- pr-json-quote [s :string] :string
   (let [b (cp-bytes s) out (vector-alloc (+ 2 (* 6 (vector-count b)))) z (vector-assoc! out 0 34)
@@ -78,6 +79,21 @@
        (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
        (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))))
 
+;; Host authentication, model identity and context configuration remain
+;; independent prerequisites for this distinct Flint runtime kind.
+(defn- pr-local-flint? [runtime :vector-i64] :bool
+  (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-flint/1")
+       (= (cp-str runtime 0 "endpoint") "http://localhost/v1/chat/completions")
+       (cp-safe-absolute? (cp-str runtime 0 "socket"))
+       (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
+       (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))
+       (= (cp-str runtime 0 "reasoningMemory") "disabled")
+       (cp-hex? (cp-str runtime 0 "serverInstance") 64)
+       (= (cp-num runtime 0 "contextTokens") 8192)
+       (>= (cp-num runtime 0 "maxTokens") 64) (<= (cp-num runtime 0 "maxTokens") 6144)))
+(defn- pr-local? [runtime :vector-i64] :bool
+  (or (pr-local-mtp? runtime) (pr-local-flint? runtime)))
+
 ;; Paths and the content-addressed unit name are host-supplied. curl ignores
 ;; ~/.curlrc and redirects. The local variant cannot use a TCP proxy or select
 ;; a network URL: it sends only through the explicitly pinned Unix socket.
@@ -85,13 +101,13 @@
 ;; replace cgroup enforcement, descendant containment or host admission.
 ;; HTTPS uses --fail, supported by Xavier curl 7.68; error bodies are not
 ;; retained as successful model responses.
-(defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
+(defn- pr-submit-kind [unit :string request :string response :string seconds :i64 runtime :vector-i64 count :bool] :bool
   (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
     (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
     (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
     (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%" (cp-a) "--property=LimitAS=128M"
     (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1"
-    (if (pr-local-mtp? runtime)
+    (if (pr-local? runtime)
       (str (cp-a) "--noproxy" (cp-a) "*"
            (cp-a) "--unix-socket" (cp-a) (cp-str runtime 0 "socket")
            (cp-a) "--header" (cp-a) (str "@" (cp-str runtime 0 "authorizationFile"))
@@ -101,7 +117,11 @@
     (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
     (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
     (cp-a) "--output" (cp-a) response (cp-a)
-    (if (pr-local-mtp? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions")))))
+    (if count "http://localhost/v1/messages/count_tokens"
+      (if (pr-local? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions"))))))
+
+(defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
+  (pr-submit-kind unit request response seconds runtime false))
 
 (defn- pr-answer [b :vector-i64] :string
   (if (not (json-valid? b)) ""
@@ -139,6 +159,96 @@
         (cp-num b stats "mtp_forward_calls") ",\"runtime_mtp_enabled\":true},\"rawResponseDigest\":\"sha256:"
         (sha256-hex b) "\"}")))))
 
+;; The server's model field is a consistency check, not proof of the loaded
+;; weights. Keep incomplete or ambiguous completions out of durable state.
+(defn flint-response-problem [expected :string raw :vector-i64] :string
+  (cond (= expected "") "flint/model-unpinned"
+        (or (= (vector-count raw) 0) (> (vector-count raw) 262144)) "flint/response-size"
+        (not (json-valid? raw)) "flint/response-invalid"
+        (not (= (json-kind raw 0) 1)) "flint/response-invalid"
+        (>= (json-member raw 0 "error") 0) "flint/error-response"
+        (not (= (cp-str raw 0 "model") expected)) "flint/model-mismatch"
+        :else
+          (let [choices (json-member raw 0 "choices")
+                first (if (>= choices 0) (json-element raw choices 0) -1)
+                second (if (>= choices 0) (json-element raw choices 1) -1)
+                index (if (>= first 0) (json-member raw first "index") -1)
+                message (if (>= first 0) (json-member raw first "message") -1)
+                tools (if (>= message 0) (json-member raw message "tool_calls") -1)
+                legacy-call (if (>= message 0) (json-member raw message "function_call") -1)
+                refusal (if (>= message 0) (json-member raw message "refusal") -1)]
+            (cond (or (< choices 0) (not (= (json-kind raw choices) 2)) (< first 0)
+                      (not (= (json-kind raw first) 1)) (>= second 0)) "flint/choices-refused"
+                  (and (>= index 0) (not (and (json-int-ok? raw index) (= (json-int raw index) 0)))) "flint/choices-refused"
+                  (or (>= tools 0) (>= legacy-call 0)) "flint/tool-calls-refused"
+                  (and (>= refusal 0) (not (= (json-kind raw refusal) 7))) "flint/refusal-response"
+                  (not (= (cp-str raw message "role") "assistant")) "flint/role-refused"
+                  (= (pr-answer raw) "") "flint/incomplete"
+                  :else "flint/ok"))))
+
+;; Keep the completed visible answer and bind the compact record to the full
+;; response; the digest does not replicate or attest that full response.
+;; A response too large for the existing checkpoint block is refused. Do not
+;; compact an existing compact record again: doing so would replace the
+;; original raw digest with a digest of the compact record itself.
+(defn- flint-json-quote [s :string] :string
+  (let [b (cp-bytes s) out (vector-alloc (+ 2 (* 6 (vector-count b)))) z (vector-assoc! out 0 34)
+        end (loop [i 0 p 1]
+          (if (= i (vector-count b)) p
+            (let [c (vector-at b i)]
+              (cond (or (= c 34) (= c 92))
+                    (let [x (vector-assoc! out p 92) y (vector-assoc! out (+ p 1) c)] (recur (+ i 1) (+ p 2)))
+                    (or (= c 8) (= c 9) (= c 10) (= c 12) (= c 13))
+                    (let [code (cond (= c 8) 98 (= c 9) 116 (= c 10) 110 (= c 12) 102 :else 114)
+                          x (vector-assoc! out p 92) y (vector-assoc! out (+ p 1) code)]
+                      (recur (+ i 1) (+ p 2)))
+                    (< c 32)
+                    (let [a (vector-assoc! out p 92) c0 (vector-assoc! out (+ p 1) 117)
+                          d (vector-assoc! out (+ p 2) 48) e (vector-assoc! out (+ p 3) 48)
+                          f (vector-assoc! out (+ p 4) (string-code-point-at "0123456789abcdef" (quot c 16)))
+                          g (vector-assoc! out (+ p 5) (string-code-point-at "0123456789abcdef" (rem c 16)))]
+                      (recur (+ i 1) (+ p 6)))
+                    :else (let [x (vector-assoc! out p c)] (recur (+ i 1) (+ p 1)))))))
+        y (vector-assoc! out end 34)]
+    (cp-text (loop [i 0 v (vector-alloc (+ end 1))]
+      (if (> i end) v (recur (+ i 1) (vector-assoc! v i (vector-at out i))))))))
+
+(defn flint-compact [expected :string raw :vector-i64] :vector-i64
+  (if (or (not (= (flint-response-problem expected raw) "flint/ok"))
+          (>= (json-member raw 0 "rawResponseDigest") 0)) (vector-alloc 0)
+    (let [compact (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":"
+                      (flint-json-quote (pr-answer raw)) ",\"role\":\"assistant\"}}],\"model\":" (flint-json-quote expected)
+                      ",\"rawResponseDigest\":\"sha256:" (sha256-hex raw) "\"}"))]
+      (if (pr-replicable? compact) compact (vector-alloc 0)))))
+
+;; Apply the same response contract to fresh, recovered and prior output.
+(defn- pr-local-response? [runtime :vector-i64 b :vector-i64] :bool
+  (cond (pr-local-flint? runtime) (= (flint-response-problem (cp-str runtime 0 "model") b) "flint/ok")
+        (pr-local-mtp? runtime) (pr-mtp-response? runtime b)
+        :else true))
+
+;; A prior Flint output is the public compact projection, not an arbitrary
+;; raw server reply. A digest-shaped field binds the recorded source identity;
+;; it does not prove the raw bytes are present or independently attested.
+(defn- pr-local-prior-response? [runtime :vector-i64 b :vector-i64] :bool
+  (if (not (pr-local-flint? runtime)) (pr-local-response? runtime b)
+    (if (not (and (pr-replicable? b) (json-valid? b) (json-canonical? b)
+                  (= (json-kind b 0) 1) (= (json-count b 0) 3)
+                  (pr-local-response? runtime b))) false
+      (let [choices (json-member b 0 "choices") first (if (>= choices 0) (json-element b choices 0) -1)
+            message (if (>= first 0) (json-member b first "message") -1)
+            digest (cp-str b 0 "rawResponseDigest")]
+        (and (>= choices 0) (= (json-kind b choices) 2) (= (json-count b choices) 1)
+             (>= first 0) (= (json-kind b first) 1) (= (json-count b first) 2)
+             (>= message 0) (= (json-kind b message) 1) (= (json-count b message) 2)
+             (= (string-length digest) 71) (= (string-substring digest 0 7) "sha256:")
+             (cp-hex? (string-substring digest 7 71) 64))))))
+
+(defn- pr-local-compact [runtime :vector-i64 b :vector-i64] :vector-i64
+  (cond (pr-local-flint? runtime) (flint-compact (cp-str runtime 0 "model") b)
+        (pr-local-mtp? runtime) (pr-mtp-compact runtime b)
+        :else b))
+
 (defn- pr-replicable? [b :vector-i64] :bool
   (and (> (vector-count b) 0) (<= (vector-count b) 16384)))
 
@@ -147,18 +257,201 @@
 ;; into the resident arena. The private cache is exclusively host-owned; these
 ;; separate path operations do not establish identity against a concurrent writer.
 ;; This bound does not limit bytes written to disk during curl execution.
-(defn- pr-read-response [path :string] :vector-i64
+(defn- pr-read-bounded [path :string maximum :i64] :vector-i64
   (let [size (cp-size path)]
-    (if (or (< size 1) (> size 262144)) (vector-alloc 0)
+    (if (or (< size 1) (> size maximum)) (vector-alloc 0)
       (let [b (cp-range path 0 size)]
         (if (and (= (vector-count b) size) (= (cp-size path) size)) b (vector-alloc 0))))))
+
+(defn- pr-read-response [path :string] :vector-i64
+  (pr-read-bounded path 262144))
+
+;; The host must pin and authenticate one Kapitsa process with reasoning
+;; memory disabled throughout both count and generation, and qualify exact
+;; template/tokenizer parity. A model name or this response cannot prove it.
+;; Unknown or incomplete count dispatch is never retried automatically.
+(defn- pr-count-value [b :vector-i64] :i64
+  (if (not (and (json-valid? b) (= (json-kind b 0) 1) (= (json-count b 0) 1))) -1
+    (let [i (json-member b 0 "input_tokens")]
+      (if (and (>= i 0) (json-int-ok? b i) (> (json-int b i) 0) (<= (json-int b i) 8192))
+        (json-int b i) -1))))
+
+(defn- pr-count-wait [unit :string response :string started :i64 deadline :i64 seconds :i64 clock :vector-i64] :i64
+  (loop [i 0 last (if (> (vector-at clock 0) started) (vector-at clock 0) started)]
+    ;; Expiry or an unknown clock is not proof that the unit stopped. The
+    ;; caller keeps the busy marker and requires host reconciliation.
+    (let [now (pr-wall-ms)]
+      (if (< (pr-window-seconds last deadline now seconds) 1) -1
+        (let [state (pr-unit-code unit) after-query (pr-wall-ms)]
+          (cond (< (pr-window-seconds now deadline after-query seconds) 1) -1
+                (= state 1) (let [value (pr-count-value (pr-read-bounded response 1024))
+                                  after-read (pr-wall-ms)]
+                              (if (and (> value 0) (> (pr-window-seconds after-query deadline after-read seconds) 0))
+                                (let [saved (vector-assoc! clock 0 after-read)] value) -1))
+                (or (= state -1) (> i 900)) -1
+                :else (let [z (pr-pause)] (if z (recur (+ i 1) after-query) -1))))))))
+
+;; Flint generation must be bound to the same host-pinned process instance as
+;; its count. Rotation creates a different request identity; a retained turn
+;; marker then requires explicit reconciliation instead of reusing an old
+;; unit or response. The trusted host still authenticates the instance.
+(defn- pr-generation-id [runtime :vector-i64 body :string] :string
+  (sha256-hex (cp-bytes
+    (cond (pr-local-flint? runtime)
+            (str "local-flint/2\n" (cp-str runtime 0 "serverInstance") "\n"
+                 (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
+          (pr-local-mtp? runtime)
+            (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
+          :else body))))
+
+(defn- pr-count-id [runtime :vector-i64 body :vector-i64] :string
+  (sha256-hex (cp-bytes (str "local-flint-count/2\n" (cp-str runtime 0 "socket") "\n"
+                             (cp-str runtime 0 "authorizationFile") "\n"
+                             (cp-str runtime 0 "serverInstance") "\n" (cp-cid body)))))
+
+;; Wall time is supplied by the host capability. A reading before the initial
+;; sample, or a malformed, zero or out-of-range reading, is refused.
+;; This is not a lease revalidation or a receiver-side fence.
+(defn- pr-wall-ms [] :i64
+  (let [b (cp-bytes (typed-cap-call 7 :string :string "wall")) n (vector-count b)]
+    (if (or (= n 0) (> n 16)) -1
+      (loop [i 0 value 0]
+        (if (= i n) (if (and (> value 0) (<= value 9007199254740991)) value -1)
+          (let [c (vector-at b i)]
+            (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* value 10) (- c 48))) -1)))))))
+(defn- pr-window-seconds [started :i64 deadline :i64 now :i64 limit :i64] :i64
+  (if (or (< started 1) (> started 9007199254740991) (< now started)
+          (> now 9007199254740991) (<= deadline now) (> deadline 9007199254740991)
+          (< limit 1) (> limit 840)) -1
+    (let [remaining (quot (- deadline now) 1000)]
+      (if (< remaining 1) -1 (if (< remaining limit) remaining limit)))))
+
+(defn- pr-count [runtime :vector-i64 cache :string seconds :i64 body :vector-i64 started :i64 deadline :i64 reuse-only :bool clock :vector-i64] :i64
+  (if (or (not (pr-local-flint? runtime)) (= (vector-count body) 0)) -1
+    (let [id (pr-count-id runtime body)
+          unit (str "itonami-count-" (string-substring id 0 24) ".service")
+          request (str cache "/" id ".count-request.json") response (str cache "/" id ".count-response.json")
+          marker (str cache "/" id ".count-dispatch")
+          request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
+          known (and (or (= request-status "0") (= request-status "1"))
+                     (or (= marker-status "0") (= marker-status "1"))
+                     (or (= response-status "0") (= response-status "1")))
+          present (= request-status "1") marked (= marker-status "1")
+          matches (if present (= (cp-cid (pr-read-bounded request (vector-count body))) (cp-cid body)) false)
+          marker-matches (if marked (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n") false)
+          decision (if known (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
+          submitted (cond (= decision "profile/reuse-unit") true
+                          (= decision "profile/new-unit") (and (not reuse-only) (pr-prepare-submit request marker body)
+                            (let [now (pr-wall-ms)
+                                  floor (if (> (vector-at clock 0) started) (vector-at clock 0) started)
+                                  remaining (pr-window-seconds floor deadline now seconds)]
+                              (if (> remaining 0)
+                                (let [saved (vector-assoc! clock 0 now)]
+                                  (pr-submit-kind unit request response remaining runtime true)) false)))
+                          :else false)]
+      (if submitted (pr-count-wait unit response started deadline seconds clock) -1))))
+
+(defn- pr-flint-output-budget [input :i64 requested :i64] :i64
+  (let [available (- 8192 input 256)]
+    (if (or (< input 1) (> input 8192) (< requested 64) (> requested 6144) (< available 64)) -1
+      (if (< requested available) requested available))))
+
+;; A per-turn marker survives a changed count, budget, endpoint or request.
+;; It is keyed by the prior state, not the disposable checkout path. The host
+;; must retain and serialize this private cache, including across restarts;
+;; this is not a distributed fence or proof of the server process identity.
+(defn- pr-flint-turn-id [task :string next :i64 state :vector-i64] :string
+  (sha256-hex (cp-bytes (str "flint-turn/1\n" task "\n" next "\n" (cp-cid state) "\n"))))
+
+(defn- pr-flint-turn-reserve [cache :string task :string next :i64 state :vector-i64 request-id :string] :bool
+  (let [turn (pr-flint-turn-id task next state)
+        path (str cache "/turn-" turn ".intent") expected (cp-bytes (str "flint-turn/1\n" request-id "\n"))
+        status (cp-fs "D" path "")]
+    (and (cp-safe-absolute? cache) (cp-hex? request-id 64)
+         (cond (= status "0") (cp-write path expected)
+               (= status "1") (= (cp-cid (pr-read-bounded path 256)) (cp-cid expected))
+               :else false)
+         (= (cp-fs "M" path "") "1") (= (cp-fs "M" cache "") "1"))))
+
+;; One host-serialized cache coordinates its own use of one server instance.
+;; Unknown occupancy is retained; this cannot control independent clients or
+;; prove that an old instance stopped when a new identifier is provisioned.
+(defn- pr-flint-busy-text [turn :string count-id :string] :vector-i64
+  (cp-bytes (str "flint-busy/2\n" turn "\n" count-id "\n")))
+(defn- pr-flint-busy-valid? [b :vector-i64] :bool
+  (let [s (cp-text b)]
+    (and (= (vector-count b) 143) (= (string-length s) 143)
+         (= (string-substring s 0 13) "flint-busy/2\n")
+         (= (string-substring s 77 78) "\n") (= (string-substring s 142 143) "\n")
+         (cp-hex? (string-substring s 13 77) 64) (cp-hex? (string-substring s 78 142) 64))))
+(defn- pr-flint-busy-reserve [cache :string instance :string turn :string count-id :string] :bool
+  (let [path (str cache "/server-" instance ".busy") expected (pr-flint-busy-text turn count-id)
+        last (str cache "/server-" instance ".last")
+        settled (str cache "/server-" instance ".settled")
+        previous (str cache "/server-" instance ".previous")
+        status (cp-fs "D" path "")]
+    (and (cp-safe-absolute? cache) (cp-hex? instance 64) (cp-hex? turn 64) (cp-hex? count-id 64)
+         (cond (= status "0")
+               (let [ls (cp-fs "D" last "") ss (cp-fs "D" settled "") ps (cp-fs "D" previous "")
+                     clear (cond (and (= ls "0") (= ss "0") (= ps "0")) true
+                                 (and (= ls "1") (= ss "1"))
+                                   (let [a (pr-read-bounded last 256) b (pr-read-bounded settled 256)]
+                                     (and (pr-flint-busy-valid? a) (= (cp-cid a) (cp-cid b))
+                                          (= (cp-fs "M" last "") "1") (= (cp-fs "M" settled "") "1")
+                                          (= (cp-fs "M" cache "") "1")
+                                          (= (cp-fs "L" settled previous) "1") (= (cp-fs "M" cache "") "1")))
+                                 :else false)]
+                 (and clear (cp-write path expected)))
+               (= status "1") (and (= (cp-fs "D" settled "") "0")
+                                    (= (cp-cid (pr-read-bounded path 256)) (cp-cid expected)))
+               :else false)
+         (= (cp-fs "M" path "") "1") (= (cp-fs "M" cache "") "1"))))
+(defn- pr-flint-busy-release [cache :string instance :string turn :string count-id :string] :bool
+  (let [path (str cache "/server-" instance ".busy") last (str cache "/server-" instance ".last")
+        settled (str cache "/server-" instance ".settled")
+        expected (pr-flint-busy-text turn count-id)]
+    (and (cp-safe-absolute? cache) (cp-hex? instance 64) (cp-hex? turn 64) (cp-hex? count-id 64)
+         (= (cp-fs "D" settled "") "0")
+         (= (cp-fs "D" path "") "1") (= (cp-cid (pr-read-bounded path 256)) (cp-cid expected))
+         (= (cp-fs "M" path "") "1") (= (cp-fs "L" path last) "1") (= (cp-fs "M" cache "") "1")
+         (cp-write settled expected) (= (cp-fs "M" cache "") "1"))))
+
+;; Only after separately verifying the published state or a completed count
+;; with no generation intent can a trusted host finish interrupted release.
+;; Exclusive cache ownership is required; this does not prove termination.
+(defn- pr-flint-busy-reconcile-release [cache :string instance :string turn :string count-id :string] :bool
+  (let [path (str cache "/server-" instance ".busy") last (str cache "/server-" instance ".last")
+        settled (str cache "/server-" instance ".settled") expected (pr-flint-busy-text turn count-id)
+        ss (cp-fs "D" settled "")]
+    (and (cp-safe-absolute? cache) (cp-hex? instance 64) (cp-hex? turn 64) (cp-hex? count-id 64)
+         (= (cp-fs "D" path "") "0") (= (cp-fs "D" last "") "1")
+         (= (cp-cid (pr-read-bounded last 256)) (cp-cid expected))
+         (= (cp-fs "M" last "") "1") (= (cp-fs "M" cache "") "1")
+         (cond (= ss "0") (cp-write settled expected)
+               (= ss "1") (and (= (cp-cid (pr-read-bounded settled 256)) (cp-cid expected))
+                                  (= (cp-fs "M" settled "") "1"))
+               :else false)
+         (= (cp-fs "M" cache "") "1"))))
+
+;; A completed count can be released without generation only when the durable
+;; turn marker is explicitly absent. Unknown count, marker or sync outcomes
+;; remain occupied. The host must exclude pre-migration in-flight work.
+(defn- pr-flint-count-only-release [runtime :vector-i64 cache :string turn :string count-id :string counted :i64] :bool
+  (and (pr-local-flint? runtime) (> counted 0)
+       (= (cp-fs "D" (str cache "/turn-" turn ".intent") "") "0")
+       (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id)))
+
+(defn- pr-flint-finish [runtime :vector-i64 cache :string turn :string count-id :string result :string] :string
+  (if (or (not (pr-local-flint? runtime)) (not (= (string-index-of result "profile/step-completed ") 0))) result
+    (if (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id)
+      result "profile/server-release-unknown")))
 
 ;; A crash can leave the output durable while state still points at this turn.
 ;; Only the exact completed response may be reused. Sync both the file and
 ;; its parent directory before state can refer to it.
 (defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
   (let [status (cp-fs "D" path "")]
-    (and (cond (= status "1") (and (= (cp-cid (cp-read path)) cid) (= (cp-fs "M" path "") "1"))
+    (and (cond (= status "1") (and (= (cp-cid (pr-read-bounded path 16384)) cid) (= (cp-fs "M" path "") "1"))
                (= status "0") (cp-write path answer)
                :else false)
          (= (cp-fs "M" (cp-parent-dir path) "") "1"))))
@@ -176,38 +469,132 @@
                    (= (cp-fs "D" tmp "") "1") (= (cp-fs "D" request "") "1")
                    (= (cp-fs "D" marker "") "1") (= (cp-fs "D" response "") "1")
                    (= (cp-fs "D" output "") "1")
-                   (= (cp-cid (cp-read request)) (cp-cid body))
-                   (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n"))]
+                   (= (cp-cid (pr-read-bounded request (vector-count body))) (cp-cid body))
+                   (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n"))]
     (if (not ready) "profile/state-publication-unknown"
       (let [raw (pr-read-response response) completed (and (not (= (pr-answer raw) ""))
-                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime raw)))
-            answer (if completed (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw) (vector-alloc 0))
+                        (pr-local-response? runtime raw))
+            answer (if completed (pr-local-compact runtime raw) (vector-alloc 0))
             cid (cp-cid answer) expected (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
-            valid (and completed (pr-replicable? answer) (= (cp-cid (cp-read output)) cid)
-                       (= (cp-cid (cp-read tmp)) (cp-cid expected))
-                       (= (cp-cid (cp-read statepath)) (cp-cid state)))
+            valid (and completed (pr-replicable? answer) (= (cp-cid (pr-read-bounded output 16384)) cid)
+                       (= (cp-cid (pr-read-bounded tmp 16384)) (cp-cid expected))
+                       (= (cp-cid (pr-read-bounded statepath 16384)) (cp-cid state)))
             durable (and valid (= (cp-fs "M" output "") "1") (= (cp-fs "M" outdir "") "1")
                          (= (cp-fs "M" tmp "") "1") (= (cp-fs "M" repo "") "1"))
             renamed (and durable (= (cp-fs "L" tmp statepath) "1"))
             synced (and renamed (= (cp-fs "M" repo "") "1"))]
         (if synced (str "profile/step-completed " next " " cid) "profile/state-publication-unknown")))))
 
-(defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
-  (loop [i 0]
-    (let [state (pr-unit-code unit)]
-      (cond (= state 1)
-            (and (cp-exists? response)
-                 (let [b (pr-read-response response)]
-                   (and (not (= (pr-answer b) ""))
-                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime b)))))
-            (or (= state -1) (> i 900)) false
-            :else (let [z (pr-pause)] (if z (recur (+ i 1)) false))))))
+;; Reconcile the distinct case where the rename was visible but its result or
+;; final sync was lost. This never runs inference or changes the profile state.
+;; The trusted host must hold the task and server's exclusive locks, preserve
+;; the private cache, authenticate runtime/instance and exclude other clients.
+;; A missing or ambiguous input, sync, unit, or release remains unknown.
+(defn- pr-reconcile-published [repo :string runtime :vector-i64 cache :string old :vector-i64
+                              request-id :string count-id :string] :string
+  (let [ni (if (json-valid? old) (json-member old 0 "next") -1)
+        next (if (and (>= ni 0) (json-int-ok? old ni)) (json-int old ni) 0)
+        task (cp-str old 0 "task")
+        valid (and (cp-safe-absolute? repo) (cp-safe-absolute? cache)
+                   (pr-local-flint? runtime) (json-canonical? old)
+                   (>= next 1) (< next 1000000) (not (= task ""))
+                   (= (field-problem task) "enroll/ok")
+                   (cp-hex? request-id 64) (cp-hex? count-id 64))]
+    (if (not valid) "profile/state-publication-unknown"
+      (let [turn (pr-flint-turn-id task next old)
+            request (str cache "/" request-id ".request.json")
+            marker (str cache "/" request-id ".dispatch")
+            intent (str cache "/turn-" turn ".intent")
+            response (str cache "/" request-id ".response.json")
+            unit (str "itonami-recovery-" (string-substring request-id 0 24) ".service")
+            statepath (str repo "/state.json") outdir (str repo "/outputs")
+            output (str outdir "/" next ".json")
+            body (pr-read-bounded request 262144)
+            raw (pr-read-response response)
+            answer (if (pr-local-response? runtime raw) (pr-local-compact runtime raw) (vector-alloc 0))
+            cid (cp-cid answer)
+            expected (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
+            ready (and (= (pr-unit-state unit) "exited")
+                       (= (cp-fs "D" (str repo "/state.json.tmp") "") "0")
+                       (> (vector-count body) 0)
+                       (= (cp-cid body) (cp-cid (cp-bytes (cp-text body))))
+                       (= (pr-generation-id runtime (cp-text body)) request-id)
+                       (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n")
+                       (= (cp-text (pr-read-bounded intent 256)) (str "flint-turn/1\n" request-id "\n"))
+                       (pr-replicable? answer)
+                       (= (cp-cid (pr-read-bounded output 16384)) cid)
+                       (= (cp-cid (pr-read-bounded statepath 16384)) (cp-cid expected)))
+            synced (and ready (= (cp-fs "M" request "") "1") (= (cp-fs "M" marker "") "1")
+                        (= (cp-fs "M" intent "") "1") (= (cp-fs "M" response "") "1")
+                        (= (cp-fs "M" cache "") "1")
+                        (= (cp-fs "M" output "") "1") (= (cp-fs "M" outdir "") "1")
+                        (= (cp-fs "M" statepath "") "1") (= (cp-fs "M" repo "") "1"))]
+        (if (and synced (or (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id)
+                            (pr-flint-busy-reconcile-release cache (cp-str runtime 0 "serverInstance") turn count-id)))
+          (str "profile/publication-reconciled " next " " cid)
+          "profile/state-publication-unknown")))))
+
+;; Recover a completed count which never reached the generation-intent write.
+;; The host must hold exclusive task/server locks and authenticate the runtime,
+;; process instance and completed unit; no inference or state write occurs.
+(defn- pr-reconcile-count [repo :string runtime :vector-i64 cache :string old :vector-i64 count-id :string] :string
+  (let [ni (if (json-valid? old) (json-member old 0 "next") -1)
+        next (if (and (>= ni 0) (json-int-ok? old ni)) (json-int old ni) 0)
+        task (cp-str old 0 "task")
+        valid (and (cp-safe-absolute? repo) (cp-safe-absolute? cache)
+                   (pr-local-flint? runtime) (json-canonical? old)
+                   (>= next 1) (< next 1000000) (not (= task ""))
+                   (= (field-problem task) "enroll/ok") (cp-hex? count-id 64))]
+    (if (not valid) "profile/count-reconciliation-unknown"
+      (let [turn (pr-flint-turn-id task next old)
+            request (str cache "/" count-id ".count-request.json")
+            marker (str cache "/" count-id ".count-dispatch")
+            response (str cache "/" count-id ".count-response.json")
+            intent (str cache "/turn-" turn ".intent")
+            unit (str "itonami-count-" (string-substring count-id 0 24) ".service")
+            statepath (str repo "/state.json") body (pr-read-bounded request 262144)
+            result (pr-read-bounded response 1024)
+            ready (and (= (pr-unit-state unit) "exited")
+                       (= (cp-fs "D" intent "") "0")
+                       (= (cp-fs "D" (str repo "/state.json.tmp") "") "0")
+                       (> (vector-count body) 0) (= (pr-count-id runtime body) count-id)
+                       (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n")
+                       (> (pr-count-value result) 0)
+                       (= (cp-cid (pr-read-bounded statepath 16384)) (cp-cid old)))
+            synced (and ready (= (cp-fs "M" request "") "1") (= (cp-fs "M" marker "") "1")
+                        (= (cp-fs "M" response "") "1") (= (cp-fs "M" cache "") "1")
+                        (= (cp-fs "M" statepath "") "1") (= (cp-fs "M" repo "") "1")
+                        (= (cp-fs "D" intent "") "0"))]
+        (if (and synced (or (pr-flint-busy-release cache (cp-str runtime 0 "serverInstance") turn count-id)
+                            (pr-flint-busy-reconcile-release cache (cp-str runtime 0 "serverInstance") turn count-id)))
+          (str "profile/count-reconciled " next)
+          "profile/count-reconciliation-unknown")))))
+
+(defn- pr-wait [unit :string response :string runtime :vector-i64 started :i64 deadline :i64 seconds :i64 clock :vector-i64] :bool
+  (loop [i 0 last (if (and (pr-local-flint? runtime) (> (vector-at clock 0) started)) (vector-at clock 0) started)]
+    ;; An expired Flint deadline does not prove that the unit has stopped.
+    ;; Preserve the request, dispatch marker and occupancy for reconciliation.
+    (let [flint (pr-local-flint? runtime) now (if flint (pr-wall-ms) last)]
+      (if (and flint (< (pr-window-seconds last deadline now seconds) 1)) false
+        (let [state (pr-unit-code unit) after-query (if flint (pr-wall-ms) now)]
+          (cond (and flint (< (pr-window-seconds now deadline after-query seconds) 1)) false
+                (= state 1)
+                (and (cp-exists? response)
+                     (let [b (pr-read-response response)]
+                       (and (not (= (pr-answer b) ""))
+                            (pr-local-response? runtime b)
+                            (if (not flint) true
+                              (let [after-read (pr-wall-ms)]
+                                (if (> (pr-window-seconds after-query deadline after-read seconds) 0)
+                                  (let [saved (vector-assoc! clock 0 after-read)] true) false))))))
+                (or (= state -1) (> i 900)) false
+                :else (let [z (pr-pause)] (if z (recur (+ i 1) after-query) false))))))))
 
 (defn- pr-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64] :bool
   (and (json-canonical? runtime)
        (or (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime/1")
                 (= (cp-str runtime 0 "endpoint") "https://api.murakumo.cloud/v1/chat/completions"))
-           (pr-local-mtp? runtime))
+           (pr-local? runtime))
        (= (cp-str runtime 0 "rail") "murakumo")
        (= (str "sha256:" (sha256-hex meta)) (cp-str runtime 0 "profileDigest"))
        (= (str "sha256:" (sha256-hex role)) (cp-str runtime 0 "roleDigest"))
@@ -225,9 +612,10 @@
 ;; The host selects and pins both the work order and the bounded source
 ;; snapshot; neither is a live observation or an authorization.
 (defn- pr-growth-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64 work :vector-i64 context :vector-i64] :bool
-  (and (json-canonical? runtime) (pr-local-mtp? runtime)
+  (and (json-canonical? runtime) (pr-local? runtime)
        (let [i (json-member runtime 0 "maxTokens")]
-         (or (< i 0) (and (json-int-ok? runtime i) (>= (json-int runtime i) 64) (<= (json-int runtime i) 768))))
+         (if (pr-local-flint? runtime) (and (>= i 0) (json-int-ok? runtime i))
+           (or (< i 0) (and (json-int-ok? runtime i) (>= (json-int runtime i) 64) (<= (json-int runtime i) 768)))))
        (= (cp-str runtime 0 "rail") "murakumo") (= (cp-str runtime 0 "tools") "none")
        (= (cp-str runtime 0 "profile") "awai-growth-steward")
        (not (= (cp-str runtime 0 "model") ""))
@@ -243,23 +631,28 @@
        (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
        (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
 
-(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64] :string
-  (let [dir (str repo "/profile") meta (cp-read (str dir "/itonami.edn")) role (cp-read (str dir "/SOUL.md"))
+;; Flint phase 1 records a completed count without generation; phase 2 only
+;; reuses an already recorded count after the resident's lease revalidation.
+;; Busy state is retained across the gap and any unknown outcome.
+(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64 started :i64 deadline :i64 phase :i64 clock :vector-i64] :string
+  (let [dir (str repo "/profile") meta (pr-read-bounded (str dir "/itonami.edn") 131072) role (pr-read-bounded (str dir "/SOUL.md") 131072)
         growth (= (cp-str runtime 0 "profile") "awai-growth-steward")
         work-path (str dir "/tasks/first-turn.md") context-path (str dir "/context.md")
-        work (if (and growth (cp-exists? work-path)) (cp-read work-path) (vector-alloc 0))
-        context (if (and growth (cp-exists? context-path)) (cp-read context-path) (vector-alloc 0))
-        state (cp-read (str repo "/state.json")) task (cp-str runtime 0 "task")]
+        work (if (and growth (cp-exists? work-path)) (pr-read-bounded work-path 8192) (vector-alloc 0))
+        context (if (and growth (cp-exists? context-path)) (pr-read-bounded context-path 8192) (vector-alloc 0))
+        state (pr-read-bounded (str repo "/state.json") 16384) task (cp-str runtime 0 "task")]
     (cond (or (< seconds 1) (> seconds 840)) "profile/budget-refused"
           (not (or (pr-runtime? runtime meta role) (pr-growth-runtime? runtime meta role work context))) "profile/runtime-refused"
+          (or (< phase 0) (> phase 2)) "profile/phase-invalid"
+          (and (pr-local-flint? runtime) (= phase 0)) "profile/flint-resident-required"
           (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
           :else
           (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
-                prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
+                prior (if (= next 1) (vector-alloc 0) (pr-read-bounded prior-file 16384))
                 linked (if (= next 1) (= previous "none")
                          (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))
-                              (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime prior))))]
+                              (pr-local-prior-response? runtime prior)))]
             (if (not linked) "profile/previous-output-mismatch"
               (let [instruction (if growth
                        (str "Read-only AWAI growth steward task " task ", step " next ".\n"
@@ -277,14 +670,31 @@
                          " State one concrete next verification and what evidence would decide it."
                          " You have no current external observations; do not invent progress or completion."
                          " All tools are denied. Do not change files, publish, merge or contact anyone.")))
-                    body (str "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":" tokens ",\"messages\":["
-                      "{\"content\":" (pr-json-quote (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))) ",\"role\":\"system\"},"
-                      (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
-                      "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
-                      ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}")
-                    id (sha256-hex (cp-bytes (if (pr-local-mtp? runtime)
-                         (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
-                         body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
+                    system-text (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))
+                    history (str (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
+                                 "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}")
+                    count-body (cp-bytes (str "{\"messages\":[" history "],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
+                                              ",\"system\":" (pr-json-quote system-text) ",\"thinking\":{\"type\":\"enabled\"}}"))
+                    turn (if (pr-local-flint? runtime) (pr-flint-turn-id task next state) "")
+                    count-id (if (pr-local-flint? runtime) (pr-count-id runtime count-body) "")
+                    occupied (if (pr-local-flint? runtime) (pr-flint-busy-reserve cache (cp-str runtime 0 "serverInstance") turn count-id) true)
+                    counted0 (if (pr-local-flint? runtime) (if occupied (pr-count runtime cache seconds count-body started deadline (= phase 2) clock) -1) 0)
+                    counted-at (if (pr-local-flint? runtime) (pr-wall-ms) 0)
+                    counted (if (pr-local-flint? runtime)
+                              (if (and (> counted0 0) (> (pr-window-seconds (vector-at clock 0) deadline counted-at seconds) 0))
+                                (let [saved (vector-assoc! clock 0 counted-at)] counted0) -1) counted0)
+                    budget (if (pr-local-flint? runtime) (pr-flint-output-budget counted tokens) tokens)]
+              (if (not occupied) "profile/server-busy-or-unknown"
+              (if (< budget 1)
+                (if (pr-flint-count-only-release runtime cache turn count-id counted)
+                  "profile/context-budget-insufficient" "profile/context-budget-unknown-or-insufficient")
+              (if (and (pr-local-flint? runtime) (= phase 1)) "profile/flint-count-ready"
+                (let [body (str (if (pr-local-flint? runtime) "{\"chat_template_kwargs\":{\"enable_thinking\":true},\"max_tokens\":" "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":") budget ",\"messages\":["
+                      "{\"content\":" (pr-json-quote system-text) ",\"role\":\"system\"}," history "],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
+                      (if (pr-local-flint? runtime) ",\"stream\":false,\"temperature\":1,\"top_k\":20,\"top_p\":0.95}"
+                        ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}"))
+                    id (pr-generation-id runtime body) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
+                    reserved (if (pr-local-flint? runtime) (pr-flint-turn-reserve cache task next state id) true)
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
                     request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
@@ -292,45 +702,63 @@
                     known (and (or (= request-status "0") (= request-status "1"))
                                (or (= marker-status "0") (= marker-status "1"))
                                (or (= response-status "0") (= response-status "1")))
-                    present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    present (= request-status "1") matches (if present (= (cp-cid (pr-read-bounded request (vector-count body-bytes))) (cp-cid body-bytes)) false)
                     marked (= marker-status "1")
-                    marker-matches (if marked (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n") false)
-                    decision (if (and known (= pending-status "0"))
+                    marker-matches (if marked (= (cp-text (pr-read-bounded marker 64)) "itonami.inference-dispatch/1\n") false)
+                    decision (if (and reserved occupied known (= pending-status "0"))
                                (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
                     submitted (cond (= decision "profile/reuse-unit") true
                                     (= decision "profile/new-unit")
                                     (and (pr-prepare-submit request marker body-bytes)
-                                         (pr-submit unit request response seconds runtime))
+                                         (if (pr-local-flint? runtime)
+                                           (let [now (pr-wall-ms)
+                                                 remaining (pr-window-seconds (vector-at clock 0) deadline now seconds)]
+                                             (if (> remaining 0)
+                                               (let [saved (vector-assoc! clock 0 now)]
+                                                 (pr-submit unit request response remaining runtime)) false))
+                                           (pr-submit unit request response seconds runtime)))
                                     :else false)]
+                (if (not reserved) "profile/turn-intent-unknown"
                 (if (= pending-status "1")
-                  (pr-reconcile-pending repo runtime next task state body-bytes unit request marker response)
+                  (pr-flint-finish runtime cache turn count-id (pr-reconcile-pending repo runtime next task state body-bytes unit request marker response))
                 (if (not (= pending-status "0")) "profile/state-publication-unknown"
-                (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
+                (if (or (not submitted) (not (pr-wait unit response runtime started deadline seconds clock))) "profile/inference-unavailable-state-retained"
                   (let [raw (pr-read-response response)
-                        answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
+                        answer (pr-local-compact runtime raw)
+                        valid (and (not (= (pr-answer raw) "")) (pr-local-response? runtime raw))
+                        observed (if (pr-local-flint? runtime) (pr-wall-ms) 0)
+                        timely (if (pr-local-flint? runtime)
+                                 (if (and valid (> (pr-window-seconds (vector-at clock 0) deadline observed seconds) 0))
+                                   (let [saved (vector-assoc! clock 0 observed)] true) false) true)
                         cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
                         newstate (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
                         tmp (str repo "/state.json.tmp")
-                        usable (pr-replicable? answer)
+                        usable (and valid timely (pr-replicable? answer))
                         ok (and usable
                                 (cp-mkdir outdir) (= (cp-fs "M" repo "") "1")
                                 (pr-save-output output answer cid) (cp-write tmp newstate))
                         rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs "M" repo "") "0")]
+                    (if (or (not valid) (not timely)) "profile/inference-unavailable-state-retained"
                     (if (not usable) "profile/response-not-replicable"
-                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))))
+                      ;; Rename or directory sync may have taken effect even
+                      ;; when its acknowledgement is lost. Preserve that
+                      ;; ambiguity for host reconciliation; the host must not
+                      ;; retry inference without resolving the outcome.
+                      (if (= sync "1") (pr-flint-finish runtime cache turn count-id (str "profile/step-completed " next " " cid)) "profile/state-publication-unknown"))))))))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
+  (if (pr-local-flint? runtime) (cp-num runtime 0 "maxTokens")
   (if (= (cp-str runtime 0 "profile") "awai-growth-steward")
     (let [limit (cp-num runtime 0 "maxTokens")] (if (and (>= limit 64) (<= limit 768)) limit 768))
-    (if resident 256 32)))
+    (if resident 256 32))))
 
 (defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false)))
+  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false) 0 0 0 [0]))
 
-(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true)))
+(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 started :i64 deadline :i64 phase :i64 clock :vector-i64] :string
+  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true) started deadline phase clock))
 
 (defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
   (pr-step-bounded repo runtime cache next 840))
@@ -371,7 +799,13 @@
 
 (defn profile-recovery-main [] :i64
   (cond (= (cp-arg 0) "step")
-        (cp-say (pr-step (cp-arg 1) (cp-read (cp-arg 2)) (cp-arg 3) (cp-int (cp-arg 4))))
+        (cp-say (pr-step (cp-arg 1) (pr-read-bounded (cp-arg 2) 131072) (cp-arg 3) (cp-int (cp-arg 4))))
+        (= (cp-arg 0) "reconcile-published")
+        (cp-say (pr-reconcile-published (cp-arg 1) (pr-read-bounded (cp-arg 2) 131072) (cp-arg 3)
+                  (pr-read-bounded (cp-arg 4) 16384) (cp-arg 5) (cp-arg 6)))
+        (= (cp-arg 0) "reconcile-count")
+        (cp-say (pr-reconcile-count (cp-arg 1) (pr-read-bounded (cp-arg 2) 131072) (cp-arg 3)
+                  (pr-read-bounded (cp-arg 4) 16384) (cp-arg 5)))
         (= (cp-arg 0) "hold") (pr-hold (cp-arg 1))
         (= (cp-arg 0) "watch")
         (let [requested (cp-int (cp-arg 7)) limit (if (and (> requested 0) (<= requested 1800)) requested 1800)]
@@ -380,7 +814,7 @@
             (if (and alive (not seen)) (cp-say "profile/producer-observed") 0)
             (cond (and seen (>= misses 2))
                   (let [v (cp-say "profile/producer-lost")]
-                    (cp-say (pr-resume (cp-arg 2) (cp-arg 3) (cp-read (cp-arg 4)) (cp-arg 5) (cp-arg 6))))
+                    (cp-say (pr-resume (cp-arg 2) (cp-arg 3) (pr-read-bounded (cp-arg 4) 131072) (cp-arg 5) (cp-arg 6))))
                   (>= i limit) (cp-say "profile/watch-expired")
                   :else (let [z (pr-pause)] (recur (+ i 1) (or seen alive) misses))))))
         :else (cp-say "profile/command")))

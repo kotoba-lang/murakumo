@@ -52,7 +52,8 @@
         good (cond (> (vector-count b) 16384) false
                    (= exists "0") (cp-write path b)
                    (= exists "1") (and (= size (vector-count b)) (= (vector-count prior) size)
-                                        (= (cp-size path) size) (= (cp-cid prior) cid))
+                                        (= (cp-size path) size)
+                                        (or (> size 0) (cp-empty-readable? path)) (= (cp-cid prior) cid))
                    :else false)]
     ;; A matching pre-existing block may be a visible but unsynced remnant of
     ;; an interrupted writer. Sync the file itself before syncing its parent.
@@ -91,7 +92,8 @@
 
 (defn- jo-block? [store :string cid :string bytes :vector-i64] :bool
   (let [size (if (cp-raw? cid) (cp-size (str store "/" cid)) -1)]
-    (and (>= size 0) (<= size 16384) (= size (vector-count bytes)) (= (cp-cid bytes) cid))))
+    (and (>= size 0) (<= size 16384) (= size (vector-count bytes))
+         (or (> size 0) (cp-empty-readable? (str store "/" cid))) (= (cp-cid bytes) cid))))
 
 (defn- jo-proof-verdict [proof :vector-i64 output :vector-i64 did :string job :string] :string
   (let [receipt-index (if (json-valid? proof) (json-member proof 0 "receipt") -1)

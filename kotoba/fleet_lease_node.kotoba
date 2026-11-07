@@ -56,7 +56,7 @@
 ;; fleet_topology_verify, fleet_lease_core, this file.
 ;; docs/lease-node.md has the gate.
 (ns murakumo.fleet-lease-node
-  (:export [lease-node-main lease-round lease-token]))
+  (:export [lease-node-main lease-round lease-token lease-token-bounded]))
 
 (defn- ln-listen [s :string] :string (typed-cap-call 43 :string :string s))
 (defn- ln-accept [s :string] :string (typed-cap-call 44 :string :string s))
@@ -172,6 +172,23 @@
       (if (< (- j i) 32) "" (string-substring t i j)))))
 
 (defn lease-token [path :string] :string (ln-token path))
+
+;; Opt-in serialized host path: read at most 4096 bytes, with a complete FS2
+;; frame and stable metadata. The host must own the path and exclude same-size
+;; rewrites or replacement while these path-based operations are in progress.
+;; Existing lease-token callers retain their previous behavior.
+(defn lease-token-bounded [path :string] :string
+  (if (= path "") ""
+    (let [meta (ln-fs "O" path "") mode (ln-field meta 0) size (ln-field meta 1)
+          blocks (ln-field meta 2) kind (ln-field meta 3)
+          m (ln-int mode) n (ln-int size) b (ln-int blocks)]
+      (if (not (and (= meta (str mode " " size " " blocks " " kind))
+                    (>= m 0) (<= m 511) (>= b 0) (= kind "0") (>= n 32) (<= n 4096))) ""
+        (let [t (ln-fs "E" path (str "0:" n)) bytes (ln-bytes t) count (vector-count bytes)
+              i (loop [i 0] (if (and (< i count) (ln-space? (vector-at bytes i))) (recur (+ i 1)) i))
+              j (loop [j count] (if (and (> j i) (ln-space? (vector-at bytes (- j 1)))) (recur (- j 1)) j))]
+          (if (and (= count n) (= (ln-fs "O" path "") meta) (>= (- j i) 32))
+            (string-substring t i j) ""))))))
 
 (defn- ln-mac [token :string msg :string] :string (hmac-sha256-hex (ln-bytes token) (ln-bytes msg)))
 

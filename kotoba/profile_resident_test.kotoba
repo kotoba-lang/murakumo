@@ -42,6 +42,12 @@
         prefix (str "{\"checkpoint\":\"" root "\",\"kind\":\"itonami.github-archive-ack/1\",\"tree\":\"" tree "\",\"until\":")
         good (cp-bytes (str prefix (+ now 600000) "}"))]
     (and (rt-archive-ack? "" root) (not (rt-archive-ack? path root))
+         (rt-archive-ack-valid? (cp-bytes (str prefix 1000000 "}")) root 100000)
+         (not (rt-archive-ack-valid? (cp-bytes (str prefix 1000001 "}")) root 100000))
+         (not (rt-archive-ack-valid? (cp-bytes (str prefix 100000 "}")) root 100000))
+         (not (rt-archive-ack-valid? (cp-bytes (str prefix 500000 "}")) root 0))
+         (not (rt-archive-ack-valid? (cp-bytes (str prefix 500000 "}")) root -1))
+         (not (rt-archive-ack-valid? good root 9007199254740991))
          (cp-write path good) (rt-archive-ack? path root)
          (not (rt-archive-ack? path "bafkreidifferent"))
          (cp-write path (cp-bytes (str prefix now "}"))) (not (rt-archive-ack? path root))
@@ -78,6 +84,14 @@
 ;; exact safety-margin boundary without performing replication or inference.
 (defn test-profile-retention-refresh [] :bool
   (and (= (rt-refresh-decision false 2000000 100000) "resident/head-refused")
+       (not (rt-clock-window? 0 172800000))
+       (not (rt-clock-window? -1 172800000))
+       (not (rt-clock-window? 9007199254740991 172800000))
+       (rt-clock-window? 9007199081940991 172800000)
+       (not (rt-clock-window? 9007199081940992 172800000))
+       (= (rt-refresh-decision true 2000000 0) "resident/clock-unknown")
+       (= (rt-refresh-decision true 2000000 -1) "resident/clock-unknown")
+       (= (rt-refresh-decision true 9007199254740991 9007199254740991) "resident/clock-unknown")
        (= (rt-refresh-decision true 1 100000) "resident/retention-refresh-needed")
        (= (rt-refresh-decision true 100000 100000) "resident/retention-refresh-needed")
        (= (rt-refresh-decision true 1000000 100000) "resident/retention-refresh-needed")

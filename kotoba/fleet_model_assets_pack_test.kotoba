@@ -1,0 +1,28 @@
+;; Compose after fleet_model_assets_pack. The header digest and checksum were
+;; calculated independently from the USTAR byte layout, not by this producer.
+(ns murakumo.fleet-model-assets-pack-test (:export [test-model-assets-pack-header test-model-assets-pack-lock]))
+
+(defn test-model-assets-pack-header [] :bool
+  (let [header (pk-header "config.json" 123)
+        valid (and (= (vector-count header) 512) (ta-header? header)
+                   (ta-name? header "config.json") (= (ta-octal header 124 136) 123)
+                   (= (ta-checksum header) 4158)
+                   (= (sha256-hex header) "a887e03f951d25a686a71789ad60df8e4e7bc0a0d6600a96bc9519f5ad947658"))
+        mutated (vector-assoc! header 0 88)]
+    (and valid (not (ta-header? mutated))
+         (= (pk-padded 1) 512) (= (pk-padded 512) 512) (= (pk-padded 513) 1024))))
+
+(defn test-model-assets-pack-lock [] :bool
+  (let [good (vector-i64-from-bytes (string-to-utf8
+               "{\"files\":[{\"path\":\"model.safetensors\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":123}]}"))
+        duplicate (vector-i64-from-bytes (string-to-utf8
+                    "{\"files\":[{\"path\":\"model.safetensors\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":123},{\"path\":\"model.safetensors\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"size\":123}]}"))
+        bad (vector-i64-from-bytes (string-to-utf8
+              "{\"files\":[{\"path\":\"model.safetensors\",\"sha256\":\"bad\",\"size\":123}]}"))
+        g (json-member good 0 "files") d (json-member duplicate 0 "files")
+        b (json-member bad 0 "files")]
+    (and (json-valid? good) (json-valid? duplicate) (json-valid? bad)
+         (pk-weight-entry? good g "model.safetensors")
+         (not (pk-weight-entry? good g "mtp.safetensors"))
+         (not (pk-weight-entry? duplicate d "model.safetensors"))
+         (not (pk-weight-entry? bad b "model.safetensors")))))

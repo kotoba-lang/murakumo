@@ -17,15 +17,20 @@
   (and (= (ln-port-count ports) 3)
     (let [a (rf-host (ln-port ports 0)) b (rf-host (ln-port ports 1)) c (rf-host (ln-port ports 2))]
       (and (not (= a "")) (not (= b "")) (not (= c "")) (not (= a b)) (not (= b c)) (not (= a c))))))
+(defn- rf-clock-ballot-ok? [now :i64 epoch :i64] :bool
+  (and (> now 0) (<= now (- 9007199254740991 (lease-ttl)))
+       (> epoch 0) (<= epoch 9007199254740991)))
 (defn- rf-learn [plan :vector-i64 previous :bool] :string
   (let [node (cp-str plan 0 "node") task (cp-str plan 0 "task")
         epoch (cp-num plan 0 (if previous "previousEpoch" "epoch"))
         ports (cp-str plan 0 (if previous "previousPorts" "ports"))
-        token (lease-token (cp-str plan 0 "tokenFile")) now (rf-now)]
-    (if (= token "") ""
-      (lease-round now node
-        (if previous (cp-text (cp-read (cp-str plan 0 "previousLease")))
-          (lease-text node task 0 epoch (+ now (lease-ttl)) (cp-num plan 0 "revision"))) ports token))))
+        now (rf-now)]
+    (if (not (rf-clock-ballot-ok? now epoch)) ""
+      (let [token (lease-token (cp-str plan 0 "tokenFile"))]
+        (if (= token "") ""
+          (lease-round now node
+            (if previous (cp-text (cp-read (cp-str plan 0 "previousLease")))
+              (lease-text node task 0 epoch (+ now (lease-ttl)) (cp-num plan 0 "revision"))) ports token))))))
 
 ;; Restore and local writes can outlast the first lease observation. Relearn
 ;; the same epoch after restore, before inference. This is still not an atomic
@@ -43,6 +48,11 @@
               (not (= (recovery-lease-problem fresh task node epoch now) "recovery/lease-admitted")))
             "recovery/lease-lost-before-dispatch"
           (< budget 1) "profile/budget-refused"
+          ;; This standalone recovery lane has no GitHub archive acknowledgement
+          ;; or durable publication coordinator for a Flint turn. Use the
+          ;; archive-gated resident path until that integration is qualified.
+          (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-flint/1")
+            "recovery/flint-archive-gate-required"
           :else (let [event (cp-say "recovery/lease-and-replicas-admitted")]
                   (pr-step-bounded dest runtime (cp-str plan 0 "cache") (cp-num contract 0 "next") budget)))))
 
@@ -82,9 +92,14 @@
                       :else result)))))))))
 
 (defn- rf-previous-value-status [previous :vector-i64 expected :vector-i64 node :string task :string epoch :i64 now :i64] :i64
-  (cond (not (= (cp-text previous) (cp-text expected))) -1
+  (cond (not (rf-clock-ballot-ok? now epoch)) -4
+        (not (= (cp-text previous) (cp-text expected))) -1
+        (or (not (json-valid? previous)) (not (json-canonical? previous))
+            (not (= (json-kind previous 0) 1)) (not (= (json-count previous 0) 6))) -5
         (not (= (cp-num previous 0 "epoch") epoch)) -2
         (or (not (= (cp-str previous 0 "class") task)) (not (= (cp-num previous 0 "slot") 0))) -3
+        (or (< (cp-num previous 0 "revision") 0)
+            (not (valid-value? (cp-str previous 0 "node") true task 0 epoch (cp-num previous 0 "until") now))) -5
         (= (decide node (cp-num previous 0 "epoch") true
              (cp-str previous 0 "node") (cp-num previous 0 "until") now) "lease/take-over") 1
         :else 0))
@@ -96,21 +111,28 @@
       (rf-previous-value-status previous expected (cp-str plan 0 "node")
         (cp-str plan 0 "task") (cp-num plan 0 "previousEpoch") now))))
 
+(defn- rf-wait-previous [plan :vector-i64] :string
+  (loop [waits 0]
+    (let [status (rf-previous-status plan)]
+      (cond (= status -1) "recovery/previous-lease-unavailable"
+            (= status -2) "recovery/previous-lease-epoch"
+            (= status -3) "recovery/previous-lease-task"
+            (= status -4) "recovery/clock-or-epoch-unknown"
+            (= status -5) "recovery/previous-lease-invalid"
+            (= status 1) (rf-run plan true)
+            (>= waits 1800) "recovery/lease-wait-expired"
+            (pr-pause) (recur (+ waits 1))
+            :else "recovery/wait-unavailable"))))
+
 (defn- rf-watch [plan :vector-i64] :string
   (loop [i 0 seen false misses 0]
     (let [alive (arena-scope (pr-alive? (cp-str plan 0 "peer"))) lost (if alive 0 (+ misses 1))]
       (cond (and seen (>= lost 2))
             (let [event (cp-say "recovery/producer-lost")]
-              (loop [waits 0]
-                (let [status (rf-previous-status plan)]
-                  (cond (= status -1) "recovery/previous-lease-unavailable"
-                        (= status -2) "recovery/previous-lease-epoch"
-                        (= status -3) "recovery/previous-lease-task"
-                        (= status 1) (rf-run plan true)
-                        (>= waits 1800) "recovery/lease-wait-expired"
-                        :else (let [z (pr-pause)] (recur (+ waits 1)))))))
+              (rf-wait-previous plan))
             (>= i 1800) "recovery/watch-expired"
-            :else (let [z (pr-pause)] (recur (+ i 1) (or seen alive) lost))))))
+            (pr-pause) (recur (+ i 1) (or seen alive) lost)
+            :else "recovery/wait-unavailable"))))
 
 (defn fenced-profile-main [] :i64
   (let [plan (cp-read (cp-arg 1))]

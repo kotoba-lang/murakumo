@@ -1,7 +1,19 @@
 ;; Durable local FIFO primitive for a future resource governor (AWAI-151).
 ;; It never dispatches work or decides that a workload has stopped. Only a
-;; trusted host may invoke dequeue after separately verifying the whole
-;; workload's termination. Root, files and all callers must be host-owned.
+;; trusted host may release a reservation and invoke dequeue after separately
+;; verifying the whole workload's termination. Root, files and all callers
+;; must be host-owned. The hold is not an authorization or process monitor.
+;; RGQ5 is intentionally incompatible with RGQ1 through RGQ4: the host must
+;; reconcile and migrate offline, exclude older writers and existing workloads,
+;; and never dispatch without a successful durable reservation. A release
+;; requires independent proof that the entire workload stopped; ambiguous
+;; release outcomes require host reconciliation before any further dispatch.
+;; Begin RGQ5 only with a fresh empty host-owned queue and a permanently
+;; separate ticket namespace; never migrate active RGQ4 tickets or outstanding
+;; release commands into it. Retain every queue.used.* marker across restarts,
+;; backups and recovery. A caller must reconcile an unknown claim before retry.
+;; Markers do
+;; not authenticate callers or stop a trusted caller releasing a live workload.
 (ns murakumo.resource-fifo (:export [resource-fifo-main]))
 
 (defn- rq-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
@@ -10,6 +22,50 @@
   (let [reply (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
     (if (and (>= (string-byte-length reply) 5) (= (string-substring reply 0 5) "\u0000FS2\u0000"))
       (string-substring reply 5 (string-length reply)) "")))
+;; Queue and journal are ASCII. Check metadata before requesting a bounded
+;; range, validate the FS2 frame and exact response, and check size again.
+;; The trusted provider must enforce the range bound; the host must exclude
+;; path aliases and same-size concurrent writes throughout each operation.
+(defn- rq-field [s :string wanted :i64] :string
+  (loop [i 0 start 0 field 0]
+    (cond (= i (string-length s)) (if (= field wanted) (string-substring s start i) "")
+          (= (string-substring s i (+ i 1)) " ")
+          (if (= field wanted) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ field 1)))
+          :else (recur (+ i 1) start field))))
+(defn- rq-digits? [s :string maximum :i64] :bool
+  (let [n (string-length s)]
+    (and (> n 0) (<= n maximum)
+         (loop [i 0]
+           (if (= i n) true
+             (let [c (string-code-point-at s i)]
+               (and (>= c 48) (<= c 57) (recur (+ i 1)))))))))
+(defn- rq-decimal [s :string] :i64
+  (loop [i 0 value 0]
+    (if (= i (string-length s)) value
+      (recur (+ i 1) (+ (* value 10) (- (string-code-point-at s i) 48))))))
+(defn- rq-meta-size [meta :string] :i64
+  (let [mode (rq-field meta 0) s (rq-field meta 1) blocks (rq-field meta 2)
+        kind (rq-field meta 3) n (string-length s)]
+    (if (or (not (= meta (str mode " " s " " blocks " " kind)))
+            (not (rq-digits? mode 3)) (> (rq-decimal mode) 511) (not (rq-digits? blocks 20))
+            (not (= kind "0")) (= n 0) (> n 5)) -1
+      (loop [i 0 size 0]
+        (if (= i n) size
+          (let [c (string-code-point-at s i)]
+            (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* size 10) (- c 48))) -1)))))))
+(defn- rq-size [path :string] :i64 (rq-meta-size (rq-fs "O" path "")))
+(defn- rq-read-bounded [path :string maximum :i64] :string
+  (let [size (rq-size path)]
+    (if (or (< size 1) (> size maximum)) ""
+      (let [r (typed-cap-call 35 :string :bytes (str "\u0000FS2\u0000E" path "\u00000:" (string-from-i64 size)))
+            n (bytes-count r)
+            framed (and (= n (+ size 5)) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70)
+                        (= (bytes-at r 2) 83) (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
+            ascii (and framed (loop [i 5]
+                    (if (= i n) true
+                      (let [b (bytes-at r i)]
+                        (and (or (= b 10) (and (>= b 32) (<= b 126))) (recur (+ i 1)))))))]
+        (if (and ascii (= (rq-size path) size)) (string-from-utf8 (bytes-slice r 5 n)) "")))))
 ;; Use the byte FS2 form and verify its complete echo. The diagnostic
 ;; Darwin provider supports B as bytes; Linux supports this form as well.
 (defn- rq-write? [path :string value :string] :bool
@@ -41,9 +97,73 @@
            (let [c (string-code-point-at s i)]
              (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
                (recur (+ i 1)) false))))))
+;; Called under queue.lock before enqueue. Publish a synced staging file using
+;; FS2 T's no-replace rename: even a false "missing" lookup must never allow
+;; an existing claim to be overwritten. T errors or ambiguous outcomes refuse.
+;; The host must exclude all other writers and preserve the marker namespace.
+;; Successful file and directory sync must precede publication of the ticket.
+(defn- rq-claim-ticket [root :string ticket :string] :string
+  (let [path (str root "/queue.used." ticket) pending (str root "/queue.claim." ticket)
+        status (rq-fs "D" path "")]
+    (cond (= status "1") "fifo/ticket-used"
+          (not (= status "0")) "fifo/ticket-unknown"
+          (and (rq-write? pending (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "M" pending "") "1")
+               (= (rq-read-bounded pending 70) (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "T" pending path) "1")
+               (= (rq-fs "M" path "") "1")
+               (= (rq-read-bounded path 70) (str "RGU1\n" ticket "\n"))
+               (= (rq-fs "M" root "") "1")) "fifo/ticket-claimed"
+          :else "fifo/ticket-unknown")))
+(defn- rq-claimed? [root :string ticket :string] :bool
+  (= (rq-read-bounded (str root "/queue.used." ticket) 70) (str "RGU1\n" ticket "\n")))
+;; A visible post-crash state may not yet have a completed sync. A successful
+;; observation re-syncs the queue, claim and directory; an unknown sync never
+;; authorizes the caller to treat the result as durable.
+(defn- rq-inspect-sync? [root :string ticket :string hold-status :string release-status :string] :bool
+  (and (= (rq-fs "M" (str root "/queue") "") "1")
+       (= (rq-fs "M" (str root "/queue.used." ticket) "") "1")
+       (or (= hold-status "0") (= (rq-fs "M" (str root "/queue.reservation") "") "1"))
+       (or (= release-status "0") (= (rq-fs "M" (str root "/queue.release.pending") "") "1"))
+       (= (rq-fs "M" root "") "1")))
+(defn- rq-hold-valid? [s :string] :bool
+  (and (= (string-length s) 70) (= (string-substring s 0 5) "RGH1\n")
+       (= (string-substring s 69 70) "\n") (rq-ticket? (string-substring s 5 69))))
+
+;; A settled receipt is consumed only while acquiring the next reservation.
+;; Absence, malformed data, or failed sync after a prior history is unknown.
+(defn- rq-history-clear? [root :string] :bool
+  (let [last (str root "/queue.reservation.last") receipt (str root "/queue.reservation.settled")
+        previous (str root "/queue.reservation.previous")
+        ls (rq-fs "D" last "") rs (rq-fs "D" receipt "") ps (rq-fs "D" previous "")]
+    (and (or (= ps "0") (= ps "1"))
+         (cond (and (= ls "0") (= rs "0") (= ps "0")) true
+               (and (= ls "1") (= rs "1"))
+                 (let [a (rq-read-bounded last 70) b (rq-read-bounded receipt 70)]
+                   (and (rq-hold-valid? a) (= a b) (= (rq-fs "M" last "") "1")
+                        (= (rq-fs "M" receipt "") "1") (= (rq-fs "M" root "") "1")))
+               :else false))))
+;; An inspect must not hide an interrupted settle or an inconsistent active
+;; barrier. A release may refer to the current front or a removed ticket.
+(defn- rq-inspect-barrier-valid? [root :string state :string hold-status :string release-status :string] :bool
+  (if (and (= hold-status "0") (= release-status "0")) (rq-history-clear? root)
+    (let [holding (= hold-status "1") path (str root (if holding "/queue.reservation" "/queue.release.pending"))
+          marker (rq-read-bounded path 70)]
+      (if (not (rq-hold-valid? marker)) false
+        (let [barrier-ticket (string-substring marker 5 69)
+              at (string-index-of state (str barrier-ticket "\n"))]
+          (and (rq-claimed? root barrier-ticket)
+               (if holding (= at 5) (or (< at 0) (= at 5)))))))))
+(defn- rq-consume-history? [root :string] :bool
+  (let [receipt (str root "/queue.reservation.settled") status (rq-fs "D" receipt "")]
+    (and (rq-history-clear? root)
+         (cond (= status "0") true
+               (= status "1") (and (= (rq-fs "L" receipt (str root "/queue.reservation.previous")) "1")
+                                    (= (rq-fs "M" root "") "1"))
+               :else false))))
 (defn- rq-valid? [s :string] :bool
   (let [n (string-length s)]
-    (and (>= n 5) (<= n 4165) (= (string-substring s 0 5) "RGQ1\n")
+    (and (>= n 5) (<= n 4165) (= (string-substring s 0 5) "RGQ5\n")
          (= (mod (- n 5) 65) 0)
          (loop [i 5]
            (if (= i n) true
@@ -66,7 +186,7 @@
            (rq-removal? old next))))
 (defn- rq-recover [root :string state :string pending-status :string intent-status :string] :string
   (let [intent (str root "/queue.intent")
-        journal (if (= intent-status "1") (rq-fs "A" intent "") "")
+        journal (if (= intent-status "1") (rq-read-bounded intent 8340) "")
         cut (string-index-of journal "NEXT\n")
         old (if (and (>= (string-length journal) 5) (>= cut 5)) (string-substring journal 5 cut) "")
         next (if (and (>= cut 5) (<= (+ cut 5) (string-length journal)))
@@ -97,29 +217,110 @@
     (and (= (rq-fs "D" intent "") "0") (= (rq-fs "D" tmp "") "0")
          (rq-write? intent (str "RGI1\n" original "NEXT\n" next)) (= (rq-fs "M" intent "") "1")
          (= (rq-fs "M" root "") "1") (rq-write? tmp next)
-         (= (rq-fs "M" tmp "") "1") (= (rq-fs "A" tmp "") next)
-         (= (rq-fs "A" state "") original) (= (rq-fs "L" tmp state) "1")
+         (= (rq-fs "M" tmp "") "1") (= (rq-read-bounded tmp 4165) next)
+         (= (rq-read-bounded state 4165) original) (= (rq-fs "L" tmp state) "1")
          (= (rq-fs "M" root "") "1") (= (rq-fs "L" intent (str root "/queue.last")) "1")
          (= (rq-fs "M" root "") "1"))))
+(defn- rq-settle-recover [root :string state :string ticket :string pending :string intent :string] :string
+  (let [last (str root "/queue.reservation.last") receipt (str root "/queue.reservation.settled")
+        journal (str root "/queue.last") rs (rq-fs "D" receipt "")
+        expected-hold (str "RGH1\n" ticket "\n")
+        old (str "RGQ5\n" ticket "\n" (string-substring state 5 (string-length state)))
+        expected-journal (str "RGI1\n" old "NEXT\n" state)]
+    (if (and (rq-ticket? ticket) (rq-claimed? root ticket) (= pending "0") (= intent "0")
+             (= (rq-fs "D" last "") "1") (= (rq-read-bounded last 70) expected-hold)
+             (< (string-index-of state (str ticket "\n")) 0)
+             (= (rq-read-bounded journal 8340) expected-journal)
+             (= (rq-fs "M" (str root "/queue") "") "1") (= (rq-fs "M" journal "") "1")
+             (= (rq-fs "M" last "") "1") (= (rq-fs "M" root "") "1")
+             (cond (= rs "0") (rq-write? receipt expected-hold)
+                   (= rs "1") (= (rq-read-bounded receipt 70) expected-hold)
+                   :else false)
+             (= (rq-fs "M" receipt "") "1") (= (rq-fs "M" root "") "1"))
+      "fifo/settled" "fifo/reservation-unknown")))
 (defn- rq-apply [root :string op :string ticket :string] :string
   (let [state-path (str root "/queue") pending (str state-path ".pending") intent (str state-path ".intent")
+        hold (str root "/queue.reservation") hold-status (rq-fs "D" hold "")
+        release (str root "/queue.release.pending") release-status (rq-fs "D" release "")
         exists (rq-fs "D" state-path "") pending-status (rq-fs "D" pending "") intent-status (rq-fs "D" intent "")
-        state (if (= exists "1") (rq-fs "A" state-path "") "")]
+        state (if (= exists "1") (rq-read-bounded state-path 4165) "")]
     (cond (or (not (= exists "1")) (not (rq-valid? state))) "fifo/state-invalid"
+          (not (or (= hold-status "0") (= hold-status "1"))) "fifo/reservation-unknown"
+          (not (or (= release-status "0") (= release-status "1"))) "fifo/reservation-unknown"
+          (and (= hold-status "1") (= release-status "1")) "fifo/reservation-unknown"
+          ;; Read-only reconciliation observation. A recorded but nonqueued
+          ;; ticket may have completed, been cancelled, or never been queued;
+          ;; it is not proof that any workload stopped or never started.
+          (= op "inspect")
+            (cond (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+                  (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
+                  (not (rq-inspect-barrier-valid? root state hold-status release-status)) "fifo/reservation-unknown"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
+                  (not (rq-inspect-sync? root ticket hold-status release-status)) "fifo/claim-unknown"
+                  (< (string-index-of state (str ticket "\n")) 0) "fifo/claim-recorded"
+                  :else "fifo/claim-queued")
+          (= op "settle-recover")
+            (if (and (= hold-status "0") (= release-status "0"))
+              (rq-settle-recover root state ticket pending-status intent-status) "fifo/reservation-unknown")
+          (= release-status "1")
+            (cond (= op "recover") (rq-recover root state pending-status intent-status)
+                  (= op "release") "fifo/reservation-unknown"
+                  (not (or (= op "dequeue") (= op "settle"))) "fifo/release-pending"
+                  (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
+                  (not (= (rq-read-bounded release 70) (str "RGH1\n" ticket "\n"))) "fifo/reservation-unknown"
+                  (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
+                  (= op "dequeue")
+                    (cond (= state "RGQ5\n") "fifo/empty"
+                          (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
+                          (rq-commit root state (str "RGQ5\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
+                          :else "fifo/write-unknown")
+                  :else
+                    (let [old (str "RGQ5\n" ticket "\n" (string-substring state 5 (string-length state)))
+                          expected (str "RGI1\n" old "NEXT\n" state) journal (str root "/queue.last")]
+                      (if (and (< (string-index-of state (str ticket "\n")) 0)
+                               (= (rq-read-bounded journal 8340) expected)
+                               (= (rq-fs "M" state-path "") "1") (= (rq-fs "M" journal "") "1")
+                               (= (rq-fs "M" release "") "1") (= (rq-fs "M" root "") "1")
+                               (= (rq-fs "D" (str root "/queue.reservation.settled") "") "0")
+                               (= (rq-fs "L" release (str root "/queue.reservation.last")) "1")
+                               (= (rq-fs "M" root "") "1"))
+                        (rq-settle-recover root state ticket pending-status intent-status) "fifo/reservation-unknown")))
+          (= op "release")
+            (cond (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+                  (not (= hold-status "1")) "fifo/reservation-unknown"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
+                  (not (= (rq-read-bounded hold 70) (str "RGH1\n" ticket "\n"))) "fifo/reservation-unknown"
+                  (or (= state "RGQ5\n") (not (= (string-substring state 5 69) ticket))) "fifo/reservation-unknown"
+                  (not (and (= pending-status "0") (= intent-status "0"))) "fifo/pending-unknown"
+                  (and (= (rq-fs "M" hold "") "1")
+                       (= (rq-fs "L" hold release) "1")
+                       (= (rq-fs "M" root "") "1")) "fifo/release-pending"
+                  :else "fifo/reservation-unknown")
+          (= hold-status "1") "fifo/reservation-held"
+          (not (rq-history-clear? root)) "fifo/reservation-unknown"
           (= op "recover") (rq-recover root state pending-status intent-status)
           (or (not (= pending-status "0")) (not (= intent-status "0"))) "fifo/pending-unknown"
-          (= op "front") (if (= state "RGQ1\n") "fifo/empty" (str "fifo/front " (string-substring state 5 69)))
+          (= op "front") (if (= state "RGQ5\n") "fifo/empty" (str "fifo/front " (string-substring state 5 69)))
           (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+          (= op "reserve")
+            (cond (= state "RGQ5\n") "fifo/empty"
+                  (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
+                  (not (rq-claimed? root ticket)) "fifo/ticket-unknown"
+                  (and (rq-consume-history? root) (rq-write? hold (str "RGH1\n" ticket "\n"))
+                       (= (rq-fs "M" hold "") "1") (= (rq-fs "M" root "") "1")) "fifo/reserved"
+                  :else "fifo/reservation-unknown")
           (= op "enqueue")
             (cond (not (< (string-index-of state (str ticket "\n")) 0)) "fifo/already-queued"
                   (>= (string-length state) 4165) "fifo/full"
-                  (rq-commit root state (str state ticket "\n")) "fifo/enqueued"
-                  :else "fifo/write-unknown")
+                  :else (let [claim (rq-claim-ticket root ticket)]
+                          (cond (not (= claim "fifo/ticket-claimed")) claim
+                                (rq-commit root state (str state ticket "\n")) "fifo/enqueued"
+                                :else "fifo/write-unknown")))
           (= op "dequeue")
-            (cond (= state "RGQ1\n") "fifo/empty"
+            (cond (= state "RGQ5\n") "fifo/empty"
                   (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
-                  (rq-commit root state (str "RGQ1\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
-                  :else "fifo/write-unknown")
+                  :else "fifo/release-required")
           (= op "cancel")
             (let [i (string-index-of state (str ticket "\n"))]
               (cond (< i 0) "fifo/not-queued"
@@ -131,7 +332,8 @@
 (defn resource-fifo-main [] :i64
   (let [root (rq-arg 0) op (rq-arg 1) ticket (rq-arg 2) lock (str root "/queue.lock")]
     (if (or (not (rq-root? root)) (not (= (rq-arg 3) ""))
-            (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "cancel") (= op "recover")))
+            (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "cancel") (= op "recover")
+                     (= op "reserve") (= op "release") (= op "settle") (= op "settle-recover") (= op "inspect")))
             (and (or (= op "front") (= op "recover")) (not (= ticket ""))))
       (let [z (rq-out "fifo/input-invalid")] 2)
       (if (not (= (rq-fs "D" lock "") "1")) (let [z (rq-out "fifo/lock-unavailable")] 2)
@@ -141,5 +343,7 @@
                 released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
                 z (rq-out (if released result "fifo/unlock-unknown"))]
             (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued") (= result "fifo/cancelled")
+                                  (= result "fifo/reserved") (and (= op "release") (= result "fifo/release-pending")) (= result "fifo/settled")
+                                  (= result "fifo/claim-queued") (= result "fifo/claim-recorded")
                                   (= result "fifo/empty") (= result "fifo/recovered") (= result "fifo/aborted")
                                   (= (string-index-of result "fifo/front ") 0))) 0 1)))))))

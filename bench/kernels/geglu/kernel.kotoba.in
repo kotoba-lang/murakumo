@@ -1,0 +1,76 @@
+(ns murakumo.geglu (:export [main]))
+
+;; GEGLU in f32: x is [@R@, 2*@N@]; the first @N@ columns are the value a, the last
+;; @N@ the gate g; out = a * gelu(g), gelu(g) = 0.5 * g * (1 + erf(g / sqrt(2))).
+;; The language has no erf, so erf is Abramowitz-Stegun 7.1.26 (|error| <= 1.5e-7
+;; in erf) on the same fixed-polynomial exp the other kernels use. Each step is
+;; one binary32 operation in the order kernel.c uses.
+
+(defn- nr [] :i64 @R@)
+(defn- nn [] :i64 @N@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-add (f32-mul (i64-to-f32-rounded iv) (fb scale)) (fb 0))))]
+        (recur (+ i 1) t)))))
+
+(defn- expb [xb :i64] :i64
+  (let [lim (fb 1118699520)
+        x (f32-max (f32-min (fb xb) lim) (f32-neg lim))
+        fx (f32-add (f32-mul x (fb 1069066811)) (fb 1262485504))
+        k (- (bit-and (f32-to-bits fx) 8388607) 4194304)
+        kf (f32-sub fx (fb 1262485504))
+        r (f32-sub (f32-sub x (f32-mul kf (fb 1060208640))) (f32-mul kf (fb 3109978243)))
+        y0 (f32-add (f32-mul (fb 961571175) r) (fb 985088974))
+        y1 (f32-add (f32-mul y0 r) (fb 1007192328))
+        y2 (f32-add (f32-mul y1 r) (fb 1026206145))
+        y3 (f32-add (f32-mul y2 r) (fb 1042983594))
+        y4 (f32-add (f32-mul y3 r) (fb 1056964608))
+        p (f32-add (f32-add (f32-mul (f32-mul y4 r) r) r) (fb 1065353216))]
+    (bf (f32-mul p (f32-from-bits (i32-wrap (i64-shift-left (+ k 127) 23)))))))
+
+(defn- erfb [xb :i64] :i64
+  (let [x (fb xb)
+        ax (f32-abs x)
+        t (f32-div (fb 1065353216) (f32-add (fb 1065353216) (f32-mul (fb 1051179525) ax)))
+        p0 (f32-add (f32-mul (fb 1065868322) t) (fb 3216638179))
+        p1 (f32-add (f32-mul p0 t) (fb 1068888291))
+        p2 (f32-add (f32-mul p1 t) (fb 3197217166))
+        p3 (f32-add (f32-mul p2 t) (fb 1048738054))
+        p (f32-mul p3 t)
+        e (fb (expb (bf (f32-neg (f32-mul ax ax)))))
+        r (f32-sub (fb 1065353216) (f32-mul p e))]
+    (bf (if (f32-lt x (fb 0)) (f32-neg r) r))))
+
+(defn- out-at [x :vector-i64 r :i64 i :i64] :i64
+  (let [a (fb (vector-at x (+ (* r (* 2 (nn))) i)))
+        g (fb (vector-at x (+ (+ (* r (* 2 (nn))) (nn)) i)))
+        e (fb (erfb (bf (f32-mul g (fb 1060439283)))))
+        gelu (f32-mul (f32-mul (fb 1056964608) g) (f32-add (fb 1065353216) e))]
+    (bf (f32-mul a gelu))))
+
+(defn- pass [x :vector-i64 c0 :i64] :i64
+  (loop [r 0 c c0]
+    (if (= r (nr)) c
+      (recur (+ r 1)
+             (loop [i 0 cc c]
+               (if (= i (nn)) cc
+                 (recur (+ i 1) (bit-and (+ (* cc 31) (bit-and (out-at x r i) 4294967295)) (mask48)))))))))
+
+(defn main [] :i64
+  (let [x (vector-alloc (* (nr) (* 2 (nn))))
+        s1 (fill x (* (nr) (* 2 (nn))) 12345 964689920)]
+    (loop [i 0 c (bit-and s1 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (pass x c))))))

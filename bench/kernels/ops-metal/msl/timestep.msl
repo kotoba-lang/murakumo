@@ -1,0 +1,12 @@
+constant uint DIM = @DIM@u;
+constant uint TS = @TS@u;
+kernel void op(device const float *X [[buffer(0)]], device const float *B1 [[buffer(1)]], device const float *B2 [[buffer(2)]],
+               device float *O [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  uint half_ = DIM / 2u;
+  uint t = i / DIM;
+  uint j = i % DIM;
+  uint k = j % half_;
+  float freq = precise::exp(-9.210340371976184f * float(k) / float(half_));
+  float arg = float(TS * t) * freq;
+  O[i] = (j < half_) ? precise::cos(arg) : precise::sin(arg);
+}

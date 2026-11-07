@@ -1,0 +1,51 @@
+;; A qualified FS2 fixture must provide a private block store containing the
+;; raw-CID-named bytes "abc" and the empty raw-CID block. These definitions
+;; are not execution evidence; fault injection must also cover failed A/E/O
+;; reads and sync, including a failed A for an empty write.
+(ns murakumo.checkpoint-materialize-read-cases (:export [test-checkpoint-materialize-read test-checkpoint-empty-write test-checkpoint-empty-write-refuses test-checkpoint-closure-index-refuses test-checkpoint-bundle-index test-checkpoint-assemble-refuses test-checkpoint-restore-reload-refuses test-checkpoint-recovery-publication-refuses test-checkpoint-recovery-reload-refuses]))
+
+(defn test-checkpoint-materialize-read [store :string] :bool
+  (let [abc (cp-bytes "abc") empty (vector-alloc 0)
+        abc-cid (cp-cid abc) empty-cid (cp-cid empty)]
+    (and (cp-reloaded-block-valid? store abc-cid (cp-capture-read (str store "/" abc-cid)))
+         (cp-reloaded-block-valid? store empty-cid (cp-capture-read (str store "/" empty-cid)))
+         (not (cp-reloaded-block-valid? store abc-cid empty))
+         (not (cp-reloaded-block-valid? store abc-cid (cp-bytes "abd")))
+         (not (cp-reloaded-block-valid? store "invalid" empty)))))
+
+;; The host supplies a private writable test path. The refusal case requires
+;; an FS2 fault fixture returning success for M and malformed or failed E.
+(defn test-checkpoint-empty-write [path :string] :bool
+  (cp-write path (vector-alloc 0)))
+(defn test-checkpoint-empty-write-refuses [path :string] :bool
+  (not (cp-write path (vector-alloc 0))))
+
+;; The host supplies a previously valid signed checkpoint, then injects a
+;; failed or changed read of its bundle index after the closure preflight.
+;; The harness must also verify no closure-complete line was emitted.
+(defn test-checkpoint-closure-index-refuses [store :string cid :string checkpoint :vector-i64] :bool
+  (= (cp-closure-list store cid checkpoint) 1))
+
+;; Pure index cases cover malformed input, a wrong chunk count and CID shape.
+(defn test-checkpoint-bundle-index [] :bool
+  (let [cid (cp-cid (cp-bytes "abc"))
+        valid (cp-bytes (str "{\"chunks\":[\"" cid "\"],\"kind\":\"itonami.git-bundle/1\",\"size\":3}"))
+        too-few (cp-bytes (str "{\"chunks\":[\"" cid "\"],\"kind\":\"itonami.git-bundle/1\",\"size\":131073}"))
+        bad-cid (cp-bytes "{\"chunks\":[\"bad\"],\"kind\":\"itonami.git-bundle/1\",\"size\":3}")]
+    (and (cp-bundle-index? valid) (not (cp-bundle-index? (vector-alloc 0)))
+         (not (cp-bundle-index? too-few)) (not (cp-bundle-index? bad-cid)))))
+
+;; A fault fixture makes the index or one chunk unreadable after preflight;
+;; the harness checks refusal and that no destination was published.
+(defn test-checkpoint-assemble-refuses [store :string cid :string] :bool
+  (not (cp-assemble-bundle store cid)))
+
+;; The host fixture supplies valid arguments, then injects a failed root reload
+;; or an ambiguous cp-put result. The harness also checks output contains no
+;; checkpoint/verified, checkpoint/restored, or recovery/recorded line.
+(defn test-checkpoint-restore-reload-refuses [] :bool
+  (= (cp-restore) 1))
+(defn test-checkpoint-recovery-publication-refuses [] :bool
+  (= (cp-recovery) 1))
+(defn test-checkpoint-recovery-reload-refuses [] :bool
+  (= (cp-verify-recovery) 1))

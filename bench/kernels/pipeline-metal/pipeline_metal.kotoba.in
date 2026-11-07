@@ -1,0 +1,3102 @@
+(ns murakumo.unet-metal (:export [main]))
+
+;; Stage M, slice 11 (JUN-927, ADR-261106): an SDXL-shaped UNet (ComfyUI's SDXL configuration: model_channels 320, channel_mult (1, 2, 4), two ResBlocks per level,
+;; transformer depths 0, 2, 10, middle 10, 2,816-wide label embedding, context 77 x 2048) at a latent of @LAT@ x @LAT@, run on the GPU with SYNTHETIC weights to time one UNet call
+;; (see the notes below). The older description follows: ComfyUI's UNetModel, in a mini configuration, run end to end on the Apple GPU from ONE Kotoba
+;; program on the Metal route (amu ADR 0405, profile amu-program-metal), with its weights read from a safetensors file under ComfyUI's own
+;; parameter names (@MODEL@), the input latent from @X@, the text context from @CTX@ and the timestep @T@. The graph: time embedding;
+;; input_blocks.0 (conv), .1 (ResBlock), .2 (Downsample), .3 (ResBlock + SpatialTransformer); middle_block (ResBlock, SpatialTransformer,
+;; ResBlock); output_blocks.0 to .3 (each a ResBlock on the channel-concatenation with a skip, the first two with SpatialTransformers, the
+;; second ending in an Upsample); out (GroupNorm, SiLU, conv). Skip tensors are written by the encoder straight into the second half of
+;; the decoder's concatenation buffer (a buffer offset), so concatenation moves no data. Every kernel (about 150) is encoded into ONE
+;; command buffer and one encoder. The raw float32 results go to stderr in this order: emb (128), h0 (32x16x16), b1 (32x16x16),
+;; d (32x8x8), b3 (64x8x8), m (64x8x8), o0 (64x8x8), o1 (64x16x16), o2 (32x16x16), o3 (32x16x16), final (4x16x16); then the timing line.
+
+(defn- kernel-source [] :string
+  "#include <metal_stdlib>
+#include <metal_simdgroup_matrix>
+using namespace metal;
+kernel void cvt32h(device const float *S [[buffer(0)]], device half *H [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  H[i] = half(S[i]);
+}
+
+float ln_row(device const float *X, device const float *Ga, device const float *Be, uint base, uint NN, uint tid, uint lane, uint sgi,
+             threadgroup float *part, threadgroup float *stat, thread float &mean, thread float &inv) {
+  float s = 0.0f;
+  for (uint i = tid; i < NN; i += 128u) s += X[base + i];
+  s = simd_sum(s);
+  if (lane == 0u) part[sgi] = s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[0] = (part[0] + part[1] + part[2] + part[3]) / float(NN);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  mean = stat[0];
+  float q = 0.0f;
+  for (uint i = tid; i < NN; i += 128u) { float d = X[base + i] - mean; q += d * d; }
+  q = simd_sum(q);
+  if (lane == 0u) part[sgi] = q;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[1] = 1.0f / precise::sqrt((part[0] + part[1] + part[2] + part[3]) / float(NN) + 0.00001f);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  inv = stat[1];
+  return 0.0f;
+}
+
+kernel void cvt_fh(device const float *F [[buffer(0)]], device half *H [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  H[i] = half(F[i]);
+}
+
+kernel void ln_h(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]],
+                 device half *O [[buffer(3)]], device const uint *P [[buffer(4)]],
+                 uint r [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                 uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  threadgroup float stat[2];
+  uint NN = P[0];
+  float mean; float inv;
+  ln_row(X, Ga, Be, r * NN, NN, tid, lane, sgi, part, stat, mean, inv);
+  for (uint i = tid; i < NN; i += 128u)
+    O[r * NN + i] = half(((X[r * NN + i] - mean) * inv) * Ga[i] + Be[i]);
+}
+
+float erf_as(float x) {
+  float ax = fabs(x);
+  float t = 1.0f / (1.0f + 0.3275911f * ax);
+  float p = 1.061405429f;
+  p = p * t + (-1.453152027f);
+  p = p * t + 1.421413741f;
+  p = p * t + (-0.284496736f);
+  p = p * t + 0.254829592f;
+  p = p * t;
+  float r = 1.0f - p * precise::exp(-(ax * ax));
+  return x < 0.0f ? -r : r;
+}
+
+kernel void linear_t(device const half *A [[buffer(0)]], device const half *W [[buffer(1)]], device const float *Bias [[buffer(2)]],
+                     device const float *Res [[buffer(3)]], device float *OF [[buffer(4)]], device half *OH [[buffer(5)]],
+                     device const uint *P [[buffer(6)]],
+                     uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                     uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float Cs[64 * 64];
+  uint K = P[1]; uint N = P[2]; uint OUTH = P[3]; uint RES = P[4]; uint ACT = P[5];
+  uint m0 = tg.y * 64u;
+  uint n0 = tg.x * 64u;
+  uint row0 = (sg / 2u) * 32u;
+  uint col0 = (sg % 2u) * 32u;
+  simdgroup_float8x8 acc[4][4];
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  // four k-steps of 8 per iteration with every fragment in its own register (an array indexed in a loop made the compiler spill: 1.7x slower); K % 32 tail below
+  uint k = 0u;
+  for (; k + 32u <= K; k += 32u) {
+    simdgroup_half8x8 a0_0; simdgroup_load(a0_0, A + (m0 + row0 + 0u) * K + k + 0u, K);
+    simdgroup_half8x8 a0_1; simdgroup_load(a0_1, A + (m0 + row0 + 8u) * K + k + 0u, K);
+    simdgroup_half8x8 a0_2; simdgroup_load(a0_2, A + (m0 + row0 + 16u) * K + k + 0u, K);
+    simdgroup_half8x8 a0_3; simdgroup_load(a0_3, A + (m0 + row0 + 24u) * K + k + 0u, K);
+    simdgroup_half8x8 b0_0; simdgroup_load(b0_0, W + (k + 0u) * N + n0 + col0 + 0u, N);
+    simdgroup_half8x8 b0_1; simdgroup_load(b0_1, W + (k + 0u) * N + n0 + col0 + 8u, N);
+    simdgroup_half8x8 b0_2; simdgroup_load(b0_2, W + (k + 0u) * N + n0 + col0 + 16u, N);
+    simdgroup_half8x8 b0_3; simdgroup_load(b0_3, W + (k + 0u) * N + n0 + col0 + 24u, N);
+    simdgroup_half8x8 a1_0; simdgroup_load(a1_0, A + (m0 + row0 + 0u) * K + k + 8u, K);
+    simdgroup_half8x8 a1_1; simdgroup_load(a1_1, A + (m0 + row0 + 8u) * K + k + 8u, K);
+    simdgroup_half8x8 a1_2; simdgroup_load(a1_2, A + (m0 + row0 + 16u) * K + k + 8u, K);
+    simdgroup_half8x8 a1_3; simdgroup_load(a1_3, A + (m0 + row0 + 24u) * K + k + 8u, K);
+    simdgroup_half8x8 b1_0; simdgroup_load(b1_0, W + (k + 8u) * N + n0 + col0 + 0u, N);
+    simdgroup_half8x8 b1_1; simdgroup_load(b1_1, W + (k + 8u) * N + n0 + col0 + 8u, N);
+    simdgroup_half8x8 b1_2; simdgroup_load(b1_2, W + (k + 8u) * N + n0 + col0 + 16u, N);
+    simdgroup_half8x8 b1_3; simdgroup_load(b1_3, W + (k + 8u) * N + n0 + col0 + 24u, N);
+    simdgroup_half8x8 a2_0; simdgroup_load(a2_0, A + (m0 + row0 + 0u) * K + k + 16u, K);
+    simdgroup_half8x8 a2_1; simdgroup_load(a2_1, A + (m0 + row0 + 8u) * K + k + 16u, K);
+    simdgroup_half8x8 a2_2; simdgroup_load(a2_2, A + (m0 + row0 + 16u) * K + k + 16u, K);
+    simdgroup_half8x8 a2_3; simdgroup_load(a2_3, A + (m0 + row0 + 24u) * K + k + 16u, K);
+    simdgroup_half8x8 b2_0; simdgroup_load(b2_0, W + (k + 16u) * N + n0 + col0 + 0u, N);
+    simdgroup_half8x8 b2_1; simdgroup_load(b2_1, W + (k + 16u) * N + n0 + col0 + 8u, N);
+    simdgroup_half8x8 b2_2; simdgroup_load(b2_2, W + (k + 16u) * N + n0 + col0 + 16u, N);
+    simdgroup_half8x8 b2_3; simdgroup_load(b2_3, W + (k + 16u) * N + n0 + col0 + 24u, N);
+    simdgroup_half8x8 a3_0; simdgroup_load(a3_0, A + (m0 + row0 + 0u) * K + k + 24u, K);
+    simdgroup_half8x8 a3_1; simdgroup_load(a3_1, A + (m0 + row0 + 8u) * K + k + 24u, K);
+    simdgroup_half8x8 a3_2; simdgroup_load(a3_2, A + (m0 + row0 + 16u) * K + k + 24u, K);
+    simdgroup_half8x8 a3_3; simdgroup_load(a3_3, A + (m0 + row0 + 24u) * K + k + 24u, K);
+    simdgroup_half8x8 b3_0; simdgroup_load(b3_0, W + (k + 24u) * N + n0 + col0 + 0u, N);
+    simdgroup_half8x8 b3_1; simdgroup_load(b3_1, W + (k + 24u) * N + n0 + col0 + 8u, N);
+    simdgroup_half8x8 b3_2; simdgroup_load(b3_2, W + (k + 24u) * N + n0 + col0 + 16u, N);
+    simdgroup_half8x8 b3_3; simdgroup_load(b3_3, W + (k + 24u) * N + n0 + col0 + 24u, N);
+    simdgroup_multiply_accumulate(acc[0][0], a0_0, b0_0, acc[0][0]);
+    simdgroup_multiply_accumulate(acc[0][1], a0_0, b0_1, acc[0][1]);
+    simdgroup_multiply_accumulate(acc[0][2], a0_0, b0_2, acc[0][2]);
+    simdgroup_multiply_accumulate(acc[0][3], a0_0, b0_3, acc[0][3]);
+    simdgroup_multiply_accumulate(acc[1][0], a0_1, b0_0, acc[1][0]);
+    simdgroup_multiply_accumulate(acc[1][1], a0_1, b0_1, acc[1][1]);
+    simdgroup_multiply_accumulate(acc[1][2], a0_1, b0_2, acc[1][2]);
+    simdgroup_multiply_accumulate(acc[1][3], a0_1, b0_3, acc[1][3]);
+    simdgroup_multiply_accumulate(acc[2][0], a0_2, b0_0, acc[2][0]);
+    simdgroup_multiply_accumulate(acc[2][1], a0_2, b0_1, acc[2][1]);
+    simdgroup_multiply_accumulate(acc[2][2], a0_2, b0_2, acc[2][2]);
+    simdgroup_multiply_accumulate(acc[2][3], a0_2, b0_3, acc[2][3]);
+    simdgroup_multiply_accumulate(acc[3][0], a0_3, b0_0, acc[3][0]);
+    simdgroup_multiply_accumulate(acc[3][1], a0_3, b0_1, acc[3][1]);
+    simdgroup_multiply_accumulate(acc[3][2], a0_3, b0_2, acc[3][2]);
+    simdgroup_multiply_accumulate(acc[3][3], a0_3, b0_3, acc[3][3]);
+    simdgroup_multiply_accumulate(acc[0][0], a1_0, b1_0, acc[0][0]);
+    simdgroup_multiply_accumulate(acc[0][1], a1_0, b1_1, acc[0][1]);
+    simdgroup_multiply_accumulate(acc[0][2], a1_0, b1_2, acc[0][2]);
+    simdgroup_multiply_accumulate(acc[0][3], a1_0, b1_3, acc[0][3]);
+    simdgroup_multiply_accumulate(acc[1][0], a1_1, b1_0, acc[1][0]);
+    simdgroup_multiply_accumulate(acc[1][1], a1_1, b1_1, acc[1][1]);
+    simdgroup_multiply_accumulate(acc[1][2], a1_1, b1_2, acc[1][2]);
+    simdgroup_multiply_accumulate(acc[1][3], a1_1, b1_3, acc[1][3]);
+    simdgroup_multiply_accumulate(acc[2][0], a1_2, b1_0, acc[2][0]);
+    simdgroup_multiply_accumulate(acc[2][1], a1_2, b1_1, acc[2][1]);
+    simdgroup_multiply_accumulate(acc[2][2], a1_2, b1_2, acc[2][2]);
+    simdgroup_multiply_accumulate(acc[2][3], a1_2, b1_3, acc[2][3]);
+    simdgroup_multiply_accumulate(acc[3][0], a1_3, b1_0, acc[3][0]);
+    simdgroup_multiply_accumulate(acc[3][1], a1_3, b1_1, acc[3][1]);
+    simdgroup_multiply_accumulate(acc[3][2], a1_3, b1_2, acc[3][2]);
+    simdgroup_multiply_accumulate(acc[3][3], a1_3, b1_3, acc[3][3]);
+    simdgroup_multiply_accumulate(acc[0][0], a2_0, b2_0, acc[0][0]);
+    simdgroup_multiply_accumulate(acc[0][1], a2_0, b2_1, acc[0][1]);
+    simdgroup_multiply_accumulate(acc[0][2], a2_0, b2_2, acc[0][2]);
+    simdgroup_multiply_accumulate(acc[0][3], a2_0, b2_3, acc[0][3]);
+    simdgroup_multiply_accumulate(acc[1][0], a2_1, b2_0, acc[1][0]);
+    simdgroup_multiply_accumulate(acc[1][1], a2_1, b2_1, acc[1][1]);
+    simdgroup_multiply_accumulate(acc[1][2], a2_1, b2_2, acc[1][2]);
+    simdgroup_multiply_accumulate(acc[1][3], a2_1, b2_3, acc[1][3]);
+    simdgroup_multiply_accumulate(acc[2][0], a2_2, b2_0, acc[2][0]);
+    simdgroup_multiply_accumulate(acc[2][1], a2_2, b2_1, acc[2][1]);
+    simdgroup_multiply_accumulate(acc[2][2], a2_2, b2_2, acc[2][2]);
+    simdgroup_multiply_accumulate(acc[2][3], a2_2, b2_3, acc[2][3]);
+    simdgroup_multiply_accumulate(acc[3][0], a2_3, b2_0, acc[3][0]);
+    simdgroup_multiply_accumulate(acc[3][1], a2_3, b2_1, acc[3][1]);
+    simdgroup_multiply_accumulate(acc[3][2], a2_3, b2_2, acc[3][2]);
+    simdgroup_multiply_accumulate(acc[3][3], a2_3, b2_3, acc[3][3]);
+    simdgroup_multiply_accumulate(acc[0][0], a3_0, b3_0, acc[0][0]);
+    simdgroup_multiply_accumulate(acc[0][1], a3_0, b3_1, acc[0][1]);
+    simdgroup_multiply_accumulate(acc[0][2], a3_0, b3_2, acc[0][2]);
+    simdgroup_multiply_accumulate(acc[0][3], a3_0, b3_3, acc[0][3]);
+    simdgroup_multiply_accumulate(acc[1][0], a3_1, b3_0, acc[1][0]);
+    simdgroup_multiply_accumulate(acc[1][1], a3_1, b3_1, acc[1][1]);
+    simdgroup_multiply_accumulate(acc[1][2], a3_1, b3_2, acc[1][2]);
+    simdgroup_multiply_accumulate(acc[1][3], a3_1, b3_3, acc[1][3]);
+    simdgroup_multiply_accumulate(acc[2][0], a3_2, b3_0, acc[2][0]);
+    simdgroup_multiply_accumulate(acc[2][1], a3_2, b3_1, acc[2][1]);
+    simdgroup_multiply_accumulate(acc[2][2], a3_2, b3_2, acc[2][2]);
+    simdgroup_multiply_accumulate(acc[2][3], a3_2, b3_3, acc[2][3]);
+    simdgroup_multiply_accumulate(acc[3][0], a3_3, b3_0, acc[3][0]);
+    simdgroup_multiply_accumulate(acc[3][1], a3_3, b3_1, acc[3][1]);
+    simdgroup_multiply_accumulate(acc[3][2], a3_3, b3_2, acc[3][2]);
+    simdgroup_multiply_accumulate(acc[3][3], a3_3, b3_3, acc[3][3]);
+  }
+  for (; k < K; k += 8u) {
+    simdgroup_half8x8 a[4];
+    simdgroup_half8x8 b[4];
+    for (uint i = 0u; i < 4u; i++)
+      simdgroup_load(a[i], A + (m0 + row0 + i * 8u) * K + k, K);
+    for (uint j = 0u; j < 4u; j++)
+      simdgroup_load(b[j], W + k * N + n0 + col0 + j * 8u, N);
+    for (uint i = 0u; i < 4u; i++)
+      for (uint j = 0u; j < 4u; j++)
+        simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
+  }
+
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      simdgroup_store(acc[i][j], Cs + (row0 + i * 8u) * 64u + col0 + j * 8u, 64);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint idx = tid; idx < 4096u; idx += 128u) {
+    uint m = m0 + idx / 64u;
+    uint n = n0 + idx % 64u;
+    float v = Cs[idx] + Bias[n];
+    if (ACT == 1u) v = v / (1.0f + precise::exp(-1.702f * v));
+    if (ACT == 2u) v = (0.5f * v) * (1.0f + erf_as(v * 0.70710678f));
+    if (RES == 1u) v += Res[m * N + n];
+    if (OUTH == 1u) OH[m * N + n] = half(v); else OF[m * N + n] = v;
+  }
+}
+
+kernel void attn_hc(device const half *Q [[buffer(0)]], device const half *K [[buffer(1)]], device const half *V [[buffer(2)]],
+                    device half *O [[buffer(3)]], device const uint *P [[buffer(4)]],
+                    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                    uint tid [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float Ssm[32 * 32];
+  threadgroup half Psm[32 * 32];
+  threadgroup float Dsm[4 * 64];
+  threadgroup float Lsm[32];
+  threadgroup float Os[32 * 64];
+  uint LK = P[0];
+  uint HD = P[1] * 64u;
+  uint CAUSAL = P[2];
+  uint NB = (LK + 31u) / 32u;
+  const float SCALE = 0.125f;
+  uint q0 = tg.x * 32u;
+  uint h = tg.y;
+  uint hoff = h * 64u;
+  simdgroup_half8x8 qa[8];
+  for (uint d = 0u; d < 8u; d++)
+    simdgroup_load(qa[d], Q + (q0 + sg * 8u) * HD + hoff + d * 8u, HD);
+  simdgroup_float8x8 oacc[8];
+  for (uint dt = 0u; dt < 8u; dt++)
+    oacc[dt] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  uint rr = tid >> 2;
+  uint qq = tid & 3u;
+  uint qi = q0 + rr;
+  float m = -INFINITY;
+  float l = 0.0f;
+  for (uint kb = 0u; kb < NB; kb++) {
+    for (uint j = 0u; j < 4u; j++) {
+      simdgroup_float8x8 s = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+      for (uint d = 0u; d < 8u; d++) {
+        simdgroup_half8x8 kt;
+        simdgroup_load(kt, K + (kb * 32u + j * 8u) * HD + hoff + d * 8u, HD, ulong2(0, 0), true);
+        simdgroup_multiply_accumulate(s, qa[d], kt, s);
+      }
+      simdgroup_store(s, Ssm + sg * 8u * 32u + j * 8u, 32);
+    }
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    float bm = -INFINITY;
+    for (uint c = qq * 8u; c < qq * 8u + 8u; c++) {
+      uint key = kb * 32u + c;
+      if (key < LK && (CAUSAL == 0u || key <= qi)) bm = max(bm, Ssm[rr * 32u + c] * SCALE);
+    }
+    bm = max(bm, simd_shuffle_xor(bm, 1u));
+    bm = max(bm, simd_shuffle_xor(bm, 2u));
+    float mn = max(m, bm);
+    float alpha = (m == -INFINITY) ? 0.0f : exp(m - mn);
+    float sum = 0.0f;
+    for (uint c = qq * 8u; c < qq * 8u + 8u; c++) {
+      uint key = kb * 32u + c;
+      float p = (key < LK && (CAUSAL == 0u || key <= qi)) ? exp(Ssm[rr * 32u + c] * SCALE - mn) : 0.0f;
+      Psm[rr * 32u + c] = half(p);
+      sum += p;
+    }
+    sum += simd_shuffle_xor(sum, 1u);
+    sum += simd_shuffle_xor(sum, 2u);
+    l = l * alpha + sum;
+    m = mn;
+    Dsm[sg * 64u + lane] = 0.0f;
+    Dsm[sg * 64u + 32u + lane] = 0.0f;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    if (qq == 0u) Dsm[sg * 64u + (lane >> 2) * 9u] = alpha;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    simdgroup_float8x8 D;
+    simdgroup_load(D, Dsm + sg * 64u, 8);
+    for (uint dt = 0u; dt < 8u; dt++) {
+      simdgroup_float8x8 z = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+      simdgroup_multiply_accumulate(z, D, oacc[dt], z);
+      oacc[dt] = z;
+    }
+    for (uint ks = 0u; ks < 4u; ks++) {
+      simdgroup_half8x8 pa;
+      simdgroup_load(pa, Psm + sg * 8u * 32u + ks * 8u, 32);
+      for (uint dt = 0u; dt < 8u; dt++) {
+        simdgroup_half8x8 vt;
+        simdgroup_load(vt, V + (kb * 32u + ks * 8u) * HD + hoff + dt * 8u, HD);
+        simdgroup_multiply_accumulate(oacc[dt], pa, vt, oacc[dt]);
+      }
+    }
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (qq == 0u) Lsm[rr] = l;
+  for (uint dt = 0u; dt < 8u; dt++)
+    simdgroup_store(oacc[dt], Os + sg * 8u * 64u + dt * 8u, 64);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint idx = tid; idx < 2048u; idx += 128u) {
+    uint r = idx / 64u;
+    uint c = idx % 64u;
+    O[(q0 + r) * HD + hoff + c] = half(Os[idx] / Lsm[r]);
+  }
+}
+
+kernel void geglu_h(device const float *X [[buffer(0)]], device half *O [[buffer(1)]], device const uint *P [[buffer(2)]],
+                    uint i [[thread_position_in_grid]]) {
+  uint NN = P[0];
+  uint r = i / NN;
+  uint c = i % NN;
+  float a = X[r * 2u * NN + c];
+  float g = X[r * 2u * NN + NN + c];
+  O[i] = half(a * ((0.5f * g) * (1.0f + erf_as(g * 0.70710678f))));
+}
+
+kernel void untok_add(device const float *X [[buffer(0)]], device const float *Pp [[buffer(1)]], device float *O [[buffer(2)]],
+                      device const uint *P [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  uint C = P[0]; uint HW = P[1];
+  uint c = i / HW;
+  uint pos = i % HW;
+  O[i] = X[i] + Pp[pos * C + c];
+}
+
+kernel void gn_silu_h(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]],
+                      device half *O [[buffer(3)]], device const uint *P [[buffer(4)]],
+                      uint g [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                      uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  threadgroup float stat[2];
+  uint C = P[0]; uint HW = P[1]; uint NG = P[2];
+  uint n = (C / NG) * HW;
+  uint base = g * n;
+  float s = 0.0f;
+  for (uint i = tid; i < n; i += 128u) s += X[base + i];
+  s = simd_sum(s);
+  if (lane == 0u) part[sgi] = s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[0] = (part[0] + part[1] + part[2] + part[3]) / float(n);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float mean = stat[0];
+  float q = 0.0f;
+  for (uint i = tid; i < n; i += 128u) { float d = X[base + i] - mean; q += d * d; }
+  q = simd_sum(q);
+  if (lane == 0u) part[sgi] = q;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[1] = 1.0f / precise::sqrt((part[0] + part[1] + part[2] + part[3]) / float(n) + as_type<float>(P[3]));
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float inv = stat[1];
+  for (uint i = tid; i < n; i += 128u) {
+    uint ch = g * (C / NG) + i / HW;
+    float v = ((X[base + i] - mean) * inv) * Ga[ch] + Be[ch];
+    O[base + i] = half(v / (1.0f + precise::exp(-v)));
+  }
+}
+
+kernel void gn_tok_h(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]],
+                     device half *O [[buffer(3)]], device const uint *P [[buffer(4)]],
+                     uint g [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                     uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  threadgroup float stat[2];
+  uint C = P[0]; uint HW = P[1]; uint NG = P[2];
+  uint n = (C / NG) * HW;
+  uint base = g * n;
+  float s = 0.0f;
+  for (uint i = tid; i < n; i += 128u) s += X[base + i];
+  s = simd_sum(s);
+  if (lane == 0u) part[sgi] = s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[0] = (part[0] + part[1] + part[2] + part[3]) / float(n);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float mean = stat[0];
+  float q = 0.0f;
+  for (uint i = tid; i < n; i += 128u) { float d = X[base + i] - mean; q += d * d; }
+  q = simd_sum(q);
+  if (lane == 0u) part[sgi] = q;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) stat[1] = 1.0f / precise::sqrt((part[0] + part[1] + part[2] + part[3]) / float(n) + as_type<float>(P[3]));
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float inv = stat[1];
+  for (uint i = tid; i < n; i += 128u) {
+    uint ch = g * (C / NG) + i / HW;
+    uint pos = i % HW;
+    float v = ((X[base + i] - mean) * inv) * Ga[ch] + Be[ch];
+    O[pos * C + ch] = half(v);
+  }
+}
+
+kernel void cvt32h_t(device const float *S [[buffer(0)]], device half *H [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint N = P[0]; uint K = P[1];
+  uint n = i / K; uint k = i % K;
+  H[k * N + n] = half(S[i]);
+}
+kernel void conv(device const half *X [[buffer(0)]], device const half *Wt [[buffer(1)]], device const float *Bias [[buffer(2)]],
+                 device const float *Res [[buffer(3)]], device float *C [[buffer(4)]], device const uint *P [[buffer(5)]],
+                 uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                 uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup half As[64 * 64];
+  threadgroup half Bs[64 * 64];
+  threadgroup float Cs[64 * 64];
+  uint CIN = P[0]; uint COUT = P[1]; uint IH = P[2]; uint IW = P[3]; uint KS = P[4]; uint STR = P[5];
+  uint OW = P[6]; uint NP = P[7]; uint NPP = P[8]; uint MODE = P[9];
+  int PADV = int(KS) / 2;
+  uint KD = CIN * KS * KS;
+  uint KDP = ((KD + 63u) / 64u) * 64u;
+  bool vec4 = (KD & 3u) == 0u;
+  uint m0 = tg.y * 64u;
+  uint n0 = tg.x * 64u;
+  uint row0 = (sg / 2u) * 32u;
+  uint col0 = (sg % 2u) * 32u;
+  simdgroup_float8x8 acc[4][4];
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  uint pg = n0 + (tid & 63u);
+  bool pok = pg < NP;
+  int oy = int((pg / OW) * STR) - PADV;
+  int ox = int((pg % OW) * STR) - PADV;
+  uint kk0 = tid >> 6;
+  for (uint k0 = 0u; k0 < KDP; k0 += 64u) {
+    if (vec4) {
+      for (uint it = 0u; it < 8u; it++) {
+        uint idx4 = tid + it * 128u;
+        uint r = idx4 >> 4;
+        uint c = (idx4 & 15u) * 4u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        half4 w = half4(0.0h);
+        if (m < COUT && kc < KD) w = *((device const half4 *)(Wt + m * KD + kc));
+        *((threadgroup half4 *)(As + r * 64u + c)) = w;
+      }
+    }
+    for (uint it = 0u; it < 32u; it++) {
+      uint idx = tid + it * 128u;
+      if (!vec4) {
+        uint r = idx >> 6;
+        uint c = idx & 63u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
+      }
+      uint k = k0 + kk0 + it * 2u;
+      half v = half(0.0f);
+      if (k < KD && pok) {
+        uint ci; int ky; int kx;
+        if (KS == 3u) { ci = k / 9u; uint kr = k - ci * 9u; uint q = kr / 3u; ky = int(q); kx = int(kr - q * 3u); }
+        else if (KS == 1u) { ci = k; ky = 0; kx = 0; }
+        else { ci = k / (KS * KS); uint kr = k % (KS * KS); ky = int(kr / KS); kx = int(kr % KS); }
+        int yy = oy + ky;
+        int xx = ox + kx;
+        if (yy >= 0 && yy < int(IH) && xx >= 0 && xx < int(IW))
+          v = X[(ci * IH + uint(yy)) * IW + uint(xx)];
+      }
+      Bs[idx] = v;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint ks = 0u; ks < 8u; ks++) {
+      simdgroup_half8x8 a[4];
+      simdgroup_half8x8 b[4];
+      for (uint i = 0u; i < 4u; i++)
+        simdgroup_load(a[i], As + (row0 + i * 8u) * 64u + ks * 8u, 64u);
+      for (uint j = 0u; j < 4u; j++)
+        simdgroup_load(b[j], Bs + ks * 8u * 64u + col0 + j * 8u, 64u);
+      for (uint i = 0u; i < 4u; i++)
+        for (uint j = 0u; j < 4u; j++)
+          simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      simdgroup_store(acc[i][j], Cs + (row0 + i * 8u) * 64u + col0 + j * 8u, 64);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint idx = tid; idx < 4096u; idx += 128u) {
+    uint m = m0 + idx / 64u;
+    uint p = n0 + idx % 64u;
+    if (m < COUT && p < NP) {
+      float v = Cs[idx];
+      if (MODE >= 1u) v += Bias[m];
+      if (MODE == 2u) v += Res[m * NP + p];
+      C[m * NPP + p] = v;
+    }
+  }
+}
+kernel void conv_k3s1(device const half *X [[buffer(0)]], device const half *Wt [[buffer(1)]], device const float *Bias [[buffer(2)]],
+                      device const float *Res [[buffer(3)]], device float *C [[buffer(4)]], device const uint *P [[buffer(5)]],
+                      uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                      uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float Cs[128 * 64];
+  threadgroup half *As = (threadgroup half *)Cs;
+  threadgroup half *Bs = (threadgroup half *)(Cs + 64 * 64);
+  uint CIN = P[0]; uint COUT = P[1]; uint IH = P[2]; uint IW = P[3];
+  uint NP = P[7]; uint NPP = P[8]; uint MODE = P[9];
+  uint KD = CIN * 9u;
+  uint KDP = ((KD + 63u) / 64u) * 64u;
+  bool vec4 = (KD & 3u) == 0u;
+  uint HWI = IH * IW;
+  uint m0 = tg.y * 128u;
+  uint n0 = tg.x * 64u;
+  uint row0 = (sg / 2u) * 32u;
+  uint col0 = (sg % 2u) * 32u;
+  simdgroup_float8x8 acc[4][4];
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  uint pg = n0 + (tid & 63u);
+  bool pok = pg < NP;
+  int oy = int(pg / IW);
+  int ox = int(pg % IW);
+  uint vmask = 0u;
+  for (uint tap = 0u; tap < 9u; tap++) {
+    int yy = oy + int(tap / 3u) - 1;
+    int xx = ox + int(tap % 3u) - 1;
+    if (pok && yy >= 0 && yy < int(IH) && xx >= 0 && xx < int(IW)) vmask |= (1u << tap);
+  }
+  int pix = oy * int(IW) + ox;
+  uint kk0 = tid >> 6;
+  half vv[16];
+  uint k = kk0;
+  uint ci = k / 9u;
+  uint tap = k - ci * 9u;
+  for (uint it = 0u; it < 16u; it++) {
+    half v = half(0.0f);
+    if (k < KD && ((vmask >> tap) & 1u) != 0u) {
+      uint ky = tap / 3u;
+      uint kx = tap - ky * 3u;
+      v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
+    }
+    vv[it] = v;
+    k += 4u;
+    tap += 4u;
+    if (tap >= 9u) { tap -= 9u; ci += 1u; }
+  }
+  for (uint k0 = 0u; k0 < KDP; k0 += 64u) {
+    if (vec4) {
+      for (uint it = 0u; it < 8u; it++) {
+        uint idx4 = tid + it * 256u;
+        uint r = idx4 >> 4;
+        uint c = (idx4 & 15u) * 4u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        half4 w = half4(0.0h);
+        if (m < COUT && kc < KD) w = *((device const half4 *)(Wt + m * KD + kc));
+        *((threadgroup half4 *)(As + r * 64u + c)) = w;
+      }
+    } else {
+      for (uint it = 0u; it < 32u; it++) {
+        uint idx = tid + it * 256u;
+        uint r = idx >> 6;
+        uint c = idx & 63u;
+        uint m = m0 + r;
+        uint kc = k0 + c;
+        As[idx] = (m < COUT && kc < KD) ? Wt[m * KD + kc] : half(0.0f);
+      }
+    }
+    for (uint it = 0u; it < 16u; it++) Bs[tid + it * 256u] = vv[it];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // software pipelining: the next tile's gather loads are issued here and consumed (stored to Bs) at the top of the next iteration, behind this tile's matrix multiplies
+    for (uint it = 0u; it < 16u; it++) {
+      half v = half(0.0f);
+      if (k < KD && ((vmask >> tap) & 1u) != 0u) {
+        uint ky = tap / 3u;
+        uint kx = tap - ky * 3u;
+        v = X[int(ci * HWI) + pix + (int(ky) - 1) * int(IW) + int(kx) - 1];
+      }
+      vv[it] = v;
+      k += 4u;
+      tap += 4u;
+      if (tap >= 9u) { tap -= 9u; ci += 1u; }
+    }
+    for (uint ks = 0u; ks < 8u; ks++) {
+      simdgroup_half8x8 a[4];
+      simdgroup_half8x8 b[4];
+      for (uint i = 0u; i < 4u; i++)
+        simdgroup_load(a[i], As + (row0 + i * 8u) * 64u + ks * 8u, 64u);
+      for (uint j = 0u; j < 4u; j++)
+        simdgroup_load(b[j], Bs + ks * 8u * 64u + col0 + j * 8u, 64u);
+      for (uint i = 0u; i < 4u; i++)
+        for (uint j = 0u; j < 4u; j++)
+          simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (uint i = 0u; i < 4u; i++)
+    for (uint j = 0u; j < 4u; j++)
+      simdgroup_store(acc[i][j], Cs + (row0 + i * 8u) * 64u + col0 + j * 8u, 64);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint idx = tid; idx < 8192u; idx += 256u) {
+    uint m = m0 + idx / 64u;
+    uint p = n0 + idx % 64u;
+    if (m < COUT && p < NP) {
+      float v = Cs[idx];
+      if (MODE >= 1u) v += Bias[m];
+      if (MODE == 2u) v += Res[m * NP + p];
+      C[m * NPP + p] = v;
+    }
+  }
+}
+
+// bias1[c] = C1[c] + Bt[c] + sum_k silu(Emb[k]) * W[c*TE + k]   (W is a Linear weight stored [CO, TE]). P = {TE, CO}
+kernel void temb_bias2(device const float *Emb [[buffer(0)]], device const float *Wt [[buffer(1)]], device const float *Bt [[buffer(2)]],
+                       device const float *C1 [[buffer(3)]], device float *O [[buffer(4)]], device const uint *P [[buffer(5)]],
+                       uint c [[thread_position_in_grid]]) {
+  uint TE = P[0];
+  float acc = Bt[c] + C1[c];
+  for (uint k = 0u; k < TE; k++) { float t = Emb[k]; acc += (t / (1.0f + precise::exp(-t))) * Wt[c * TE + k]; }
+  O[c] = acc;
+}
+// nearest 2x upsample, float in, half out. P = {IH, IW}
+kernel void amax_part(device const float *X [[buffer(0)]], device float *Part [[buffer(1)]], device const uint *P [[buffer(2)]],
+                      uint g [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                      uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  uint n = P[0];
+  float m = 0.0f;
+  for (uint i = g * 128u + tid; i < n; i += 256u * 128u) m = max(m, fabs(X[i]));
+  m = simd_max(m);
+  if (lane == 0u) part[sgi] = m;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) Part[g] = max(max(part[0], part[1]), max(part[2], part[3]));
+}
+// the power-of-two scale s >= 1 that brings the largest magnitude of a tensor under 8192: Sc = {s, 1 / s}
+kernel void amax_fin(device const float *Part [[buffer(0)]], device float *Sc [[buffer(1)]], uint tid [[thread_position_in_grid]],
+                     uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[8];
+  float m = simd_max(Part[tid]);
+  if (lane == 0u) part[sgi] = m;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) {
+    float mm = 0.0f;
+    for (uint i = 0u; i < 8u; i++) mm = max(mm, part[i]);
+    float s = 1.0f;
+    while (mm > 8192.0f * s) s = s * 2.0f;
+    Sc[0] = s; Sc[1] = 1.0f / s;
+  }
+}
+kernel void cvfh_sc(device const float *F [[buffer(0)]], device half *H [[buffer(1)]], device const float *Sc [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  H[i] = half(F[i] * Sc[1]);
+}
+kernel void upsample_hs(device const float *X [[buffer(0)]], device half *O [[buffer(1)]], device const uint *P [[buffer(2)]], device const float *Sc [[buffer(3)]],
+                        uint i [[thread_position_in_grid]]) {
+  uint IH = P[0]; uint IW = P[1];
+  uint ow = 2u * IW; uint oh = 2u * IH;
+  uint x = i % ow; uint y = (i / ow) % oh; uint c = i / (ow * oh);
+  O[i] = half(X[(c * IH + y / 2u) * IW + x / 2u] * Sc[1]);
+}
+// in place: O = O * s + Bias[channel]; P = {plane size}
+kernel void axpb(device float *O [[buffer(0)]], device const float *Bias [[buffer(1)]], device const float *Sc [[buffer(2)]], device const uint *P [[buffer(3)]],
+                 uint i [[thread_position_in_grid]]) {
+  O[i] = O[i] * Sc[0] + Bias[i / P[0]];
+}
+kernel void gn_psum(device const float *X [[buffer(0)]], device float *Part [[buffer(1)]], device const uint *P [[buffer(2)]],
+                     device const float *Stat [[buffer(3)]],
+                     uint2 tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                     uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  uint C = P[0]; uint HW = P[1]; uint NG = P[2]; uint T = P[4]; uint SQ = P[6];
+  uint n = (C / NG) * HW;
+  uint base = tg.y * n;
+  uint chunk = (n + T - 1u) / T;
+  uint lo = tg.x * chunk;
+  uint hi = min(n, lo + chunk);
+  float mean = (SQ == 1u) ? Stat[tg.y * 2u] : 0.0f;
+  float s = 0.0f;
+  for (uint i = lo + tid; i < hi; i += 128u) { float d = X[base + i] - mean; s += (SQ == 1u) ? d * d : d; }
+  s = simd_sum(s);
+  if (lane == 0u) part[sgi] = s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) Part[tg.y * T + tg.x] = part[0] + part[1] + part[2] + part[3];
+}
+// per group: Stat[2g] = mean (SQ = 0) or Stat[2g + 1] = 1 / sqrt(variance + eps) (SQ = 1) from the T partial sums
+kernel void gn_fin(device const float *Part [[buffer(0)]], device float *Stat [[buffer(1)]], device const uint *P [[buffer(2)]], uint g [[thread_position_in_grid]]) {
+  uint C = P[0]; uint HW = P[1]; uint NG = P[2]; uint T = P[4]; uint SQ = P[6];
+  if (g >= NG) return;
+  float n = float((C / NG) * HW);
+  float s = 0.0f;
+  for (uint t = 0u; t < T; t++) s += Part[g * T + t];
+  if (SQ == 0u) Stat[g * 2u] = s / n;
+  else Stat[g * 2u + 1u] = 1.0f / precise::sqrt(s / n + as_type<float>(P[3]));
+}
+// normalise (and SiLU when MODE = 0: planar half out; MODE = 1: no SiLU, token-major half out)
+kernel void gn_apply(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]], device half *O [[buffer(3)]],
+                     device const uint *P [[buffer(4)]], device const float *Stat [[buffer(5)]], uint i [[thread_position_in_grid]]) {
+  uint C = P[0]; uint HW = P[1]; uint NG = P[2]; uint MODE = P[5];
+  uint ch = i / HW; uint pos = i % HW;
+  uint g = ch / (C / NG);
+  float v = ((X[i] - Stat[g * 2u]) * Stat[g * 2u + 1u]) * Ga[ch] + Be[ch];
+  if (MODE == 0u) O[i] = half(v / (1.0f + precise::exp(-v)));
+  else O[pos * C + ch] = half(v);
+}
+kernel void upsample_h(device const float *X [[buffer(0)]], device half *O [[buffer(1)]], device const uint *P [[buffer(2)]],
+                       uint i [[thread_position_in_grid]]) {
+  uint IH = P[0]; uint IW = P[1];
+  uint ow = 2u * IW; uint oh = 2u * IH;
+  uint x = i % ow; uint y = (i / ow) % oh; uint c = i / (ow * oh);
+  O[i] = half(X[(c * IH + y / 2u) * IW + x / 2u]);
+}
+// sinusoidal timestep embedding [cos | sin], one timestep t (P[1] holds its float bits). P = {DIM, tbits}
+kernel void timestep(device float *O [[buffer(0)]], device const uint *P [[buffer(1)]], uint j [[thread_position_in_grid]]) {
+  uint DIM = P[0]; uint half_ = DIM / 2u;
+  float t = as_type<float>(P[1]);
+  uint k = j % half_;
+  float freq = precise::exp(-9.210340371976184f * float(k) / float(half_));
+  float arg = t * freq;
+  O[j] = (j < half_) ? precise::cos(arg) : precise::sin(arg);
+}
+// out[n] = Bias[n] + sum_k In[k] * W[n*K + k] (W a Linear weight [N, K]), then SiLU if OUTACT. P = {K, N, OUTACT}
+kernel void matvec(device const float *In [[buffer(0)]], device const float *Wt [[buffer(1)]], device const float *Bias [[buffer(2)]],
+                   device float *O [[buffer(3)]], device const uint *P [[buffer(4)]], uint n [[thread_position_in_grid]]) {
+  uint K = P[0]; uint OUTACT = P[2];
+  float acc = Bias[n];
+  for (uint k = 0u; k < K; k++) acc += In[k] * Wt[n * K + k];
+  O[n] = (OUTACT == 1u) ? acc / (1.0f + precise::exp(-acc)) : acc;
+}
+
+// pseudo-random half values in [-scale/2, scale/2). P = {scale bits, seed}
+kernel void fill_h(device half *H [[buffer(0)]], device const uint *P [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  uint h = (i + P[1]) * 2654435761u;
+  h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+  H[i] = half((float(h & 1023u) / 1024.0f - 0.5f) * as_type<float>(P[0]));
+}
+// pseudo-random float values: base + (u - 0.5) * scale. P = {scale bits, seed, base bits}
+kernel void fill_f(device float *F [[buffer(0)]], device const uint *P [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  uint h = (i + P[1]) * 2654435761u;
+  h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+  F[i] = as_type<float>(P[2]) + (float(h & 1023u) / 1024.0f - 0.5f) * as_type<float>(P[0]);
+}
+kernel void vadd(device const float *A [[buffer(0)]], device const float *B [[buffer(1)]], device float *O [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  O[i] = A[i] + B[i];
+}
+kernel void attn_wide(device const half *Q [[buffer(0)]], device const half *K [[buffer(1)]], device const half *V [[buffer(2)]],
+                      device half *O [[buffer(3)]], device const uint *P [[buffer(4)]],
+                      uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                      uint tid [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float Ssm[32 * 32];
+  threadgroup half Psm[32 * 32];
+  threadgroup float Dsm[4 * 64];
+  threadgroup float Lsm[32];
+  threadgroup float Tmp[4 * 64];
+  const uint ND = @NDC@ * 8u;
+  const uint HD = ND * 8u;
+  uint LK = P[0];
+  float SCALE = as_type<float>(P[1]);
+  uint NB = LK / 32u;
+  uint q0 = (tg.x + P[2]) * 32u;
+  simdgroup_float8x8 oacc[@NDC@ * 8];
+  for (uint dt = 0u; dt < ND; dt++)
+    oacc[dt] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+  uint rr = tid >> 2;
+  uint qq = tid & 3u;
+  float m = -INFINITY;
+  float l = 0.0f;
+  for (uint kb = 0u; kb < NB; kb++) {
+    for (uint j = 0u; j < 4u; j++) {
+      simdgroup_float8x8 s = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+      for (uint d = 0u; d < ND; d++) {
+        simdgroup_half8x8 qd;
+        simdgroup_half8x8 kt;
+        simdgroup_load(qd, Q + (q0 + sg * 8u) * HD + d * 8u, HD);
+        simdgroup_load(kt, K + (kb * 32u + j * 8u) * HD + d * 8u, HD, ulong2(0, 0), true);
+        simdgroup_multiply_accumulate(s, qd, kt, s);
+      }
+      simdgroup_store(s, Ssm + sg * 8u * 32u + j * 8u, 32);
+    }
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    float bm = -INFINITY;
+    for (uint c = qq * 8u; c < qq * 8u + 8u; c++) bm = max(bm, Ssm[rr * 32u + c] * SCALE);
+    bm = max(bm, simd_shuffle_xor(bm, 1u));
+    bm = max(bm, simd_shuffle_xor(bm, 2u));
+    float mn = max(m, bm);
+    float alpha = (m == -INFINITY) ? 0.0f : exp(m - mn);
+    float sum = 0.0f;
+    for (uint c = qq * 8u; c < qq * 8u + 8u; c++) {
+      float p = exp(Ssm[rr * 32u + c] * SCALE - mn);
+      Psm[rr * 32u + c] = half(p);
+      sum += p;
+    }
+    sum += simd_shuffle_xor(sum, 1u);
+    sum += simd_shuffle_xor(sum, 2u);
+    l = l * alpha + sum;
+    m = mn;
+    Dsm[sg * 64u + lane] = 0.0f;
+    Dsm[sg * 64u + 32u + lane] = 0.0f;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    if (qq == 0u) Dsm[sg * 64u + (lane >> 2) * 9u] = alpha;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    simdgroup_float8x8 D;
+    simdgroup_load(D, Dsm + sg * 64u, 8);
+    for (uint dt = 0u; dt < ND; dt++) {
+      simdgroup_float8x8 z = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+      simdgroup_multiply_accumulate(z, D, oacc[dt], z);
+      oacc[dt] = z;
+    }
+    for (uint ks = 0u; ks < 4u; ks++) {
+      simdgroup_half8x8 pa;
+      simdgroup_load(pa, Psm + sg * 8u * 32u + ks * 8u, 32);
+      for (uint dt = 0u; dt < ND; dt++) {
+        simdgroup_half8x8 vt;
+        simdgroup_load(vt, V + (kb * 32u + ks * 8u) * HD + dt * 8u, HD);
+        simdgroup_multiply_accumulate(oacc[dt], pa, vt, oacc[dt]);
+      }
+    }
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (qq == 0u) Lsm[rr] = l;
+  simdgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint dt = 0u; dt < ND; dt++) {
+    simdgroup_store(oacc[dt], Tmp + sg * 64u, 8);
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint e = lane; e < 64u; e += 32u)
+      O[(q0 + sg * 8u + e / 8u) * HD + dt * 8u + e % 8u] = half(Tmp[sg * 64u + e] / Lsm[sg * 8u + e / 8u]);
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+  }
+}
+kernel void cpy_f(device const float *S [[buffer(0)]], device float *D [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  D[i] = S[i];
+}
+kernel void sigma_table(device float *ST [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+  if (i != 0u) return;
+  float a = precise::sqrt(0.00085f);
+  float b = precise::sqrt(0.012f);
+  float ac = 1.0f;
+  for (uint j = 0u; j < 1000u; j++) {
+    float rt = a + (b - a) * (float(j) / 999.0f);
+    float beta = rt * rt;
+    ac = ac * (1.0f - beta);
+    ST[j] = precise::sqrt((1.0f - ac) / ac);
+  }
+}
+kernel void gather(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  uint idx = (i * 1000u) / steps;
+  SG[i] = ST[999u - idx];
+}
+// ComfyUI's normal scheduler: the timesteps linspace(999, 0, steps) (torch.linspace: the second half counted back from the end), sigma(t) interpolated in log-sigma
+kernel void sched_normal(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  float step = (steps > 1u) ? (0.0f - 999.0f) / float(steps - 1u) : 0.0f;
+  float ts = (i < steps / 2u) ? 999.0f + float(i) * step : 0.0f - float(steps - 1u - i) * step;
+  ts = clamp(ts, 0.0f, 999.0f);
+  uint lo = uint(floor(ts)); uint hi = uint(ceil(ts)); float w = ts - floor(ts);
+  float ls = (1.0f - w) * precise::log(ST[lo]) + w * precise::log(ST[hi]);
+  SG[i] = precise::exp(ls);
+}
+// Karras et al.: sigma_min and sigma_max the first and last discrete sigmas, rho 7, ramp linspace(0, 1, steps)
+kernel void sched_karras(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  float step = (steps > 1u) ? 1.0f / float(steps - 1u) : 0.0f;
+  float ramp = (i < steps / 2u) ? float(i) * step : 1.0f - float(steps - 1u - i) * step;
+  float mn = precise::pow(ST[0], 0.14285714285714285f);
+  float mx = precise::pow(ST[999], 0.14285714285714285f);
+  SG[i] = precise::pow(mx + ramp * (mn - mx), 7.0f);
+}
+// ComfyUI's exponential scheduler: exp(linspace(log(sigma_max), log(sigma_min), steps)), then 0
+kernel void sched_exp(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  float a = precise::log(ST[999]);
+  float b = precise::log(ST[0]);
+  float step = (steps > 1u) ? (b - a) / float(steps - 1u) : 0.0f;
+  float v = (i < steps / 2u) ? a + float(i) * step : b - float(steps - 1u - i) * step;
+  SG[i] = precise::exp(v);
+}
+// ComfyUI's sgm_uniform scheduler: the normal scheduler on linspace(999, 0, steps + 1) without its last point, then 0
+kernel void sched_sgm(device const float *ST [[buffer(0)]], device float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint steps = P[1];
+  if (i > steps) return;
+  if (i == steps) { SG[i] = 0.0f; return; }
+  float step = (0.0f - 999.0f) / float(steps);
+  float ts = (i < (steps + 1u) / 2u) ? 999.0f + float(i) * step : 0.0f - float(steps - i) * step;
+  ts = clamp(ts, 0.0f, 999.0f);
+  uint lo = uint(floor(ts)); uint hi = uint(ceil(ts)); float w = ts - floor(ts);
+  float ls = (1.0f - w) * precise::log(ST[lo]) + w * precise::log(ST[hi]);
+  SG[i] = precise::exp(ls);
+}
+// DPM-Solver++(2M) on the guided denoised values: OLD holds the previous step's denoised
+kernel void cfg_dpmpp2m(device float *X [[buffer(0)]], device const float *EU [[buffer(1)]], device const float *EC [[buffer(2)]], device const float *SG [[buffer(3)]],
+                        device const uint *P [[buffer(4)]], device float *OLD [[buffer(5)]], uint i [[thread_position_in_grid]]) {
+  uint k = P[0];
+  float s = SG[k];
+  float sn = SG[k + 1u];
+  float cfg = as_type<float>(P[2]);
+  float x = X[i];
+  float du = x - s * EU[i];
+  float dc = x - s * EC[i];
+  float den = du + (dc - du) * cfg;
+  float res;
+  if (sn == 0.0f) {
+    res = den;
+  } else {
+    float t = -precise::log(s);
+    float tn = -precise::log(sn);
+    float h = tn - t;
+    float em = precise::exp(-h) - 1.0f;
+    if (k == 0u) {
+      res = (sn / s) * x - em * den;
+    } else {
+      float hl = t + precise::log(SG[k - 1u]);
+      float r = hl / h;
+      float dd = (1.0f + 1.0f / (2.0f * r)) * den - (1.0f / (2.0f * r)) * OLD[i];
+      res = (sn / s) * x - em * dd;
+    }
+  }
+  OLD[i] = den;
+  X[i] = res;
+}
+kernel void scale_in(device const float *X [[buffer(0)]], device float *XIN [[buffer(1)]], device const float *SG [[buffer(2)]], device const uint *P [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  float s = SG[P[0]];
+  XIN[i] = X[i] / precise::sqrt(s * s + 1.0f);
+}
+kernel void cfg_euler(device float *X [[buffer(0)]], device const float *EU [[buffer(1)]], device const float *EC [[buffer(2)]], device const float *SG [[buffer(3)]],
+                      device const uint *P [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+  float s = SG[P[0]];
+  float sn = SG[P[0] + 1u];
+  float cfg = as_type<float>(P[2]);
+  float x = X[i];
+  float du = x - s * EU[i];
+  float dc = x - s * EC[i];
+  float den = du + (dc - du) * cfg;
+  float d = (x - den) / s;
+  X[i] = x + d * (sn - s);
+}
+kernel void cpy_h(device const half *S [[buffer(0)]], device half *D [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  D[i] = S[i];
+}
+// the discrete timestep nearest to sigma SG[P[0]] in log-sigma (ModelSamplingDiscrete.timestep), as a float in Tb[0]; one thread
+kernel void tcalc(device const float *ST [[buffer(0)]], device const float *SG [[buffer(1)]], device const uint *P [[buffer(2)]], device float *Tb [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  if (i != 0u) return;
+  float ls = precise::log(SG[P[0]]);
+  float best = INFINITY; uint bj = 0u;
+  for (uint j = 0u; j < 1000u; j++) {
+    float dd = fabs(ls - precise::log(ST[j]));
+    if (dd < best) { best = dd; bj = j; }
+  }
+  Tb[0] = float(bj);
+}
+kernel void cat_ctx(device const float *L [[buffer(0)]], device const float *G [[buffer(1)]], device float *O [[buffer(2)]], device const uint *P [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  uint r = i / 2048u; uint c = i % 2048u;
+  uint tot = P[0]; uint src = P[1];
+  if (r >= tot) { O[i] = 0.0f; return; }
+  uint s = r % src;
+  O[i] = (c < 768u) ? L[s * 768u + c] : G[s * 1280u + (c - 768u)];
+}
+// embedding rows (ComfyUI embedding words): where Ov[r] is not 0, row r of the embedded tokens is row Ov[r] - 1 of Tab plus the position embedding
+kernel void embov(device float *X [[buffer(0)]], device const float *Tab [[buffer(1)]], device const uint *Ov [[buffer(2)]], device const float *Pos [[buffer(3)]],
+                  device const uint *P [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+  uint H = P[0]; uint T = P[1];
+  uint r = i / H; uint c = i % H;
+  if (r < T && Ov[r] != 0u) X[i] = Tab[(Ov[r] - 1u) * H + c] + Pos[r * H + c];
+}
+// prompt weighting (ComfyUI encode_token_weights): z = (z - z_empty) * w + z_empty per token row, w a fixed point int (65536 = 1.0, a row with exactly 1.0 is left alone)
+kernel void blend_l(device float *Z [[buffer(0)]], device const float *E [[buffer(1)]], device const int *W [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint r = i / 768u; if (r >= 77u) return; int wi = W[r]; if (wi == 65536) return;
+  float w = float(wi) / 65536.0f; Z[i] = (Z[i] - E[i]) * w + E[i];
+}
+kernel void blend_g(device float *Z [[buffer(0)]], device const float *E [[buffer(1)]], device const int *W [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint r = i / 1280u; if (r >= 77u) return; int wi = W[r]; if (wi == 65536) return;
+  float w = float(wi) / 65536.0f; Z[i] = (Z[i] - E[i]) * w + E[i];
+}
+// SDXL's adm vector: the pooled 1280 floats, then Timestep(256) embeddings of [height, width, crop_h, crop_w, target_height, target_width] (cos half, sin half)
+kernel void adm(device const float *Pool [[buffer(0)]], device const float *Sz [[buffer(1)]], device float *O [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  if (i < 1280u) { O[i] = Pool[i]; return; }
+  uint j = i - 1280u; uint v = j / 256u; uint k = j % 256u; uint kk = k % 128u;
+  float arg = Sz[v] * precise::exp(-9.210340371976184f * float(kk) / 128.0f);
+  O[i] = (k < 128u) ? precise::cos(arg) : precise::sin(arg);
+}
+kernel void embed(device const uint *Ids [[buffer(0)]], device const float *Tok [[buffer(1)]], device const float *Pos [[buffer(2)]],
+                  device float *O [[buffer(3)]], device const uint *P [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+  uint H = P[0]; uint T = P[1];
+  uint r = i / H; uint c = i % H;
+  O[i] = (r < T) ? Tok[Ids[r] * H + c] + Pos[r * H + c] : 0.0f;
+}
+// the row of Pr at the first position of the largest token id (the end token): HF CLIP's pooled output
+kernel void pool_row(device const uint *Ids [[buffer(0)]], device const float *Pr [[buffer(1)]], device float *O [[buffer(2)]], device const uint *P [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  uint H = P[0]; uint best = 0u; uint bi = 0u;
+  for (uint r = 0u; r < 77u; r++) { if (Ids[r] > best) { best = Ids[r]; bi = r; } }
+  O[i] = Pr[bi * H + i];
+}
+kernel void ln_f(device const float *X [[buffer(0)]], device const float *Ga [[buffer(1)]], device const float *Be [[buffer(2)]],
+                 device float *O [[buffer(3)]], device const uint *P [[buffer(4)]],
+                 uint r [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+                 uint lane [[thread_index_in_simdgroup]], uint sgi [[simdgroup_index_in_threadgroup]]) {
+  threadgroup float part[4];
+  threadgroup float stat[2];
+  uint NN = P[0];
+  float mean; float inv;
+  ln_row(X, Ga, Be, r * NN, NN, tid, lane, sgi, part, stat, mean, inv);
+  for (uint i = tid; i < NN; i += 128u)
+    O[r * NN + i] = ((X[r * NN + i] - mean) * inv) * Ga[i] + Be[i];
+}
+kernel void cph(device const half *S [[buffer(0)]], device half *H [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  H[i] = S[i];
+}
+kernel void cph_t(device const half *S [[buffer(0)]], device half *H [[buffer(1)]], device const uint *P [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  uint N = P[0]; uint K = P[1];
+  uint n = i / K; uint k = i % K;
+  H[k * N + n] = S[i];
+}
+kernel void h2f(device const half *S [[buffer(0)]], device float *D [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  D[i] = float(S[i]);
+}
+kernel void timestep2(device float *O [[buffer(0)]], device const float *Tb [[buffer(1)]], device const uint *P [[buffer(2)]], uint j [[thread_position_in_grid]]) {
+  uint DIM = P[0]; uint half_ = DIM / 2u;
+  float t = Tb[0];
+  uint k = j % half_;
+  float freq = precise::exp(-9.210340371976184f * float(k) / float(half_));
+  float arg = t * freq;
+  O[j] = (j < half_) ? precise::cos(arg) : precise::sin(arg);
+}
+")
+
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+(defn- peek [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (f 0 p 0))
+(defn- poke [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 1 p v))
+(defn- poke8 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 v :i64] :i64 (f 2 p v))
+(defn- scratch [f [:fn [[:i64 :i64 :i64] :i64]]] :i64 (f 4 0 0))
+
+(defn- cc [f [:fn [[:i64 :i64 :i64] :i64]] fn :i64 a :i64 b :i64 c :i64 d :i64 e :i64] :i64
+  (let [s (+ (scratch f) 64)
+        u0 (poke f s a) u1 (poke f (+ s 8) b) u2 (poke f (+ s 16) c)
+        u3 (poke f (+ s 24) d) u4 (poke f (+ s 32) e)]
+    (f 3 fn s)))
+
+(defn- put-text [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s)) n (vector-count v)]
+    (loop [i 0]
+      (if (= i n) (poke8 f (+ p n) 0)
+        (let [u (poke8 f (+ p i) (vector-at v i))] (recur (+ i 1)))))))
+
+(defn- sym [f [:fn [[:i64 :i64 :i64] :i64]] name :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) name)
+        p (cc f (peek f base) -2 (+ base 256) 0 0 0)]
+    (if (= p 0) (vector-at [0] 1) p)))
+
+(defn- cstr [f [:fn [[:i64 :i64 :i64] :i64]] malloc :i64 s :string] :i64
+  (let [p (cc f malloc (+ (string-length s) 1) 0 0 0 0)
+        u (put-text f p s)]
+    p))
+
+(defn- open-framework [f [:fn [[:i64 :i64 :i64] :i64]] dlopen :i64 path :string] :i64
+  (let [base (scratch f)
+        u (put-text f (+ base 256) path)
+        h (cc f dlopen (+ base 256) 2 0 0 0)]
+    (if (= h 0) (vector-at [0] 1) h)))
+
+;; R: 0 objc_msgSend, 1 sel_registerName, 2 objc_getClass, 3 malloc
+(defn- sel [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 name :string] :i64
+  (cc f (vector-at R 1) (cstr f (vector-at R 3) name) 0 0 0 0))
+(defn- msg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 self :i64 name :string a :i64 b :i64 c :i64] :i64
+  (cc f (vector-at R 0) self (sel f R name) a b c))
+(defn- nsstring [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (msg f R (cc f (vector-at R 2) (cstr f (vector-at R 3) "NSString") 0 0 0 0)
+       "stringWithUTF8String:" (cstr f (vector-at R 3) s) 0 0))
+
+(defn- refuse [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 err :i64] :i64
+  (let [d (msg f R err "localizedDescription" 0 0 0)
+        t (msg f R d "UTF8String" 0 0 0)
+        strlen (sym f "strlen")
+        n (cc f strlen t 0 0 0 0)
+        w (cc f (sym f "write") 2 t n 0 0)]
+    (vector-at [0] 1)))
+
+(defn- new-buffer [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 device :i64 n :i64] :i64
+  (let [b (msg f R device "newBufferWithLength:options:" n 0 0)]
+    (if (= b 0) (vector-at [0] 1) b)))
+(defn- contents [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 b :i64] :i64
+  (msg f R b "contents" 0 0 0))
+
+;; one dispatch. by-groups = 1: (gx,gy,1) threadgroups of tx threads;
+;; by-groups = 0: gx threads in total, tx per threadgroup.
+(defn- run-once [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 queue :i64 pso :i64 B :vector-i64 by-groups :i64 gx :i64 gy :i64 tx :i64] :i64
+  (let [base (scratch f)
+        grid (+ base 128)
+        group (+ base 152)
+        u0 (poke f grid gx) u1 (poke f (+ grid 8) gy) u2 (poke f (+ grid 16) 1)
+        u3 (poke f group tx) u4 (poke f (+ group 8) 1) u5 (poke f (+ group 16) 1)
+        cb (msg f R queue "commandBuffer" 0 0 0)
+        en (msg f R cb "computeCommandEncoder" 0 0 0)
+        u6 (msg f R en "setComputePipelineState:" pso 0 0)
+        u7 (loop [i 0]
+             (if (= i (vector-count B)) 0
+               (let [u (msg f R en "setBuffer:offset:atIndex:" (vector-at B i) 0 i)] (recur (+ i 1)))))
+        u8 (if (= by-groups 1)
+             (msg f R en "dispatchThreadgroups:threadsPerThreadgroup:" grid group 0)
+             (msg f R en "dispatchThreads:threadsPerThreadgroup:" grid group 0))
+        u9 (msg f R en "endEncoding" 0 0 0)
+        u10 (msg f R cb "commit" 0 0 0)
+        u11 (msg f R cb "waitUntilCompleted" 0 0 0)
+        st (msg f R cb "status" 0 0 0)]
+    (if (= st 4) 0 (refuse f R (msg f R cb "error" 0 0 0)))))
+
+(defn- report [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 best :i64 total :i64] :i64
+  (let [base (scratch f)
+        tb (+ base 192)
+        u (cc f (sym f "mach_timebase_info") tb 0 0 0 0)
+        w (peek f tb)
+        numer (bit-and w 4294967295)
+        denom (u64-shift-right w 32)
+        text (string-concat "metal-dispatch-ns best " (string-concat (string-from-i64 (quot (* best numer) denom))
+             (string-concat " total " (string-concat (string-from-i64 (quot (* total numer) denom)) "\n"))))
+        p (cstr f (vector-at R 3) text)]
+    (cc f (sym f "write") 2 p (string-length text) 0 0)))
+
+;; the raw bytes at p, n of them, to stderr
+(defn- dump [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64] :i64
+  (let [w (sym f "write")]
+    (loop [off 0]
+      (if (>= off n) 0
+        (let [r (cc f w 2 (+ p off) (- n off) 0 0)]
+          (if (<= r 0) (vector-at [0] 1) (recur (+ off r))))))))
+
+(defn- pbuf-u [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 a :i64 b :i64 c :i64 d :i64 e :i64 g :i64 h :i64 i :i64 j :i64 k :i64] :i64
+  (let [p (new-buffer f R dev 64)
+        q (contents f R p)
+        u0 (poke f q (bit-or a (i64-shift-left b 32)))
+        u1 (poke f (+ q 8) (bit-or c (i64-shift-left d 32)))
+        u2 (poke f (+ q 16) (bit-or e (i64-shift-left g 32)))
+        u3 (poke f (+ q 24) (bit-or h (i64-shift-left i 32)))
+        u4 (poke f (+ q 32) (bit-or j (i64-shift-left k 32)))]
+    p))
+
+;; two floats (given as bit patterns) in one 8-byte word
+(defn- pbuf-f [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 a :i64 b :i64] :i64
+  (let [p (new-buffer f R dev 16)
+        u (poke f (contents f R p) (bit-or a (i64-shift-left b 32)))]
+    p))
+
+(defn- pso [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 lib :i64 name :string] :i64
+  (let [base (scratch f)
+        errp (+ base 184)
+        u0 (poke f errp 0)
+        fn (msg f R lib "newFunctionWithName:" (nsstring f R name) 0 0)
+        u1 (if (= fn 0) (vector-at [0] 1) 0)
+        p (msg f R dev "newComputePipelineStateWithFunction:error:" fn errp 0)
+        u2 (if (= p 0) (refuse f R (peek f errp)) 0)]
+    p))
+
+;; encode one dispatch into encoder en (no commit): by-groups 1 = (gx,gy,1) threadgroups of tx threads
+(defn- byte-at [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64 (bit-and (peek f p) 255))
+
+;; index of the closing quote of the string whose first content byte is at p+i
+(defn- str-end [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64] :i64
+  (loop [j i]
+    (if (= (byte-at f (+ p j)) 34) j (recur (+ j 1)))))
+
+;; first index >= i whose byte is c
+(defn- find-byte [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 c :i64] :i64
+  (loop [j i]
+    (if (= (byte-at f (+ p j)) c) j (recur (+ j 1)))))
+
+;; unsigned decimal at p+i (after optional spaces): value into out[0], index after the digits returned
+(defn- parse-uint [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 out :vector-i64] :i64
+  (let [s (loop [j i] (if (= (byte-at f (+ p j)) 32) (recur (+ j 1)) j))]
+    (loop [j s v 0]
+      (let [b (byte-at f (+ p j))]
+        (if (and (>= b 48) (<= b 57))
+          (recur (+ j 1) (+ (* v 10) (- b 48)))
+          (let [u (vector-assoc! out 0 v)] j))))))
+
+;; write n bytes at p to stderr
+(defn- wr [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64] :i64
+  (cc f (sym f "write") 2 p n 0 0))
+
+(defn- wr-text [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (wr f (cstr f (vector-at R 3) s) (string-length s)))
+
+(defn- wr-num [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 v :i64] :i64
+  (wr-text f R (string-from-i64 v)))
+
+;; shape list at p+lb (its '['): dims into rec[5..], count into rec[4], returns the index after ']'
+(defn- parse-shape [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 lb :i64 rec :vector-i64 tmp :vector-i64] :i64
+  (loop [q (+ lb 1) n 0]
+    (let [c (byte-at f (+ p q))]
+      (cond
+        (= c 93) (let [u (vector-assoc! rec 4 n)] (+ q 1))
+        (= c 44) (recur (+ q 1) n)
+        (= c 32) (recur (+ q 1) n)
+        :else (let [nx (parse-uint f p q tmp)
+                    u (vector-assoc! rec (+ 5 n) (vector-at tmp 0))]
+                (recur nx (+ n 1)))))))
+
+;; parse the object starting at p+i (its '{'): fills rec = [dtype-begin dtype-end begin end ndims d0..d7],
+;; returns the index just after its '}'
+(defn- tensor-body [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 rec :vector-i64 tmp :vector-i64] :i64
+  (loop [j (+ i 1)]
+    (let [b (byte-at f (+ p j))]
+      (cond
+        (= b 125) (+ j 1)
+        (= b 34)
+        (let [ke (str-end f p (+ j 1))
+              klen (- ke (+ j 1))
+              k0 (byte-at f (+ p (+ j 1)))
+              after (+ ke 1)]
+          (if (= klen 12)
+            (let [lb (find-byte f p after 91)
+                  n1 (parse-uint f p (+ lb 1) tmp)
+                  u0 (vector-assoc! rec 2 (vector-at tmp 0))
+                  cm (find-byte f p n1 44)
+                  n2 (parse-uint f p (+ cm 1) tmp)
+                  u1 (vector-assoc! rec 3 (vector-at tmp 0))]
+              (recur (+ (find-byte f p n2 93) 1)))
+            (if (= k0 100)
+              (let [vs (+ (find-byte f p after 34) 1)
+                    ve (str-end f p vs)
+                    u0 (vector-assoc! rec 0 vs)
+                    u1 (vector-assoc! rec 1 ve)]
+                (recur (+ ve 1)))
+              (recur (parse-shape f p (find-byte f p after 91) rec tmp)))))
+        :else (recur (+ j 1))))))
+
+;; skip a balanced {...} starting at p+i, returns the index after it (strings hold no braces here)
+(defn- skip-object [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64] :i64
+  (loop [j (+ i 1) depth 1]
+    (let [b (byte-at f (+ p j))]
+      (cond
+        (= depth 0) j
+        (= b 123) (recur (+ j 1) (+ depth 1))
+        (= b 125) (if (= depth 1) (+ j 1) (recur (+ j 1) (- depth 1)))
+        :else (recur (+ j 1) depth)))))
+
+;; bytes per element of the dtype string at p+s .. p+e, 0 if not one this reader knows
+;; bytes per element of the dtype string at p+s .. p+e, 0 if not one this reader knows
+(defn- dsize [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :i64 e :i64] :i64
+  (let [n (- e s)
+        b0 (byte-at f (+ p s))
+        b1 (byte-at f (+ p (+ s 1)))
+        b2 (byte-at f (+ p (+ s 2)))]
+    (cond
+      (= n 2) (if (= b1 56) 1 (if (= b1 49) 0 0))
+      (= n 4) (if (= b0 66) (if (= b1 70) 2 1) 0)
+      (= n 3) (if (= b1 49) (if (= b2 54) 2 0) (if (= b1 51) (if (= b2 50) 4 0) (if (= b1 54) (if (= b2 52) 8 0) 0)))
+      :else 0)))
+
+(defn- dims-product [rec :vector-i64] :i64
+  (loop [d 0 pr 1]
+    (if (= d (vector-at rec 4)) pr (recur (+ d 1) (* pr (vector-at rec (+ 5 d)))))))
+
+
+;; index the header: TT[4k..4k+3] = name begin, name length, begin, end of tensor k; chk[0] = largest end, chk[1] = bad sizes
+(defn- index-header [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 TT :vector-i64 chk :vector-i64 TD :vector-i64] :i64
+  (let [rec (vector-alloc 16)
+        tmp (vector-alloc 2)]
+    (loop [j (+ (find-byte f p 0 123) 1) count 0]
+      (let [b (byte-at f (+ p j))]
+        (cond
+          (>= j n) count
+          (= b 125) count
+          (= b 34)
+          (let [ne (str-end f p (+ j 1))
+                ns (+ j 1)
+                after (find-byte f p (+ ne 1) 123)]
+            (if (and (= (- ne ns) 12) (= (byte-at f (+ p ns)) 95))
+              (recur (skip-object f p after) count)
+              (let [nx (tensor-body f p after rec tmp)
+                    a (vector-assoc! TT (* count 4) ns)
+                    b2 (vector-assoc! TT (+ (* count 4) 1) (- ne ns))
+                    c (vector-assoc! TT (+ (* count 4) 2) (vector-at rec 2))
+                    d (vector-assoc! TT (+ (* count 4) 3) (vector-at rec 3))
+                    ds (dsize f p (vector-at rec 0) (vector-at rec 1))
+                    ok (if (= ds 0) 0 (if (= (* (dims-product rec) ds) (- (vector-at rec 3) (vector-at rec 2))) 1 0))
+                    u10 (if (= ok 1) 0 (let [w (vector-assoc! chk 1 (+ (vector-at chk 1) 1))] 0))
+                    u11 (if (> (vector-at rec 3) (vector-at chk 0)) (let [w (vector-assoc! chk 0 (vector-at rec 3))] 0) 0)
+                    td (vector-assoc! TD count (+ (* ds 16) (vector-at rec 4)))
+                    u12 (if (and (= ds 2) (= (- (vector-at rec 1) (vector-at rec 0)) 4)) (let [w (vector-assoc! chk 2 (+ (vector-at chk 2) 1))] 0) 0)]
+                (recur nx (+ count 1)))))
+          :else (recur (+ j 1) count))))))
+
+(defn- bytes-eq [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 q :i64 n :i64] :i64
+  (loop [i 0]
+    (if (= i n) 1
+      (if (= (byte-at f (+ p i)) (byte-at f (+ q i))) (recur (+ i 1)) 0))))
+
+;; the data offset of the tensor called name (a string), or a trap
+(defn- zeros [n :i64] :vector-i64
+  (let [v (vector-alloc n)
+        z (loop [i 0] (if (= i n) 0 (let [u (vector-assoc! v i 0)] (recur (+ i 1)))))]
+    v))
+
+(defn- slurp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 path :string sz :vector-i64] :i64
+  (let [fd (cc f (sym f "open") (cstr f (vector-at R 3) path) 0 0 0 0)
+        u0 (if (< fd 0) (vector-at [0] 1) 0)
+        total (cc f (sym f "lseek") fd 0 2 0 0)
+        buf (cc f (vector-at R 3) (+ total 16) 0 0 0 0)
+        got (cc f (sym f "pread") fd buf total 0 0)
+        u1 (if (= got total) 0 (vector-at [0] 1))
+        z (loop [i 0] (if (= i 16) 0 (let [u (poke8 f (+ buf (+ total i)) 0)] (recur (+ i 1)))))
+        s (vector-assoc! sz 0 total)]
+    buf))
+
+(defn- half-buf [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 n :i64] :i64 (new-buffer f R dev (* n 2)))
+
+
+;; ---- state vector S: [0] dispatch buffer count, [1] dispatch count, [2] device, [3] data buffer, [4] header address, [5] tensor count,
+;; [10..23] pipelines, ALL at 16+... see the offsets below
+(defn- oPS [] :i64 10)
+(defn- oALL [] :i64 64)
+(defn- oOFS [] :i64 40064)
+(defn- oT [] :i64 80064)
+(defn- oTT [] :i64 115100)
+(defn- oTD [] :i64 139200)
+(defn- oTP [] :i64 145300)
+
+(defn- emit! [S :vector-i64 bufs :vector-i64 offs :vector-i64 pso :i64 bg :i64 gx :i64 gy :i64 tx :i64] :i64
+  (let [na (vector-at S 0)
+        nt (vector-at S 1)
+        cnt (vector-count bufs)
+        c (loop [i 0] (if (= i cnt) 0 (let [a (vector-assoc! S (+ (oALL) (+ na i)) (vector-at bufs i))
+                                            b (vector-assoc! S (+ (oOFS) (+ na i)) (vector-at offs i))] (recur (+ i 1)))))
+        b7 (+ (oT) (* nt 7))
+        t0 (vector-assoc! S b7 pso) t1 (vector-assoc! S (+ b7 1) na) t2 (vector-assoc! S (+ b7 2) cnt)
+        t3 (vector-assoc! S (+ b7 3) bg) t4 (vector-assoc! S (+ b7 4) gx) t5 (vector-assoc! S (+ b7 5) gy) t6 (vector-assoc! S (+ b7 6) tx)
+        r0 (vector-assoc! S 0 (+ na cnt))
+        r1 (vector-assoc! S 1 (+ nt 1))]
+    0))
+
+(defn- enc4 [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 S :vector-i64 d :i64] :i64
+  (let [b (+ (oT) (* d 7))
+        pipe (vector-at S (+ (oPS) (vector-at S b)))
+        off (vector-at S (+ b 1))
+        cnt (vector-at S (+ b 2))
+        by-groups (vector-at S (+ b 3))
+        base (scratch f)
+        grid (+ base 128)
+        group (+ base 152)
+        u0 (poke f grid (vector-at S (+ b 4))) u1 (poke f (+ grid 8) (vector-at S (+ b 5))) u2 (poke f (+ grid 16) 1)
+        u3 (poke f group (vector-at S (+ b 6))) u4 (poke f (+ group 8) 1) u5 (poke f (+ group 16) 1)
+        u6 (msg f R en "setComputePipelineState:" pipe 0 0)
+        u7 (loop [i 0]
+             (if (= i cnt) 0
+               (let [u (msg f R en "setBuffer:offset:atIndex:" (vector-at S (+ (oALL) (+ off i))) (vector-at S (+ (oOFS) (+ off i))) i)] (recur (+ i 1)))))]
+    (if (= by-groups 1)
+      (msg f R en "dispatchThreadgroups:threadsPerThreadgroup:" grid group 0)
+      (msg f R en "dispatchThreads:threadsPerThreadgroup:" grid group 0))))
+
+(defn- run-all [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 queue :i64 S :vector-i64] :i64
+  (let [cb (msg f R queue "commandBuffer" 0 0 0)
+        en (msg f R cb "computeCommandEncoder" 0 0 0)
+        w (loop [i 0] (if (= i (vector-at S 1)) 0 (let [u (enc4 f R en S i)] (recur (+ i 1)))))
+        e (msg f R en "endEncoding" 0 0 0)
+        y (msg f R cb "commit" 0 0 0)
+        z (msg f R cb "waitUntilCompleted" 0 0 0)
+        st (msg f R cb "status" 0 0 0)]
+    (if (= st 4) 0 (refuse f R (msg f R cb "error" 0 0 0)))))
+
+(defn- tfind0 [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (let [q (cstr f (vector-at R 3) name)
+        len (string-length name)
+        hdr (vector-at S 4)
+        nt (vector-at S 5)]
+    (loop [k 0]
+      (if (= k nt) -1
+        (if (and (= (vector-at S (+ (oTT) (+ (* k 4) 1))) len) (= (bytes-eq f (+ hdr (vector-at S (+ (oTT) (* k 4)))) q len) 1))
+          k (recur (+ k 1)))))))
+;; a tensor by name; a name that is not in the file as written is also tried under the prefixes of a single-file SDXL checkpoint
+;; (model.diffusion_model. for the UNet, first_stage_model.decoder. and first_stage_model. for the VAE)
+(defn- tfind [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (let [h0 (tfind0 f R S name)
+        h1 (if (>= h0 0) h0 (tfind0 f R S (string-concat "model.diffusion_model." name)))
+        h2 (if (>= h1 0) h1 (tfind0 f R S (string-concat "first_stage_model.decoder." name)))
+        h3 (if (>= h2 0) h2 (tfind0 f R S (string-concat "first_stage_model." name)))]
+    (if (< h3 0)
+      (let [w (wr-text f R "refused: tensor missing from the file: ")
+            w2 (wr-text f R name)
+            w3 (wr-text f R "\n")]
+        (vector-at [0] 1))
+      h3)))
+;; byte offset of the tensor in the raw file buffer (S[8])
+(defn- toffr [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (vector-at S (+ (oTT) (+ (* (tfind f R S name) 4) 2))))
+(defn- tbytes [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (let [k (tfind f R S name)]
+    (- (vector-at S (+ (oTT) (+ (* k 4) 3))) (vector-at S (+ (oTT) (+ (* k 4) 2))))))
+;; bytes per element of the tensor in the file (4 = F32, 2 = F16)
+(defn- tdsz [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (i64-shift-right (vector-at S (+ (oTD) (tfind f R S name))) 4))
+;; byte offset of the tensor in the buffer the kernels read as FLOAT (S[3]): biases, norm parameters, embedding tables, the time/label embedding and
+;; emb_layers weights. For an F32 file that is the file buffer itself; for an F16 file the tensor is converted to float32 once, on the GPU, into the parameter
+;; buffer, at its first use (the conversion dispatch is recorded there), and the offset in that buffer is returned.
+(defn- toff [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (let [k (tfind f R S name)
+        raw (vector-at S (+ (oTT) (+ (* k 4) 2)))
+        dsz (i64-shift-right (vector-at S (+ (oTD) k)) 4)]
+    (if (and (= dsz 4) (= (vector-at S 3) (vector-at S 8))) raw
+      (let [memo (vector-at S (+ (oTP) k))]
+        (if (> memo 0) (- memo 1)
+          (let [n (quot (- (vector-at S (+ (oTT) (+ (* k 4) 3))) raw) dsz)
+                poff (vector-at S 9)
+                u (emit! S (vector-i64 (vector-at S 8) (vector-at S 3)) (vector-i64 raw poff) (if (= dsz 4) 18 35) 0 n 1 64)
+                u2 (vector-assoc! S 9 (+ poff (* (quot (+ (* n 4) 15) 16) 16)))
+                u3 (vector-assoc! S (+ (oTP) k) (+ poff 1))]
+            poff))))))
+
+(defn- fbuf [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 n :i64] :i64 (new-buffer f R (vector-at S 2) (* n 4)))
+(defn- hbuf [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 n :i64] :i64 (new-buffer f R (vector-at S 2) (* n 2)))
+(defn- pu [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 a :i64 b :i64 c :i64 d :i64 e :i64 g :i64 h :i64 i :i64 j :i64 k :i64] :i64
+  (pbuf-u f R (vector-at S 2) a b c d e g h i j k))
+
+;; a weight tensor (F32 or F16 in the file) -> a fresh half buffer, converted on the GPU
+(defn- cv32! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string] :i64
+  (let [dsz (tdsz f R S name)
+        n (quot (tbytes f R S name) dsz)
+        hb (hbuf f R S n)
+        u (emit! S (vector-i64 (vector-at S 8) hb) (vector-i64 (toffr f R S name) 0) (if (= dsz 4) 0 33) 0 n 1 64)]
+    hb))
+
+;; a Linear weight stored [N, K] (out, in) in the file -> half, TRANSPOSED to [K, N] on the GPU (linear_t reads its weight as [K, N]: an untransposed
+;; 8x8 load is faster). eoff = element offset into the tensor: a fused in_proj of OpenCLIP is three [C, C] weights one after the other.
+(defn- cvle! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string N :i64 K :i64 eoff :i64] :i64
+  (let [dsz (tdsz f R S name)
+        hb (hbuf f R S (* N K))
+        p (pu f R S N K 0 0 0 0 0 0 0 0)
+        u (emit! S (vector-i64 (vector-at S 8) hb p) (vector-i64 (+ (toffr f R S name) (* eoff dsz)) 0 0) (if (= dsz 4) 32 34) 0 (* N K) 1 64)]
+    hb))
+(defn- cvl! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 name :string N :i64 K :i64] :i64
+  (cvle! f R S name N K 0))
+
+(defn- cvfh! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 src :i64 off :i64 n :i64] :i64
+  (let [hb (hbuf f R S n)
+        u (emit! S (vector-i64 src hb) (vector-i64 off 0) 1 0 n 1 64)]
+    hb))
+
+(defn- gn! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pso :i64 xf :i64 xoff :i64 gname :string bname :string oh :i64 C :i64 HW :i64 NG :i64 eps :i64] :i64
+  (let [d (vector-at S 3)
+        n (* (quot C NG) HW)
+        gofs (toff f R S gname)
+        bofs (toff f R S bname)]
+    (if (< n 262144)
+      (let [p (pu f R S C HW NG eps 0 0 0 0 0 0)]
+        (emit! S (vector-i64 xf d d oh p) (vector-i64 xoff gofs bofs 0 0) pso 1 NG 1 128))
+      ;; large groups (the VAE at 512 px and up): 32 threadgroups cannot saturate the memory system, so the statistics are partial sums over 64 tiles per group
+      ;; (mean first, then the centred sum of squares, as in the single-kernel version) and the normalisation is element-parallel
+      (let [part (fbuf f R S (* NG 64))
+            stat (fbuf f R S (* NG 2))
+            p0 (pu f R S C HW NG eps 64 (if (= pso 2) 0 1) 0 0 0 0)
+            p1 (pu f R S C HW NG eps 64 (if (= pso 2) 0 1) 1 0 0 0)
+            a (emit! S (vector-i64 xf part p0 stat) (vector-i64 xoff 0 0 0) 41 1 64 NG 128)
+            b (emit! S (vector-i64 part stat p0) (vector-i64 0 0 0) 42 0 NG 1 32)
+            c (emit! S (vector-i64 xf part p1 stat) (vector-i64 xoff 0 0 0) 41 1 64 NG 128)
+            e (emit! S (vector-i64 part stat p1) (vector-i64 0 0 0) 42 0 NG 1 32)]
+        (emit! S (vector-i64 xf d d oh p0 stat) (vector-i64 xoff gofs bofs 0 0 0) 43 0 (* C HW) 1 128)))))
+
+;; conv: P = {cin, cout, ih, iw, ks, str, ow, np, npp, mode}
+(defn- conv! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 xh :i64 wh :i64 bias :i64 boff :i64 res :i64 roff :i64 out :i64 ooff :i64
+              G :vector-i64] :i64
+  (let [cin (vector-at G 0) cout (vector-at G 1) ih (vector-at G 2) iw (vector-at G 3) ks (vector-at G 4) str (vector-at G 5) mode (vector-at G 6)
+        pad (quot ks 2)
+        oh (+ (quot (- (+ ih (* 2 pad)) ks) str) 1)
+        ow (+ (quot (- (+ iw (* 2 pad)) ks) str) 1)
+        np (* oh ow)
+        p (pu f R S cin cout ih iw ks str ow np np mode)]
+    (emit! S (vector-i64 xh wh bias res out p) (vector-i64 0 0 boff roff ooff 0) (if (and (= ks 3) (= str 1)) 31 5) 1 (quot (+ np 63) 64) (if (and (= ks 3) (= str 1)) (quot (+ cout 127) 128) (quot (+ cout 63) 64)) (if (and (= ks 3) (= str 1)) 256 128))))
+
+;; linear_t: P = {M, K, N, OUTH, RES, ACT}
+(defn- lin! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 a :i64 wh :i64 bias :i64 boff :i64 res :i64 roff :i64
+             ofb :i64 ooff :i64 ohb :i64 hoff :i64 G :vector-i64] :i64
+  (let [M (vector-at G 0) K (vector-at G 1) N (vector-at G 2) outh (vector-at G 3) resf (vector-at G 4)
+        p (pu f R S M K N outh resf 0 0 0 0 0)]
+    (emit! S (vector-i64 a wh bias res ofb ohb p) (vector-i64 0 0 boff roff ooff hoff 0) 6 1 (quot N 64) (quot M 64) 128)))
+
+(defn- ln! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 xf :i64 xoff :i64 gname :string bname :string oh :i64 M :i64 N :i64] :i64
+  (let [p (pu f R S N 0 0 0 0 0 0 0 0 0)
+        d (vector-at S 3)]
+    (emit! S (vector-i64 xf d d oh p) (vector-i64 xoff (toff f R S gname) (toff f R S bname) 0 0) 7 1 M 1 128)))
+
+(defn- attn! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 q :i64 k :i64 v :i64 o :i64 LK :i64 NH :i64 LQ :i64] :i64
+  (let [p (pu f R S LK NH 0 0 0 0 0 0 0 0)]
+    (emit! S (vector-i64 q k v o p) (vector-i64 0 0 0 0 0) 8 1 (quot LQ 32) NH 128)))
+
+;; a Linear from the file: weight -> half (once), bias in the data buffer
+(defn- lw! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string nm :string] :i64
+  (cv32! f R S (string-concat pre (string-concat nm ".weight"))))
+(defn- lb [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string nm :string] :i64
+  (toff f R S (string-concat pre (string-concat nm ".bias"))))
+
+
+;; ---- synthetic parameters: every weight is a fresh half buffer filled on the GPU with pseudo-random values; gammas share one float buffer
+;; near 1, biases and betas share one near 0 (S[8], S[9]); Linear weights of the embeddings are float32
+
+(defn- linF! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 a :i64 wh :i64 bias :i64 boff :i64 res :i64 roff :i64 ofb :i64 ooff :i64
+             M :i64 K :i64 N :i64 resf :i64] :i64
+  (lin! f R S a wh bias boff res roff ofb ooff (vector-at S 7) 0 (vector-i64 M K N 0 resf)))
+(defn- linH! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 a :i64 wh :i64 bias :i64 boff :i64 ohb :i64 M :i64 K :i64 N :i64] :i64
+  (lin! f R S a wh bias boff (vector-at S 7) 0 (vector-at S 7) 0 ohb 0 (vector-i64 M K N 1 0)))
+
+(defn- read-all [f [:fn [[:i64 :i64 :i64] :i64]] fd :i64 buf :i64 n :i64 off :i64] :i64
+  (loop [done 0]
+    (if (>= done n) done
+      (let [want (if (> (- n done) 1073741824) 1073741824 (- n done))
+            r (cc f (sym f "pread") fd (+ buf done) want (+ off done) 0)]
+        (if (<= r 0) done (recur (+ done r)))))))
+
+(defn- half-load [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 path :string dst :i64 n :i64] :i64
+  (let [sz (vector-alloc 1)
+        buf (slurp f R path sz)
+        base (contents f R dst)]
+    (loop [i 0]
+      (if (>= i (* n 4)) 0
+        (let [u (poke f (+ base i) (peek f (+ buf i)))] (recur (+ i 8)))))))
+
+(defn- nm [a :string b :string] :string (string-concat a b))
+
+;; ResBlock with ComfyUI's names (in_layers.0/2, emb_layers.1, out_layers.0/3, skip_connection); TE = time embedding width
+(defn- resn! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string xf :i64 xoff :i64 xh :i64 cin :i64 cout :i64 ih :i64 iw :i64
+              emb :i64 of :i64 ooff :i64] :i64
+  (let [hw (* ih iw)
+        d (vector-at S 3)
+        a-h (hbuf f R S (* cin hw))
+        g1 (gn! f R S 2 xf xoff (nm pre "in_layers.0.weight") (nm pre "in_layers.0.bias") a-h cin hw 32 925353388)
+        bias1 (fbuf f R S cout)
+        pb (pu f R S @TE@ cout 0 0 0 0 0 0 0 0)
+        tb (emit! S (vector-i64 emb d d d bias1 pb)
+                  (vector-i64 0 (toff f R S (nm pre "emb_layers.1.weight")) (toff f R S (nm pre "emb_layers.1.bias"))
+                              (toff f R S (nm pre "in_layers.2.bias")) 0 0) 4 0 cout 1 64)
+        w1 (cv32! f R S (nm pre "in_layers.2.weight"))
+        h1 (fbuf f R S (* cout hw))
+        c1 (conv! f R S a-h w1 bias1 0 bias1 0 h1 0 (vector-i64 cin cout ih iw 3 1 1))
+        b-h (hbuf f R S (* cout hw))
+        g2 (gn! f R S 2 h1 0 (nm pre "out_layers.0.weight") (nm pre "out_layers.0.bias") b-h cout hw 32 925353388)
+        w2 (cv32! f R S (nm pre "out_layers.3.weight"))
+        b2 (toff f R S (nm pre "out_layers.3.bias"))]
+    (if (= cin cout)
+      (conv! f R S b-h w2 d b2 xf xoff of ooff (vector-i64 cout cout ih iw 3 1 2))
+      (let [ws (cv32! f R S (nm pre "skip_connection.weight"))
+            sk (fbuf f R S (* cout hw))
+            cs (conv! f R S xh ws d (toff f R S (nm pre "skip_connection.bias")) bias1 0 sk 0 (vector-i64 cin cout ih iw 1 1 1))]
+        (conv! f R S b-h w2 d b2 sk 0 of ooff (vector-i64 cout cout ih iw 3 1 2))))))
+
+;; one BasicTransformerBlock (self-attention, cross-attention over the 77-token context held as 128 half rows of width 2048, GEGLU feed-forward)
+(defn- blk! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 b :string tin :i64 C :i64 hw :i64 nh :i64 ctxh :i64] :i64
+  (let [d (vector-at S 3)
+        z (vector-at S 6)
+        fi (* C 4)
+        rows (if (< hw (vector-at S 62)) (vector-at S 62) hw)
+        ln-h (hbuf f R S (* hw C))
+        q-h (hbuf f R S (* rows C)) k-h (hbuf f R S (* rows C)) v-h (hbuf f R S (* rows C)) at-h (hbuf f R S (* hw C))
+        n1 (ln! f R S tin 0 (nm b "norm1.weight") (nm b "norm1.bias") ln-h hw C)
+        wq (cvl! f R S (nm b "attn1.to_q.weight") C C) wk (cvl! f R S (nm b "attn1.to_k.weight") C C)
+        wv (cvl! f R S (nm b "attn1.to_v.weight") C C) wo (cvl! f R S (nm b "attn1.to_out.0.weight") C C)
+        q1 (linH! f R S ln-h wq z 0 q-h hw C C) k1 (linH! f R S ln-h wk z 0 k-h hw C C) v1 (linH! f R S ln-h wv z 0 v-h hw C C)
+        a1 (attn! f R S q-h k-h v-h at-h hw nh hw)
+        t1 (fbuf f R S (* hw C))
+        o1 (linF! f R S at-h wo d (toff f R S (nm b "attn1.to_out.0.bias")) tin 0 t1 0 hw C C 1)
+        n2 (ln! f R S t1 0 (nm b "norm2.weight") (nm b "norm2.bias") ln-h hw C)
+        wq2 (cvl! f R S (nm b "attn2.to_q.weight") C C) wk2 (cvl! f R S (nm b "attn2.to_k.weight") C 2048)
+        wv2 (cvl! f R S (nm b "attn2.to_v.weight") C 2048) wo2 (cvl! f R S (nm b "attn2.to_out.0.weight") C C)
+        q2 (linH! f R S ln-h wq2 z 0 q-h hw C C) k2 (linH! f R S ctxh wk2 z 0 k-h (vector-at S 62) 2048 C) v2 (linH! f R S ctxh wv2 z 0 v-h (vector-at S 62) 2048 C)
+        a2 (attn! f R S q-h k-h v-h at-h (vector-at S 63) nh hw)
+        t2 (fbuf f R S (* hw C))
+        o2 (linF! f R S at-h wo2 d (toff f R S (nm b "attn2.to_out.0.bias")) t1 0 t2 0 hw C C 1)
+        n3 (ln! f R S t2 0 (nm b "norm3.weight") (nm b "norm3.bias") ln-h hw C)
+        wf1 (cvl! f R S (nm b "ff.net.0.proj.weight") (* 2 fi) C) wf2 (cvl! f R S (nm b "ff.net.2.weight") C fi)
+        ff1 (fbuf f R S (* hw (* 2 fi)))
+        f1 (linF! f R S ln-h wf1 d (toff f R S (nm b "ff.net.0.proj.bias")) (vector-at S 7) 0 ff1 0 hw C (* 2 fi) 0)
+        gg-h (hbuf f R S (* hw fi))
+        pg (pu f R S fi 0 0 0 0 0 0 0 0 0)
+        gg (emit! S (vector-i64 ff1 gg-h pg) (vector-i64 0 0 0) 9 0 (* hw fi) 1 64)
+        t3 (fbuf f R S (* hw C))
+        f2 (linF! f R S gg-h wf2 d (toff f R S (nm b "ff.net.2.bias")) t2 0 t3 0 hw fi C 1)]
+    t3))
+
+;; SpatialTransformer (linear proj_in / proj_out) of the given depth: xf (float C x HW at xoff) -> (of, ooff)
+(defn- stn! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string xf :i64 xoff :i64 of :i64 ooff :i64 C :i64 ih :i64 iw :i64 depth :i64
+            ctxh :i64] :i64
+  (let [hw (* ih iw)
+        nh (quot C 64)
+        d (vector-at S 3)
+        gt-h (hbuf f R S (* hw C))
+        g0 (gn! f R S 3 xf xoff (nm pre "norm.weight") (nm pre "norm.bias") gt-h C hw 32 897988541)
+        t0 (fbuf f R S (* hw C))
+        wi (cvl! f R S (nm pre "proj_in.weight") C C)
+        l0 (linF! f R S gt-h wi d (toff f R S (nm pre "proj_in.bias")) (vector-at S 7) 0 t0 0 hw C C 0)
+        last (loop [j 0 cur t0]
+               (if (= j depth) cur
+                 (recur (+ j 1) (blk! f R S (nm pre (nm "transformer_blocks." (nm (string-from-i64 j) "."))) cur C hw nh ctxh))))
+        t3h (cvfh! f R S last 0 (* hw C))
+        wout (cvl! f R S (nm pre "proj_out.weight") C C)
+        pf (fbuf f R S (* hw C))
+        fo (linF! f R S t3h wout d (toff f R S (nm pre "proj_out.bias")) (vector-at S 7) 0 pf 0 hw C C 0)
+        pun (pu f R S C hw 0 0 0 0 0 0 0 0)]
+    (emit! S (vector-i64 xf pf of pun) (vector-i64 xoff 0 ooff 0) 10 0 (* C hw) 1 64)))
+
+;; Downsample: stride-2 3x3 conv named pre.op
+(defn- downn! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string C :i64 ih :i64 iw :i64 xf :i64 xoff :i64 of :i64 ooff :i64] :i64
+  (let [xh (cvfh! f R S xf xoff (* C (* ih iw)))
+        w (cv32! f R S (nm pre "op.weight"))]
+    (conv! f R S xh w (vector-at S 3) (toff f R S (nm pre "op.bias")) (vector-at S 7) 0 of ooff (vector-i64 C C ih iw 3 2 1))))
+
+;; Upsample: nearest 2x then the 3x3 conv named pre.conv
+(defn- upn! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string C :i64 ih :i64 iw :i64 xf :i64 of :i64 ooff :i64] :i64
+  (let [uph (hbuf f R S (* C (* 4 (* ih iw))))
+        pup (pu f R S ih iw 0 0 0 0 0 0 0 0)
+        u (emit! S (vector-i64 xf uph pup) (vector-i64 0 0 0) 11 0 (* C (* 4 (* ih iw))) 1 64)
+        w (cv32! f R S (nm pre "conv.weight"))]
+    (conv! f R S uph w (vector-at S 3) (toff f R S (nm pre "conv.bias")) (vector-at S 7) 0 of ooff (vector-i64 C C (* 2 ih) (* 2 iw) 3 1 1))))
+
+;; float16 range guard (stage M slice 29): a residual stream that is not normalised can exceed 65504, which half cannot hold (SDXL's VAE does this in its
+;; decoder). Before a float tensor is converted to half for a convolution, its largest magnitude is found on the GPU and a power-of-two scale brings it under 8192;
+;; the convolution runs without bias and its output is multiplied by the scale (and given its bias) afterwards.
+(defn- scl! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 src :i64 n :i64] :i64
+  (let [part (fbuf f R S 256)
+        sc (fbuf f R S 2)
+        pn (pu f R S n 0 0 0 0 0 0 0 0 0)
+        a (emit! S (vector-i64 src part pn) (vector-i64 0 0 0) 36 1 256 1 128)
+        b (emit! S (vector-i64 part sc) (vector-i64 0 0) 37 1 1 1 256)]
+    sc))
+(defn- cvfs! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 src :i64 n :i64 sc :i64] :i64
+  (let [hb (hbuf f R S n)
+        u (emit! S (vector-i64 src hb sc) (vector-i64 0 0 0) 38 0 n 1 64)]
+    hb))
+(defn- axpb! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 buf :i64 sc :i64 boff :i64 C :i64 np :i64] :i64
+  (let [p (pu f R S np 0 0 0 0 0 0 0 0 0)]
+    (emit! S (vector-i64 buf (vector-at S 3) sc p) (vector-i64 0 boff 0 0) 40 0 (* C np) 1 64)))
+
+
+(defn- resv! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string xf :i64 cin :i64 cout :i64 ih :i64 iw :i64
+              H0 :i64 H1 :i64 F1 :i64 F2 :i64 of :i64] :i64
+  (let [hw (* ih iw)
+        d (vector-at S 3)
+        dummy (vector-at S 7)
+        g1 (gn! f R S 2 xf 0 (nm pre "norm1.weight") (nm pre "norm1.bias") H0 cin hw 32 897988541)
+        w1 (cv32! f R S (nm pre "conv1.weight"))
+        c1 (conv! f R S H0 w1 d (toff f R S (nm pre "conv1.bias")) dummy 0 F1 0 (vector-i64 cin cout ih iw 3 1 1))
+        g2 (gn! f R S 2 F1 0 (nm pre "norm2.weight") (nm pre "norm2.bias") H1 cout hw 32 897988541)
+        w2 (cv32! f R S (nm pre "conv2.weight"))
+        b2 (toff f R S (nm pre "conv2.bias"))]
+    (if (= cin cout)
+      (conv! f R S H1 w2 d b2 xf 0 of 0 (vector-i64 cout cout ih iw 3 1 2))
+      (let [sc (scl! f R S xf (* cin hw))
+            xh (cvfs! f R S xf (* cin hw) sc)
+            ws (cv32! f R S (nm pre "nin_shortcut.weight"))
+            cs0 (conv! f R S xh ws d (toff f R S (nm pre "nin_shortcut.bias")) dummy 0 F2 0 (vector-i64 cin cout ih iw 1 1 0))
+            cs (axpb! f R S F2 sc (toff f R S (nm pre "nin_shortcut.bias")) cout hw)]
+        (conv! f R S H1 w2 d b2 F2 0 of 0 (vector-i64 cout cout ih iw 3 1 2))))))
+
+(defn- attv! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string xf :i64 C :i64 hw :i64 scalebits :i64
+              TG :i64 TQ :i64 TK :i64 TV :i64 TA :i64 FT :i64 of :i64] :i64
+  (let [d (vector-at S 3)
+        dummy (vector-at S 7)
+        g0 (gn! f R S 3 xf 0 (nm pre "norm.weight") (nm pre "norm.bias") TG C hw 32 897988541)
+        wq (cvl! f R S (nm pre "q.weight") C C) wk (cvl! f R S (nm pre "k.weight") C C) wv (cvl! f R S (nm pre "v.weight") C C) wo (cvl! f R S (nm pre "proj_out.weight") C C)
+        q1 (linH! f R S TG wq d (toff f R S (nm pre "q.bias")) TQ hw C C)
+        k1 (linH! f R S TG wk d (toff f R S (nm pre "k.bias")) TK hw C C)
+        v1 (linH! f R S TG wv d (toff f R S (nm pre "v.bias")) TV hw C C)
+        nblk (quot hw 32)
+        pieces (let [p (quot hw 2048)] (if (< p 1) 1 p))
+        psz (quot (+ nblk (- pieces 1)) pieces)
+        a1 (loop [k 0]
+             (if (>= (* k psz) nblk) 0
+               (let [off (* k psz)
+                     cnt (if (> (+ off psz) nblk) (- nblk off) psz)
+                     pk (pu f R S hw scalebits off 0 0 0 0 0 0 0)
+                     e (emit! S (vector-i64 TQ TK TV TA pk) (vector-i64 0 0 0 0 0) 14 1 cnt 1 128)]
+                 (recur (+ k 1)))))
+        o1 (linF! f R S TA wo d (toff f R S (nm pre "proj_out.bias")) dummy 0 FT 0 hw C C 0)
+        pun (pu f R S C hw 0 0 0 0 0 0 0 0)]
+    (emit! S (vector-i64 xf FT of pun) (vector-i64 0 0 0 0) 10 0 (* C hw) 1 64)))
+
+(defn- level! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string FB :vector-i64 cur :i64 cin :i64 cout :i64 res :i64
+               H0 :i64 H1 :i64 F1 :i64 F2 :i64 up :i64] :i64
+  (let [c3 (loop [b 0 cu cur ci cin]
+             (if (= b 3) cu
+               (let [bp (nm pre (nm "block." (nm (string-from-i64 b) ".")))
+                     r (resv! f R S bp (vector-at FB cu) ci cout res res H0 H1 F1 F2 (vector-at FB (- 1 cu)))]
+                 (recur (+ b 1) (- 1 cu) cout))))]
+    (if (= up 0) c3
+      (let [d (vector-at S 3)
+            pup (pu f R S res res 0 0 0 0 0 0 0 0)
+            sc (scl! f R S (vector-at FB c3) (* cout (* res res)))
+            u1 (emit! S (vector-i64 (vector-at FB c3) H0 pup sc) (vector-i64 0 0 0 0) 39 0 (* cout (* 4 (* res res))) 1 64)
+            wu (cv32! f R S (nm pre "upsample.conv.weight"))
+            u2 (conv! f R S H0 wu d (toff f R S (nm pre "upsample.conv.bias")) (vector-at S 7) 0 (vector-at FB (- 1 c3)) 0
+                      (vector-i64 cout cout (* 2 res) (* 2 res) 3 1 0))
+            u3 (axpb! f R S (vector-at FB (- 1 c3)) sc (toff f R S (nm pre "upsample.conv.bias")) cout (* 4 (* res res)))]
+        (- 1 c3)))))
+
+
+;; run dispatches lo .. hi-1 as one command buffer, waited for and status-checked
+(defn- run-range [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 queue :i64 S :vector-i64 lo :i64 hi :i64] :i64
+  (let [cb (msg f R queue "commandBuffer" 0 0 0)
+        en (msg f R cb "computeCommandEncoder" 0 0 0)
+        w (loop [i lo] (if (= i hi) 0 (let [u (enc4 f R en S i)] (recur (+ i 1)))))
+        e (msg f R en "endEncoding" 0 0 0)
+        y (msg f R cb "commit" 0 0 0)
+        z (msg f R cb "waitUntilCompleted" 0 0 0)
+        st (msg f R cb "status" 0 0 0)]
+    (if (= st 4) 0 (refuse f R (msg f R cb "error" 0 0 0)))))
+
+
+
+(defn- hsize [] :i64 131072)
+
+(defn- psize [] :i64 262144)
+
+(defn- fnv [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64] :i64
+  (loop [i 0 h 2166136261]
+    (if (= i n) h
+      (recur (+ i 1) (bit-and (* (bit-xor h (byte-at f (+ p i))) 16777619) 4294967295)))))
+
+(defn- vt-find [f [:fn [[:i64 :i64 :i64] :i64]] VT :vector-i64 arena :i64 p :i64 n :i64] :i64
+  (let [mask (- (hsize) 1)]
+    (loop [s (bit-and (fnv f p n) mask)]
+      (let [off (vector-at VT (* s 3))]
+        (if (= off 0) -1
+          (if (and (= (vector-at VT (+ (* s 3) 1)) n) (= (bytes-eq f p (+ arena (- off 1)) n) 1))
+            (vector-at VT (+ (* s 3) 2))
+            (recur (bit-and (+ s 1) mask))))))))
+
+;; insert the key at p (n bytes) with id; its bytes are copied to the arena at st[0]
+
+(defn- vt-insert [f [:fn [[:i64 :i64 :i64] :i64]] VT :vector-i64 arena :i64 st :vector-i64 p :i64 n :i64 id :i64] :i64
+  (let [mask (- (hsize) 1)
+        top (vector-at st 0)
+        c (loop [i 0] (if (= i n) 0 (let [u (poke8 f (+ arena (+ top i)) (byte-at f (+ p i)))] (recur (+ i 1)))))
+        s0 (bit-and (fnv f p n) mask)
+        s (loop [s s0] (if (= (vector-at VT (* s 3)) 0) s (recur (bit-and (+ s 1) mask))))
+        a (vector-assoc! VT (* s 3) (+ top 1))
+        b (vector-assoc! VT (+ (* s 3) 1) n)
+        d (vector-assoc! VT (+ (* s 3) 2) id)
+        e (vector-assoc! st 0 (+ top n))]
+    0))
+
+;; decode the JSON string whose content starts at p+i into the scratch area at tmp; returns the index after the
+;; closing quote, with the decoded length in out[0] and 1 in out[1] if it held an escape this reader does not decode
+
+(defn- json-string [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 tmp :i64 out :vector-i64] :i64
+  (loop [j i k 0 bad 0]
+    (let [c (byte-at f (+ p j))]
+      (cond
+        (= c 34) (let [a (vector-assoc! out 0 k) b (vector-assoc! out 1 bad)] (+ j 1))
+        (= c 92)
+        (let [d (byte-at f (+ p (+ j 1)))]
+          (cond
+            (= d 34) (let [u (poke8 f (+ tmp k) 34)] (recur (+ j 2) (+ k 1) bad))
+            (= d 92) (let [u (poke8 f (+ tmp k) 92)] (recur (+ j 2) (+ k 1) bad))
+            (= d 117) (recur (+ j 6) k 1)
+            :else (recur (+ j 2) k 1)))
+        :else (let [u (poke8 f (+ tmp k) c)] (recur (+ j 1) (+ k 1) bad))))))
+
+(defn- load-vocab [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 st :vector-i64 tmp :i64] :i64
+  (let [out (vector-alloc 2)
+        num (vector-alloc 1)]
+    (loop [j 0 count 0]
+      (if (>= j n) count
+        (if (= (byte-at f (+ p j)) 34)
+          (let [e (json-string f p (+ j 1) tmp out)
+                len (vector-at out 0)
+                bad (vector-at out 1)
+                colon (loop [q e] (if (= (byte-at f (+ p q)) 58) q (recur (+ q 1))))
+                e2 (parse-uint f p (+ colon 1) num)
+                u (if (= bad 0) (vt-insert f VT arena st tmp len (vector-at num 0)) 0)]
+            (recur e2 (if (= bad 0) (+ count 1) count)))
+          (recur (+ j 1) count))))))
+
+;; merge-rank table: slot s holds [key + 1 (0 = empty), rank] at PT[2s..2s+1], key = idA * 65536 + idB
+
+(defn- pt-find [PT :vector-i64 key :i64] :i64
+  (let [mask (- (psize) 1)]
+    (loop [s (bit-and (* key 2654435761) mask)]
+      (let [k (vector-at PT (* s 2))]
+        (if (= k 0) -1
+          (if (= k (+ key 1)) (vector-at PT (+ (* s 2) 1))
+            (recur (bit-and (+ s 1) mask))))))))
+
+(defn- pt-insert [PT :vector-i64 key :i64 rank :i64] :i64
+  (let [mask (- (psize) 1)
+        s (loop [s (bit-and (* key 2654435761) mask)]
+            (if (= (vector-at PT (* s 2)) 0) s (recur (bit-and (+ s 1) mask))))
+        a (vector-assoc! PT (* s 2) (+ key 1))
+        b (vector-assoc! PT (+ (* s 2) 1) rank)]
+    0))
+
+;; merges.txt: a header line, then "a b" per line, rank = line number after the header
+
+(defn- load-merges [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 n :i64 VT :vector-i64 arena :i64 PT :vector-i64] :i64
+  (let [first (loop [j 0] (if (= (byte-at f (+ p j)) 10) (+ j 1) (recur (+ j 1))))]
+    (loop [j first rank 0 stored 0]
+      (if (>= j n) stored
+        (let [le (loop [q j] (if (or (= (byte-at f (+ p q)) 10) (>= q n)) q (recur (+ q 1))))
+              sp (loop [q j] (if (or (= (byte-at f (+ p q)) 32) (>= q le)) q (recur (+ q 1))))
+              ia (vt-find f VT arena (+ p j) (- sp j))
+              ib (vt-find f VT arena (+ p (+ sp 1)) (- le (+ sp 1)))
+              ok (if (and (>= ia 0) (>= ib 0)) 1 0)
+              u (if (= ok 1) (pt-insert PT (+ (* ia 65536) ib) rank) 0)]
+          (recur (+ le 1) (+ rank 1) (+ stored ok)))))))
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+
+(defn- refuse-text [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 s :string] :i64
+  (let [p (cstr f (vector-at R 3) s)
+        w (cc f (sym f "write") 2 p (string-length s) 0 0)]
+    (vector-at [0] 1)))
+
+;; BPE of the word at w (n bytes, lowercase), with "</w>" appended to the buffer; appends its ids to OUT (count in OUT[0])
+
+(defn- bpe-word [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 arena :i64 PT :vector-i64 w :i64 nb :i64 n :i64
+                 OFF :vector-i64 SS :vector-i64 SE :vector-i64 SI :vector-i64 OUT :vector-i64] :i64
+  (let [u0 (if (> nb 400) (refuse-text f R "refused: a word longer than 400 bytes\n") 0)
+        s0 (poke8 f (+ w nb) 60) s1 (poke8 f (+ w (+ nb 1)) 47) s2 (poke8 f (+ w (+ nb 2)) 119) s3 (poke8 f (+ w (+ nb 3)) 62)
+        init (loop [i 0]
+               (if (= i n) 0
+                 (let [st (vector-at OFF i)
+                       en (if (= i (- n 1)) (+ nb 4) (vector-at OFF (+ i 1)))
+                       id (vt-find f VT arena (+ w st) (- en st))
+                       u (if (< id 0) (refuse-text f R "refused: a symbol missing from the vocabulary\n") 0)
+                       a (vector-assoc! SS i st) b (vector-assoc! SE i en) c (vector-assoc! SI i id)]
+                   (recur (+ i 1)))))
+        m (loop [m n]
+            (let [best (loop [i 0 br 2147483647 bi -1]
+                         (if (>= i (- m 1)) bi
+                           (let [r (pt-find PT (+ (* (vector-at SI i) 65536) (vector-at SI (+ i 1))))]
+                             (if (and (>= r 0) (< r br)) (recur (+ i 1) r i) (recur (+ i 1) br bi)))))]
+              (if (< best 0) m
+                (let [ia (vector-at SI best)
+                      ib (vector-at SI (+ best 1))
+                      m2 (loop [i 0 k 0]
+                           (if (>= i m) k
+                             (if (and (< i (- m 1)) (and (= (vector-at SI i) ia) (= (vector-at SI (+ i 1)) ib)))
+                               (let [st (vector-at SS i)
+                                     en (vector-at SE (+ i 1))
+                                     id (vt-find f VT arena (+ w st) (- en st))
+                                     u (if (< id 0) (refuse-text f R "refused: a merged symbol missing from the vocabulary\n") 0)
+                                     a (vector-assoc! SS k st) b (vector-assoc! SE k en) c (vector-assoc! SI k id)]
+                                 (recur (+ i 2) (+ k 1)))
+                               (let [a (vector-assoc! SS k (vector-at SS i)) b (vector-assoc! SE k (vector-at SE i)) c (vector-assoc! SI k (vector-at SI i))]
+                                 (recur (+ i 1) (+ k 1))))))]
+                  (recur m2)))))
+        out (loop [i 0 c (vector-at OUT 0)]
+              (if (= i m) (vector-assoc! OUT 0 c)
+                (let [u (vector-assoc! OUT (+ 1 c) (vector-at SI i))] (recur (+ i 1) (+ c 1)))))]
+    0))
+
+(defn- within [c :i64 a :i64 b :i64] :bool (and (>= c a) (<= c b)))
+;; generated by gen_script_tables.py (31 class runs, 24 lower-case runs)
+(defn- scls-t0 [] :vector-i64
+  (vector-i64 922761009 926955332 928003923 929052529 931149716 933246929 937441252 938489841 939538484 943732819 945829985 946878580 947927201 951072948 952121537 953170132 954219025 975190580 977289041 1063272291 1064323089 1210075171 1211123860 1218466545 1393579361 1433425284 1435522449 1436571123 1442863233 1485854883 1560305313))
+(defn- slow-t0 [] :vector-i64
+  (vector-i64 472453629185 475674886913 480506798964 484264952614 485338727205 487486227264 488559993663 490170753824 500371383072 523457127176 528289219841 543321653956 544932291329 546006049529 546542928641 548153582206 549764326224 558354522912 601304859905 623853946113 652844991247 653381969153 661435827457 713512633136))
+
+;; class and lower-case of the alphabetic scripts beyond Latin (Greek, Cyrillic, Armenian, Hebrew letters), from generated run tables
+(defn- scls [c :i64] :i64
+  (let [T (scls-t0)]
+    (loop [i 0]
+      (if (= i (vector-count T)) 4
+        (let [e (vector-at T i)]
+          (if (and (>= c (i64-shift-right e 20)) (<= c (bit-and (i64-shift-right e 4) 65535))) (bit-and e 15) (recur (+ i 1))))))))
+(defn- slow [c :i64] :i64
+  (let [T (slow-t0)]
+    (loop [i 0]
+      (if (= i (vector-count T)) c
+        (let [e (vector-at T i)
+              lo (i64-shift-right e 29)]
+          (if (and (>= c lo) (<= c (bit-and (i64-shift-right e 13) 65535)))
+            (if (= (bit-and (i64-shift-right e 9) 15) 1) (+ c (- (bit-and e 511) 256)) (if (= (bit-and (- c lo) 1) 0) (+ c 1) c))
+            (recur (+ i 1))))))))
+;; Unicode class of a code point, for the supported set only: 0 whitespace (str.isspace), 1 letter (\p{L}), 2 number (\p{N}),
+;; 3 other, 4 not supported (the program refuses it rather than tokenizing it differently from the Hugging Face tokenizer). The Hugging Face
+;; tokenizer NFC-normalizes first. A letter followed by one combining mark (U+0300-036F, U+3099, U+309A) is composed with the table below
+;; (the same as NFC); any other use of a mark, and the singleton / exclusion characters U+2329, U+232A, U+2ADC, are refused. Whitespace is the
+;; White_Space property (not str.isspace: U+001C-001F are not whitespace). Latin-1 and the other supported letters are NFC-stable.
+(defn- cls [c :i64] :i64
+  (cond
+    (< c 128) (cond (or (= c 32) (within c 9 13)) 0 (or (within c 97 122) (within c 65 90)) 1 (within c 48 57) 2 :else 3)
+    (or (= c 133) (or (= c 160) (or (= c 5760) (or (within c 8192 8202) (or (= c 8232) (or (= c 8233) (or (= c 8239) (or (= c 8287) (= c 12288))))))))) 0
+    (< c 256) (cond (or (= c 170) (or (= c 181) (or (= c 186) (or (within c 192 214) (or (within c 216 246) (within c 248 255)))))) 1
+                    (or (within c 178 179) (or (= c 185) (within c 188 190))) 2
+                    :else 3)
+    (within c 256 383) (if (= c 304) 4 1)
+    (or (within c 880 1327) (or (within c 1329 1418) (within c 1488 1514))) (scls c)
+    (within c 8203 8303) 3
+    (within c 8400 8447) 3
+    (or (= c 9001) (or (= c 9002) (= c 10972))) 4
+    (or (within c 8592 9311) (or (within c 9472 10101) (within c 10132 11263))) 3
+    (within c 11776 11903) (if (= c 11823) 1 3)
+    (within c 12288 12351) (cond (or (= c 12293) (or (= c 12294) (or (= c 12347) (or (= c 12348) (within c 12337 12341))))) 1
+                             (or (= c 12295) (or (within c 12321 12329) (within c 12344 12346))) 2
+                             :else 3)
+    (within c 12352 12447) (cond (= c 12352) 3 (within c 12439 12440) 3 (within c 12441 12442) 4 (within c 12443 12444) 3 :else 1)
+    (within c 12448 12543) (cond (or (= c 12448) (= c 12539)) 3 :else 1)
+    (within c 12593 12686) 1
+    (within c 13312 19903) 1
+    (within c 19968 40959) 1
+    (within c 44032 55203) 1
+    (within c 65024 65039) 3
+    (within c 65281 65295) 3
+    (within c 65296 65305) 2
+    (within c 65306 65312) 3
+    (within c 65313 65338) 1
+    (within c 65339 65344) 3
+    (within c 65345 65370) 1
+    (within c 65371 65381) 3
+    (within c 65382 65439) 1
+    (within c 65504 65518) 3
+    (or (within c 127744 128591) (or (within c 128640 128767) (within c 129280 129535))) 3
+    :else 4))
+;; str.lower for the supported letters: ASCII, Latin-1, Latin Extended-A, fullwidth Latin
+(defn- lcp [c :i64] :i64
+  (cond
+    (< c 128) (if (within c 65 90) (+ c 32) c)
+    (or (within c 192 214) (within c 216 222)) (+ c 32)
+    (< c 256) c
+    (or (within c 256 303) (or (within c 306 311) (within c 330 375))) (if (= (bit-and c 1) 0) (+ c 1) c)
+    (or (within c 313 328) (within c 377 382)) (if (= (bit-and c 1) 1) (+ c 1) c)
+    (= c 376) 255
+    (or (within c 880 1327) (or (within c 1329 1418) (within c 1488 1514))) (slow c)
+    (within c 65313 65338) (+ c 32)
+    :else c))
+;; mapped character of a byte (GPT-2/CLIP bytes_to_unicode)
+(defn- bmap [b :i64] :i64
+  (cond (or (within b 33 126) (or (within b 161 172) (within b 174 255))) b
+        (<= b 32) (+ 256 b)
+        (<= b 160) (+ 256 (+ 33 (- b 127)))
+        :else 323))
+(defn- sym-bytes [c :i64] :i64 (if (< c 128) 1 2))
+
+;; the length, in code points, of the token starting at cp index i within [0, e): CL holds the classes, CP the lowered code points
+(defn- token-len [CP :vector-i64 CL :vector-i64 i :i64 e :i64] :i64
+  (let [c (vector-at CP i)
+        k (vector-at CL i)
+        n1 (if (< (+ i 1) e) (vector-at CP (+ i 1)) 0)
+        n2 (if (< (+ i 2) e) (vector-at CP (+ i 2)) 0)]
+    (cond
+      (= k 5) 1
+      (= c 39)
+      (cond
+        (or (= n1 115) (or (= n1 116) (or (= n1 109) (= n1 100)))) 2
+        (or (and (= n1 114) (= n2 101)) (or (and (= n1 118) (= n2 101)) (and (= n1 108) (= n2 108)))) 3
+        :else (loop [j (+ i 1)]
+                (if (and (< j e) (= (vector-at CL j) 3)) (recur (+ j 1)) (- j i))))
+      (= k 1)
+      (loop [j (+ i 1)] (if (and (< j e) (= (vector-at CL j) 1)) (recur (+ j 1)) (- j i)))
+      (= k 2) 1
+      :else
+      (loop [j (+ i 1)]
+        (if (and (< j e) (= (vector-at CL j) 3)) (recur (+ j 1)) (- j i))))))
+
+;; NFC for a letter followed by one combining mark: entries base << 28 | mark << 14 | composed, generated by gen_nfc_table.py (210 entries)
+(defn- nfc-t0 [] :vector-i64
+  (vector-i64 26050822368 26050838753 26050855138 26050871523 26050887937 26050920707 26050953444 26050986213 26051477765 26051870944 26051887329 26587709703 26587726089 26587808011 26587889933 26588332263 26588758279 26856325391 27124564200 27124580585 27124596970 27124629779 27124662549 27124678935 27124695275 27124760859 27125219609 27125612776 27125629161 27661467933 27661533471 27661549857 27662074147 27929903397 28198306028 28198322413 28198338798 28198355241 28198371627 28198404397 28198437103 28198961455 28199354604 28199370989 28466774325 28735815991 29003628858 29003809086 29004251452 29004677434 29540499780 29540532465 29540680008 29541122374 29541548356 29808918770 29808935155 29808951540 29808967925 29808984397))
+(defn- nfc-t1 [] :vector-i64
+  (vector-i64 29809017167 29809049846 29809099089 29809967346 29809983731 30614241621 30614421849 30614864215 30615290197 30882677083 30882693469 30882857313 30883299679 30883725659 31151292773 31151735139 31419531513 31419547898 31419564283 31419580777 31419597163 31419629933 31419662588 31419695471 31419711857 31420186995 31420580089 31420596474 31956435317 32493289725 32493306231 32493404415 32494338301 32761725306 32761823612 32761905534 32762773882 253684106156 253685154732 254757847981 254758896557 255294718894 255295767470 255831589807 255831704522 255832638383 255832687504 257442202572 257443251148 259052815309 259052929995 259053863885 259053913008 260126557134 260127605710 260394992528 260396041104 260663428016 260664476592 262542476243))
+(defn- nfc-t2 [] :vector-i64
+  (vector-i64 262542590932 262543524819 287775491281 287775524051 288580715603 288581764179 289117570128 289117668567 289117701201 289118618704 289386104002 289386136797 289654572255 289922876509 289922942179 289922974777 289923007717 289923925085 290459763804 290460812380 291533620455 292875732207 292875764830 292875797745 292875846899 293949539573 295023281401 295560152301 297976071255 306297685111 333141116123 337436083435 3317529211028 3318871388236 3319408259150 3319945130064 3320482000978 3321018871892 3321555742806 3322092613720 3322629484634 3323166355548 3323703226462 3324240097376 3324776968290 3325582274661 3326119145575 3326656016489 3328535064688 3328535081073 3329340371059 3329340387444 3330145677430 3330145693815 3330950983801 3330951000186 3331756290172 3331756306557 3340883095710 3343299014900))
+(defn- nfc-t3 [] :vector-i64
+  (vector-i64 3344641192108 3345178063022 3345714933936 3346251804850 3346788675764 3347325546678 3347862417592 3348399288506 3348936159420 3349473030334 3350009901248 3350546772162 3351352078533 3351888949447 3352425820361 3354304868560 3354304884945 3355110174931 3355110191316 3355915481302 3355915497687 3356720787673 3356720804058 3357526094044 3357526110429 3362894803191 3363163238648 3363431674105 3363700109562 3366652899582))
+(defn- nfc-scan [T :vector-i64 key :i64] :i64
+  (loop [i 0]
+    (if (= i (vector-count T)) -1
+      (let [e (vector-at T i)]
+        (if (= (i64-shift-right e 14) key) (bit-and e 16383) (recur (+ i 1)))))))
+;; the composed code point of base + mark, or -1
+(defn- nfc-find [base :i64 mark :i64] :i64
+  (let [key (+ (* base 16384) mark)
+        r0 (nfc-scan (nfc-t0) key)]
+    (if (>= r0 0) r0
+      (let [r1 (nfc-scan (nfc-t1) key)]
+    (if (>= r1 0) r1
+      (let [r2 (nfc-scan (nfc-t2) key)]
+    (if (>= r2 0) r2
+      (let [r3 (nfc-scan (nfc-t3) key)]
+        r3))))))))
+
+
+;; the special tokens <|startoftext|> and <|endoftext|> written in a prompt are matched case-insensitively (the Hugging Face tokenizer matches added
+;; tokens on the normalized text) and stand for the ids BOS (1) / EOS (2), splitting the text around them
+(defn- match-lit [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s))
+        n (vector-count v)]
+    (if (> (+ i n) e) 0
+      (loop [k 0]
+        (if (= k n) 1
+          (let [b (byte-at f (+ p (+ i k)))
+                l (if (within b 65 90) (+ b 32) b)]
+            (if (= l (vector-at v k)) (recur (+ k 1)) 0)))))))
+(defn- special-at [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 e :i64] :i64
+  (if (= (byte-at f (+ p i)) 60)
+    (if (= (match-lit f p i e "<|startoftext|>") 1) 1 (if (= (match-lit f p i e "<|endoftext|>") 1) 2 0))
+    0))
+
+(defn- bad-utf8 [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64] :i64 (refuse-text f R "refused: invalid UTF-8 in a prompt\n"))
+;; decode the UTF-8 sequence at p: code point * 8 + length; refuses invalid UTF-8 (overlong forms, surrogates, truncation)
+(defn- utf8-at [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 i :i64 e :i64] :i64
+  (let [b0 (byte-at f (+ p i))
+        b1 (if (< (+ i 1) e) (byte-at f (+ p (+ i 1))) 0)
+        b2 (if (< (+ i 2) e) (byte-at f (+ p (+ i 2))) 0)
+        b3 (if (< (+ i 3) e) (byte-at f (+ p (+ i 3))) 0)
+        d0 0]
+    (cond
+      (< b0 128) (+ (* b0 8) 1)
+      (and (within b0 194 223) (= (bit-and b1 192) 128)) (+ (* (+ (* (bit-and b0 31) 64) (bit-and b1 63)) 8) 2)
+      (and (within b0 224 239) (and (= (bit-and b1 192) 128) (= (bit-and b2 192) 128)))
+      (let [c (+ (* (+ (* (bit-and b0 15) 64) (bit-and b1 63)) 64) (bit-and b2 63))]
+        (if (or (< c 2048) (within c 55296 57343)) (bad-utf8 f R) (+ (* c 8) 3)))
+      (and (within b0 240 244) (and (= (bit-and b1 192) 128) (and (= (bit-and b2 192) 128) (= (bit-and b3 192) 128))))
+      (let [c (+ (* (+ (* (+ (* (bit-and b0 7) 64) (bit-and b1 63)) 64) (bit-and b2 63)) 64) (bit-and b3 63))]
+        (if (or (< c 65536) (> c 1114111)) (bad-utf8 f R) (+ (* c 8) 4)))
+      :else (bad-utf8 f R))))
+
+;; UTF-8 of code point c at q; returns its length
+(defn- utf8-put [f [:fn [[:i64 :i64 :i64] :i64]] q :i64 c :i64] :i64
+  (cond
+    (< c 128) (let [u (poke8 f q c)] 1)
+    (< c 2048) (let [u (poke8 f q (+ 192 (i64-shift-right c 6))) v (poke8 f (+ q 1) (+ 128 (bit-and c 63)))] 2)
+    (< c 65536) (let [u (poke8 f q (+ 224 (i64-shift-right c 12))) v (poke8 f (+ q 1) (+ 128 (bit-and (i64-shift-right c 6) 63))) w (poke8 f (+ q 2) (+ 128 (bit-and c 63)))] 3)
+    :else (let [u (poke8 f q (+ 240 (i64-shift-right c 18))) v (poke8 f (+ q 1) (+ 128 (bit-and (i64-shift-right c 12) 63)))
+                w (poke8 f (+ q 2) (+ 128 (bit-and (i64-shift-right c 6) 63))) x (poke8 f (+ q 3) (+ 128 (bit-and c 63)))] 4)))
+
+;; the byte-level symbols of cps [a, a+len) of CP into wbuf (each byte of the UTF-8 text as its mapped character, UTF-8 encoded),
+;; OFF[k] the start of symbol k; returns the byte length of wbuf's content, the symbol count goes to OFF[ns] slot via the caller
+(defn- word-symbols [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 CP :vector-i64 a :i64 len :i64 wbuf :i64 tmp :i64 OFF :vector-i64] :vector-i64
+  (let [nsb (loop [k 0 q 0]
+              (if (= k len) q
+                (recur (+ k 1) (+ q (utf8-put f (+ tmp q) (vector-at CP (+ a k)))))))
+        r (loop [m 0 q 0]
+            (if (= m nsb) (vector-i64 q nsb)
+              (let [c (bmap (byte-at f (+ tmp m)))
+                    u (vector-assoc! OFF m q)
+                    nbytes (if (< c 128) 1 2)
+                    w1 (if (< c 128) (poke8 f (+ wbuf q) c) (let [x (poke8 f (+ wbuf q) (+ 192 (i64-shift-right c 6)))] (poke8 f (+ wbuf (+ q 1)) (+ 128 (bit-and c 63)))))]
+                (recur (+ m 1) (+ q nbytes)))))
+        e (vector-assoc! OFF nsb (vector-at r 0))]
+    r))
+
+;; ---- prompt weighting (ComfyUI's escape_important / parse_parentheses / token_weights), weights as fixed point with 16 fractional bits ----
+;; A prompt is cut into segments (start, end, weight): the pieces between parentheses and inside them, nested as in ComfyUI: "(x)" multiplies the
+;; weight by 1.1, "(x:1.3)" sets it to 1.3. "\\(" and "\\)" are ordinary characters. Each segment is tokenized on its own (words never join across a segment).
+(defn- wsent [] :i64 -4611686018427387904)
+(defn- is-pyspace [b :i64] :bool (or (= b 32) (or (within b 9 13) (within b 28 31))))
+;; the ASCII letters of a trimmed byte range equal to the lower-case word s (nan, inf, infinity), ignoring a sign
+(defn- word-eq [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :i64 e :i64 w :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 w))
+        n (vector-count v)]
+    (if (= (- e s) n)
+      (loop [k 0] (if (= k n) 1 (let [b (byte-at f (+ p (+ s k)))
+                                      l (if (within b 65 90) (+ b 32) b)]
+                                  (if (= l (vector-at v k)) (recur (+ k 1)) 0))))
+      0)))
+;; Python's float() of the bytes [s, e), as a fixed-point weight; wsent when it is not a number (ComfyUI then keeps 1.1 x the weight and the text)
+;; and a refusal for the forms this program does not read (nan, inf, underscores, more than 12 digits, huge exponents)
+(defn- parse-fp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s0 :i64 e0 :i64] :i64
+  (let [s (loop [i s0] (if (and (< i e0) (is-pyspace (byte-at f (+ p i)))) (recur (+ i 1)) i))
+        e (loop [i e0] (if (and (> i s) (is-pyspace (byte-at f (+ p (- i 1))))) (recur (- i 1)) i))
+        neg (if (and (< s e) (= (byte-at f (+ p s)) 45)) 1 0)
+        s1 (if (and (< s e) (or (= (byte-at f (+ p s)) 45) (= (byte-at f (+ p s)) 43))) (+ s 1) s)
+        spec (if (or (= (word-eq f p s1 e "nan") 1) (or (= (word-eq f p s1 e "inf") 1) (= (word-eq f p s1 e "infinity") 1))) 1 0)
+        und (if (and (> (loop [i s a 0] (if (>= i e) a (recur (+ i 1) (if (= (byte-at f (+ p i)) 95) 1 a)))) 0)
+                     (= (loop [i s a 1] (if (>= i e) a (let [b (byte-at f (+ p i))] (recur (+ i 1) (if (or (within b 48 57) (or (= b 95) (or (= b 46) (or (= b 101) (or (= b 69) (or (= b 43) (= b 45))))))) a 0))))) 1))
+              1 0)
+        u0 (if (or (= spec 1) (= und 1)) (refuse-text f R "refused: a weight written as nan, inf or with underscores\n") 0)
+        ;; digits before the point
+        ie (loop [i s1] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        has-dot (if (and (< ie e) (= (byte-at f (+ p ie)) 46)) 1 0)
+        fs (if (= has-dot 1) (+ ie 1) ie)
+        fe (loop [i fs] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        nd (+ (- ie s1) (- fe fs))
+        has-exp (if (and (< fe e) (or (= (byte-at f (+ p fe)) 101) (= (byte-at f (+ p fe)) 69))) 1 0)
+        xs (if (= has-exp 1) (+ fe 1) fe)
+        xneg (if (and (= has-exp 1) (and (< xs e) (= (byte-at f (+ p xs)) 45))) 1 0)
+        xd0 (if (and (= has-exp 1) (and (< xs e) (or (= (byte-at f (+ p xs)) 45) (= (byte-at f (+ p xs)) 43)))) (+ xs 1) xs)
+        xe (loop [i xd0] (if (and (< i e) (within (byte-at f (+ p i)) 48 57)) (recur (+ i 1)) i))
+        ok (if (and (> nd 0) (and (= xe e) (or (= has-exp 0) (> xe xd0)))) 1 0)]
+    (if (= ok 0) (wsent)
+      (let [nint (- ie s1)
+            nfrac (- fe fs)
+            ;; the mantissa digits as one integer (at most 12 of them)
+            u1 (if (> nd 12) (refuse-text f R "refused: a weight with more than 12 digits\n") 0)
+            m (loop [i s1 acc 0]
+                (if (>= i fe) acc
+                  (let [b (byte-at f (+ p i))]
+                    (if (within b 48 57) (recur (+ i 1) (+ (* acc 10) (- b 48))) (recur (+ i 1) acc)))))
+            xv (loop [i xd0 acc 0] (if (>= i xe) acc (recur (+ i 1) (+ (* acc 10) (- (byte-at f (+ p i)) 48)))))
+            u2 (if (> xv 30) (refuse-text f R "refused: a weight with a huge exponent\n") 0)
+            dexp (- (if (= xneg 1) (- 0 xv) xv) nfrac)
+            val (if (>= dexp 0)
+                  (let [pw (loop [k 0 a 1] (if (= k dexp) a (recur (+ k 1) (* a 10))))
+                        u3 (if (> (* m pw) 1000000) (refuse-text f R "refused: a weight above 1,000,000\n") 0)]
+                    (* (* m pw) 65536))
+                  (if (< dexp -18) 0
+                    (let [pw (loop [k 0 a 1] (if (= k (- 0 dexp)) a (recur (+ k 1) (* a 10))))]
+                      (quot (+ (* m 65536) (quot pw 2)) pw))))]
+        (if (= neg 1) (- 0 val) val)))))
+
+;; a weight times 1.1
+(defn- fp-mul11 [w :i64] :i64 (quot (+ (* w 11) (if (>= w 0) 5 -5)) 10))
+
+;; ComfyUI's parse_parentheses on [s, e): pieces (start, end, is_paren) into PCS, returns the count
+(defn- find-pieces [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s :i64 e :i64 PCS :vector-i64] :i64
+  (let [r (loop [i s cur -1 level 0 lastreal 0 n 0]
+            (if (>= i e)
+              (if (>= cur 0)
+                (let [u (vector-assoc! PCS (* n 3) cur) v (vector-assoc! PCS (+ (* n 3) 1) e)
+                      w (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (- e cur) 2) (and (= (byte-at f (+ p cur)) 40) (= lastreal 1))) 1 0))]
+                  (+ n 1))
+                n)
+              (let [b (byte-at f (+ p i))
+                    nb (if (< (+ i 1) e) (byte-at f (+ p (+ i 1))) 0)
+                    esc (if (and (= b 92) (or (= nb 40) (= nb 41))) 1 0)
+                    w (if (= esc 1) 2 1)
+                    u0 (if (> (+ n 2) 300) (refuse-text f R "refused: more than 300 weighted pieces in a prompt\n") 0)]
+                (cond
+                  (and (= esc 0) (= b 40))
+                  (if (= level 0)
+                    (if (>= cur 0)
+                      (let [u (vector-assoc! PCS (* n 3) cur) v (vector-assoc! PCS (+ (* n 3) 1) i)
+                            x (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (- i cur) 2) (and (= (byte-at f (+ p cur)) 40) (= lastreal 1))) 1 0))]
+                        (recur (+ i 1) i 1 0 (+ n 1)))
+                      (recur (+ i 1) i 1 0 n))
+                    (recur (+ i 1) (if (>= cur 0) cur i) (+ level 1) 0 n))
+                  (and (= esc 0) (= b 41))
+                  (if (= (- level 1) 0)
+                    (let [c0 (if (>= cur 0) cur i)
+                          u (vector-assoc! PCS (* n 3) c0) v (vector-assoc! PCS (+ (* n 3) 1) (+ i 1))
+                          x (vector-assoc! PCS (+ (* n 3) 2) (if (and (>= (+ (- i c0) 1) 2) (= (byte-at f (+ p c0)) 40)) 1 0))]
+                      (recur (+ i 1) -1 0 1 (+ n 1)))
+                    (recur (+ i 1) (if (>= cur 0) cur i) (- level 1) 1 n))
+                  :else (recur (+ i w) (if (>= cur 0) cur i) level 0 n)))))]
+    r))
+
+;; the segments (start, end, weight) of the prompt [s, e), in order, into SEG; STK and PCS are scratch; returns the count
+(defn- segments [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 s :i64 e :i64 SEG :vector-i64 STK :vector-i64 PCS :vector-i64] :i64
+  (if (= 1 0)
+    (let [a (vector-assoc! SEG 0 s) b (vector-assoc! SEG 1 e) c (vector-assoc! SEG 2 65536)] 1)
+  (let [u (vector-assoc! STK 0 s) v (vector-assoc! STK 1 e) w (vector-assoc! STK 2 65536) x (vector-assoc! STK 3 0)]
+    (loop [sp 1 n 0]
+      (if (= sp 0) n
+        (let [t (* (- sp 1) 4)
+              ts (vector-at STK t) te (vector-at STK (+ t 1)) tw (vector-at STK (+ t 2)) tk (vector-at STK (+ t 3))]
+          (if (= tk 1)
+            ;; an emit entry: the segment itself
+            (let [a (vector-assoc! SEG (* n 3) ts) b (vector-assoc! SEG (+ (* n 3) 1) te) c (vector-assoc! SEG (+ (* n 3) 2) tw)
+                  u0 (if (>= n 600) (refuse-text f R "refused: more than 600 segments in a prompt\n") 0)]
+              (recur (- sp 1) (+ n 1)))
+            ;; a parse entry: cut it into pieces and push them back to front
+            (let [np (find-pieces f R p ts te PCS)
+                  sp2 (loop [k (- np 1) q (- sp 1)]
+                        (if (< k 0) q
+                          (let [ps (vector-at PCS (* k 3)) pe (vector-at PCS (+ (* k 3) 1)) pp (vector-at PCS (+ (* k 3) 2))
+                                u1 (if (>= q 395) (refuse-text f R "refused: prompt parentheses nested too deeply\n") 0)]
+                            (if (= pp 1)
+                              (let [is (+ ps 1) ie (- pe 1)
+                                    colon (loop [i (- ie 1)] (if (< i is) -1 (if (= (byte-at f (+ p i)) 58) i (recur (- i 1)))))
+                                    fp (if (> (- colon is) 0) (parse-fp f R p (+ colon 1) ie) (wsent))
+                                    w2 (if (= fp (wsent)) (fp-mul11 tw) fp)
+                                    e2 (if (= fp (wsent)) ie colon)
+                                    a (vector-assoc! STK (* q 4) is) b (vector-assoc! STK (+ (* q 4) 1) e2)
+                                    c (vector-assoc! STK (+ (* q 4) 2) w2) d (vector-assoc! STK (+ (* q 4) 3) 0)]
+                                (recur (- k 1) (+ q 1)))
+                              (let [a (vector-assoc! STK (* q 4) ps) b (vector-assoc! STK (+ (* q 4) 1) pe)
+                                    c (vector-assoc! STK (+ (* q 4) 2) tw) d (vector-assoc! STK (+ (* q 4) 3) 1)]
+                                (recur (- k 1) (+ q 1)))))))]
+              (recur sp2 n)))))))))
+
+;; the code points of the bytes [s, e) (with "\\(" and "\\)" as plain parentheses) into CP / CL / WT from index k, lower-cased, classified,
+;; NFC-composed, special tokens marked; then one boundary entry (class 0) so that nothing joins across a segment; returns the new k
+(defn- decode-seg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 s :i64 e :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k0 :i64 w :i64 g :i64] :i64
+  (let [k (loop [q s k k0]
+            (if (>= q e) k
+              (let [b0 (byte-at f (+ pbuf q))
+                    nb (if (< (+ q 1) e) (byte-at f (+ pbuf (+ q 1))) 0)
+                    esc (if (and (= 1 1) (and (= b0 92) (or (= nb 40) (= nb 41)))) 1 0)
+                    d (if (= esc 1) (+ (* nb 8) 2) (utf8-at f R pbuf q e))
+                    sp (if (= esc 1) 0 (special-at f pbuf q e))
+                    c (if (> sp 0) (+ 2097152 sp) (lcp (i64-shift-right d 3)))
+                    u0 (if (>= k 8190) (refuse-text f R "refused: a prompt line longer than 8190 characters\n") 0)
+                    m (if (or (within c 768 879) (within c 12441 12442)) 1 0)
+                    pc (if (and (= m 1) (> k 0)) (nfc-find (vector-at CP (- k 1)) c) -1)
+                    u2 (if (and (= m 1) (< pc 0)) (refuse-text f R "refused: a combining mark that does not compose with the character before it\n") 0)
+                    cl (if (> sp 0) 5 (if (= m 1) 1 (cls c)))
+                    u1 (if (= cl 4) (refuse-text f R "refused: a character outside the supported set (ASCII, Latin-1, Latin Extended-A, CJK, kana, Hangul, fullwidth forms, common symbols and emoji)\n") 0)
+                    k2 (if (= m 1) (- k 1) k)
+                    a (vector-assoc! CP k2 (if (= m 1) pc c)) b (vector-assoc! CL k2 cl) x (vector-assoc! WT k2 w) y (vector-assoc! SGI k2 g)]
+                (recur (+ q (if (> sp 0) (if (= sp 1) 15 13) (bit-and d 7))) (+ k2 1)))))
+        a (vector-assoc! CP k 32) b (vector-assoc! CL k 0) x (vector-assoc! WT k 0) y (vector-assoc! SGI k g)]
+    (+ k 1)))
+
+
+;; ComfyUI's batching of the token groups (one group per segment) into blocks of 77: BOS, tokens, EOS, padding. A group of fewer than 8 tokens is kept
+;; whole (the block is closed with EOS and padding and a new one started when it does not fit); a longer group is cut where the block is full.
+;; OUT / OUTW / OUTG: the tokens, their weights and group numbers (count in OUT[0], token k at index k + 1); fills IDS / WTS (block * 77 + position)
+;; for at most 4 blocks and returns the block count
+(defn- batch-blocks [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 OUT :vector-i64 OUTW :vector-i64 OUTG :vector-i64 IDS :vector-i64 WTS :vector-i64
+                     bos :i64 eos :i64 pad :i64] :i64
+  (let [cnt (vector-at OUT 0)
+        u0 (vector-assoc! IDS 0 bos) u1 (vector-assoc! WTS 0 65536)
+        r (loop [p 0 c 0 len 1]
+            (if (>= p cnt)
+              (vector-i64 c len)
+              (let [g (vector-at OUTG (+ 1 p))
+                    e (loop [q p] (if (and (< q cnt) (= (vector-at OUTG (+ 1 q)) g)) (recur (+ q 1)) q))
+                    st (loop [q p] (if (and (> q 0) (= (vector-at OUTG q) g)) (recur (- q 1)) q))
+                    large (if (>= (- e st) 8) 1 0)
+                    base (+ (* c 77) len)
+                    u2 (if (>= c 3) (refuse-text f R "refused: a prompt of more than 4 blocks of 75 tokens\n") 0)]
+                (if (> (+ (- e p) len) 76)
+                  (let [rem (- 76 len)]
+                    (if (= large 1)
+                      (let [x (loop [j 0] (if (= j rem) 0 (let [a (vector-assoc! IDS (+ base j) (vector-at OUT (+ 1 (+ p j))))
+                                                                b (vector-assoc! WTS (+ base j) (vector-at OUTW (+ 1 (+ p j))))] (recur (+ j 1)))))
+                            a (vector-assoc! IDS (+ (* c 77) 76) eos) b (vector-assoc! WTS (+ (* c 77) 76) 65536)
+                            a2 (vector-assoc! IDS (* (+ c 1) 77) bos) b2 (vector-assoc! WTS (* (+ c 1) 77) 65536)]
+                        (recur (+ p rem) (+ c 1) 1))
+                      (let [a (vector-assoc! IDS base eos) b (vector-assoc! WTS base 65536)
+                            x (loop [j (+ len 1)] (if (>= j 77) 0 (let [a1 (vector-assoc! IDS (+ (* c 77) j) pad) b1 (vector-assoc! WTS (+ (* c 77) j) 65536)] (recur (+ j 1)))))
+                            a2 (vector-assoc! IDS (* (+ c 1) 77) bos) b2 (vector-assoc! WTS (* (+ c 1) 77) 65536)]
+                        (recur p (+ c 1) 1))))
+                  (let [x (loop [j 0] (if (= j (- e p)) 0 (let [a (vector-assoc! IDS (+ base j) (vector-at OUT (+ 1 (+ p j))))
+                                                                b (vector-assoc! WTS (+ base j) (vector-at OUTW (+ 1 (+ p j))))] (recur (+ j 1)))))]
+                    (recur e c (+ len (- e p))))))))
+        c (vector-at r 0)
+        len (vector-at r 1)
+        a (vector-assoc! IDS (+ (* c 77) len) eos) b (vector-assoc! WTS (+ (* c 77) len) 65536)
+        x (loop [j (+ len 1)] (if (>= j 77) 0 (let [a1 (vector-assoc! IDS (+ (* c 77) j) pad) b1 (vector-assoc! WTS (+ (* c 77) j) 65536)] (recur (+ j 1)))))]
+    (+ c 1)))
+
+;; ---- textual-inversion embeddings (ComfyUI's "embedding:name" words), slice 48 ----
+;; A word "embedding:name" (at the start of a segment or after whitespace) is replaced by the rows of the file name / name.safetensors in the embedding
+;; directory (keys clip_l and clip_g, F32 or F16, the same number of rows, at most 32 in all); the text that follows the name is tokenized on its own.
+(defn- embdir [] :string "@EMBDIR@")
+(defn- is-asp [b :i64] :bool (or (= b 32) (or (within b 9 13) (within b 28 31))))
+
+;; first index of the literal lit in [s, e), or -1
+(defn- sub-find [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 s :i64 e :i64 lit :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 lit))
+        n (vector-count v)]
+    (loop [i s]
+      (if (> (+ i n) e) -1
+        (if (= (loop [k 0] (if (= k n) 1 (if (= (byte-at f (+ p (+ i k))) (vector-at v k)) (recur (+ k 1)) 0))) 1) i (recur (+ i 1)))))))
+
+;; write dir + "/" + name + ext as a C string at PB
+(defn- mk-path! [f [:fn [[:i64 :i64 :i64] :i64]] PB :i64 name :i64 len :i64 ext :string] :i64
+  (let [dn (string-length (embdir))
+        u0 (put-text f PB (embdir))
+        u1 (poke8 f (+ PB dn) 47)
+        u2 (loop [k 0] (if (= k len) 0 (let [x (poke8 f (+ PB (+ dn (+ 1 k))) (byte-at f (+ name k)))] (recur (+ k 1)))))
+        u3 (put-text f (+ PB (+ dn (+ 1 len))) ext)]
+    0))
+
+;; the descriptor of path PB if it is a regular file, else -1
+(defn- open-reg [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 PB :i64] :i64
+  (let [fd (cc f (sym f "open") PB 0 0 0 0)]
+    (if (< fd 0) -1
+      (let [sb (cc f (vector-at R 3) 160 0 0 0 0)
+            r (cc f (sym f "fstat") fd sb 0 0 0)
+            mode (bit-and (peek f (+ sb 4)) 65535)]
+        (if (and (= r 0) (= (bit-and mode 61440) 32768)) fd (let [x (cc f (sym f "close") fd 0 0 0 0)] -1))))))
+
+;; ComfyUI's search order: the name itself, then .safetensors, .pt, .bin; returns descriptor * 4 + kind (1 = safetensors, 2 = other), or -1
+(defn- emb-find-file [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 name :i64 len :i64] :i64
+  (let [PB (cc f (vector-at R 3) 1200 0 0 0 0)
+        m0 (mk-path! f PB name len "")
+        fd0 (open-reg f R PB)
+        endsst (if (and (>= len 12) (= (sub-find f name (- len 12) len ".safetensors") (- len 12))) 1 0)]
+    (if (>= fd0 0) (+ (* fd0 4) (if (= endsst 1) 1 2))
+      (let [m1 (mk-path! f PB name len ".safetensors")
+            fd1 (open-reg f R PB)]
+        (if (>= fd1 0) (+ (* fd1 4) 1)
+          (let [m2 (mk-path! f PB name len ".pt")
+                fd2 (open-reg f R PB)]
+            (if (>= fd2 0) (+ (* fd2 4) 2)
+              (let [m3 (mk-path! f PB name len ".bin")
+                    fd3 (open-reg f R PB)]
+                (if (>= fd3 0) (+ (* fd3 4) 2) -1)))))))))
+
+;; the integers of the list that starts after the "[" at i, into OUTV (at most 4), count returned
+(defn- parse-ints [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 OUTV :vector-i64] :i64
+  (loop [j i k 0 cur 0 have 0]
+    (let [b (byte-at f (+ p j))]
+      (cond
+        (within b 48 57) (recur (+ j 1) k (+ (* cur 10) (- b 48)) 1)
+        (= b 44) (let [u (vector-assoc! OUTV k cur)] (recur (+ j 1) (+ k 1) 0 0))
+        :else (if (= have 1) (let [u (vector-assoc! OUTV k cur)] (+ k 1)) k)))))
+
+;; half precision bits to float32 bits
+(defn- half-bits [h :i64] :i64
+  (let [sg (i64-shift-left (bit-and (i64-shift-right h 15) 1) 31)
+        ex (bit-and (i64-shift-right h 10) 31)
+        mn (bit-and h 1023)]
+    (cond
+      (= ex 31) (bit-or sg (bit-or 2139095040 (i64-shift-left mn 13)))
+      (> ex 0) (bit-or sg (bit-or (i64-shift-left (+ ex 112) 23) (i64-shift-left mn 13)))
+      (= mn 0) sg
+      :else (loop [m mn e 113]
+              (if (>= m 1024) (bit-or sg (bit-or (i64-shift-left e 23) (i64-shift-left (bit-and m 1023) 13)))
+                (recur (i64-shift-left m 1) (- e 1)))))))
+
+;; the rows of the tensor `key` of a safetensors header: checks dtype (F32 or F16) and width, copies the rows to dst + row * width * 4 when dst is set; returns the row count
+(defn- emb-tensor! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 hdr :i64 hlen :i64 key :string width :i64 dst :i64 base :i64 IV :vector-i64] :i64
+  (let [ks (sub-find f hdr 0 hlen key)
+        u0 (if (< ks 0) (refuse-text f R "refused: an embedding without both clip_l and clip_g\n") 0)
+        oe (sub-find f hdr ks hlen "}")
+        f32 (sub-find f hdr ks oe "\"F32\"")
+        f16 (sub-find f hdr ks oe "\"F16\"")
+        u1 (if (and (< f32 0) (< f16 0)) (refuse-text f R "refused: an embedding that is neither F32 nor F16\n") 0)
+        sh (sub-find f hdr ks oe "\"shape\":[")
+        u2 (if (< sh 0) (refuse-text f R "refused: an embedding header without a shape\n") 0)
+        rank (parse-ints f hdr (+ sh 9) IV)
+        rows (if (= rank 1) 1 (if (= rank 2) (vector-at IV 0) (refuse-text f R "refused: an embedding of rank other than 1 or 2\n")))
+        dim (vector-at IV (- rank 1))
+        u3 (if (= dim width) 0 (refuse-text f R "refused: an embedding of the wrong width\n"))
+        od (sub-find f hdr ks oe "\"data_offsets\":[")
+        u4 (if (< od 0) (refuse-text f R "refused: an embedding header without offsets\n") 0)
+        no (parse-ints f hdr (+ od 16) IV)
+        off (+ (+ 8 hlen) (vector-at IV 0))
+        u5 (if (> (+ base rows) 32) (refuse-text f R "refused: more than 32 embedding rows in a prompt\n") 0)
+        u6 (if (= dst 0) 0
+             (if (>= f32 0)
+               (cc f (sym f "pread") fd (+ dst (* (* base width) 4)) (* (* rows width) 4) off 0)
+               (let [tmp (cc f (vector-at R 3) (+ (* (* rows width) 2) 16) 0 0 0 0)
+                     g (cc f (sym f "pread") fd tmp (* (* rows width) 2) off 0)
+                     o (+ dst (* (* base width) 4))]
+                 (loop [i 0]
+                   (if (= i (* rows width)) 0
+                     (let [hb (bit-or (byte-at f (+ tmp (* i 2))) (i64-shift-left (byte-at f (+ tmp (+ (* i 2) 1))) 8))
+                           fb (half-bits hb)
+                           w0 (poke8 f (+ o (* i 4)) (bit-and fb 255))
+                           w1 (poke8 f (+ o (+ (* i 4) 1)) (bit-and (i64-shift-right fb 8) 255))
+                           w2 (poke8 f (+ o (+ (* i 4) 2)) (bit-and (i64-shift-right fb 16) 255))
+                           w3 (poke8 f (+ o (+ (* i 4) 3)) (bit-and (i64-shift-right fb 24) 255))]
+                       (recur (+ i 1))))))))]
+    rows))
+
+;; the registry EM: [0] embeddings, [1] rows so far, then (name hash, first row, rows) per embedding. Returns the first row of the embedding `name`, loading
+;; it (and, when the tables EM[3] / EM[4] are set, copying its rows there as float32) on first use; -1 when there is no such file
+(defn- emb-load! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 EM :vector-i64 name :i64 len :i64] :i64
+  (let [bad (if (or (= len 0) (or (= (byte-at f name) 47) (>= (sub-find f name 0 len "..") 0))) 1 0)]
+    (if (= bad 1) -1
+      (let [h (fnv f name len)
+            reg (loop [i 0] (if (= i (vector-at EM 0)) -1 (if (= (vector-at EM (+ 2 (* i 3))) h) i (recur (+ i 1)))))]
+        (if (>= reg 0) (vector-at EM (+ 3 (* reg 3)))
+          (let [r (emb-find-file f R name len)]
+            (if (< r 0) -1
+              (let [fd (i64-shift-right r 2)
+                    u0 (if (= (bit-and r 3) 1) 0 (refuse-text f R "refused: an embedding file that is not .safetensors\n"))
+                    lb (cc f (vector-at R 3) 16 0 0 0 0)
+                    u1 (cc f (sym f "pread") fd lb 8 0 0)
+                    hlen (peek f lb)
+                    hdr (cc f (vector-at R 3) (+ hlen 16) 0 0 0 0)
+                    u2 (cc f (sym f "pread") fd hdr hlen 8 0)
+                    IV (vector-alloc 8)
+                    base (vector-at EM 1)
+                    nl (emb-tensor! f R fd hdr hlen "\"clip_l\"" 768 (vector-at EM 67) base IV)
+                    ng (emb-tensor! f R fd hdr hlen "\"clip_g\"" 1280 (vector-at EM 68) base IV)
+                    u3 (if (= nl ng) 0 (refuse-text f R "refused: an embedding whose clip_l and clip_g have different numbers of rows\n"))
+                    u4 (if (> (+ base nl) 32) (refuse-text f R "refused: more than 32 embedding rows in a prompt\n") 0)
+                    u5 (if (>= (vector-at EM 0) 15) (refuse-text f R "refused: more than 15 different embeddings\n") 0)
+                    q (+ 2 (* (vector-at EM 0) 3))
+                    a (vector-assoc! EM q h) b (vector-assoc! EM (+ q 1) base) c (vector-assoc! EM (+ q 2) nl)
+                    d (vector-assoc! EM 0 (+ (vector-at EM 0) 1)) e (vector-assoc! EM 1 (+ base nl))
+                    cl (cc f (sym f "close") fd 0 0 0 0)]
+                base))))))))
+
+;; rows of the embedding whose first row is base
+(defn- emb-rows [EM :vector-i64 base :i64] :i64
+  (loop [i 0] (if (= i (vector-at EM 0)) 0 (if (= (vector-at EM (+ 3 (* i 3))) base) (vector-at EM (+ 4 (* i 3))) (recur (+ i 1))))))
+
+;; one text group over the bytes [s, e) of src
+(defn- text-group! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 src :i64 s :i64 e :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                   EM :vector-i64] :i64
+  (let [g (vector-at EM 64)
+        u (vector-assoc! EM 64 (+ g 1))]
+    (decode-seg f R src s e CP CL WT SGI k w g)))
+
+;; one group of n embedding rows (class 6, the code point is the row), then a boundary
+(defn- emb-group! [CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64 EM :vector-i64 base :i64 n :i64 w :i64] :i64
+  (let [g (vector-at EM 64)
+        u (vector-assoc! EM 64 (+ g 1))
+        d (loop [j 0] (if (= j n) 0 (let [a (vector-assoc! CP (+ k j) (+ base j)) b (vector-assoc! CL (+ k j) 6) c (vector-assoc! WT (+ k j) w) e (vector-assoc! SGI (+ k j) g)] (recur (+ j 1)))))
+        a (vector-assoc! CP (+ k n) 32) b (vector-assoc! CL (+ k n) 0) c (vector-assoc! WT (+ k n) 0) e (vector-assoc! SGI (+ k n) g)]
+    (+ k (+ n 1))))
+
+;; ComfyUI's handling of one "embedding:..." word [ps, pe) of weight w (_try_get_embedding and the code after it)
+(defn- emb-word! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 ps :i64 pe :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                  EM :vector-i64] :i64
+  (let [r0 (+ ps 10)
+        a0 (loop [i r0] (if (and (< i pe) (= (byte-at f (+ pbuf i)) 10)) (recur (+ i 1)) i))
+        e2 (loop [i pe] (if (and (> i a0) (= (byte-at f (+ pbuf (- i 1))) 10)) (recur (- i 1)) i))
+        n0 (loop [i a0] (if (and (< i e2) (is-asp (byte-at f (+ pbuf i)))) (recur (+ i 1)) i))
+        u0 (if (>= n0 e2) (refuse-text f R "refused: an embedding word without a name\n") 0)
+        n1 (loop [i n0] (if (and (< i e2) (not (is-asp (byte-at f (+ pbuf i))))) (recur (+ i 1)) i))
+        ;; the rest of the word, its tokens joined by single spaces, into the scratch buffer
+        xb (vector-at EM 65)
+        x0 (vector-at EM 66)
+        xe (loop [i n1 x x0 first 1]
+             (let [t0 (loop [q i] (if (and (< q e2) (is-asp (byte-at f (+ pbuf q)))) (recur (+ q 1)) q))]
+               (if (>= t0 e2) x
+                 (let [t1 (loop [q t0] (if (and (< q e2) (not (is-asp (byte-at f (+ pbuf q))))) (recur (+ q 1)) q))
+                       sp1 (if (= first 1) 0 (poke8 f (+ xb x) 32))
+                       x1 (if (= first 1) x (+ x 1))
+                       cp1 (loop [q 0] (if (= q (- t1 t0)) 0 (let [y1 (poke8 f (+ xb (+ x1 q)) (byte-at f (+ pbuf (+ t0 q))))] (recur (+ q 1)))))]
+                   (recur t1 (+ x1 (- t1 t0)) 0)))))
+        ;; a name with "<" or "[" in it ends there, the rest goes in front of the leftover
+        cut (loop [i n0] (if (>= i n1) -1 (if (or (= (byte-at f (+ pbuf i)) 60) (= (byte-at f (+ pbuf i)) 91)) i (recur (+ i 1)))))
+        nameend (if (< cut 0) n1 cut)
+        lt (if (< cut 0) (- xe x0)
+             (let [rest (- xe x0)
+                   shift (loop [q (- rest 1)] (if (< q 0) 0 (let [y2 (poke8 f (+ xb (+ x0 (+ q (+ (- n1 cut) (if (> rest 0) 1 0))))) (byte-at f (+ xb (+ x0 q))))] (recur (- q 1)))))
+                   head (loop [q 0] (if (= q (- n1 cut)) 0 (let [y3 (poke8 f (+ xb (+ x0 q)) (byte-at f (+ pbuf (+ cut q))))] (recur (+ q 1)))))
+                   sp2 (if (> rest 0) (poke8 f (+ xb (+ x0 (- n1 cut))) 32) 0)]
+               (+ (- n1 cut) (if (> rest 0) (+ rest 1) 0))))
+        base (emb-load! f R EM (+ pbuf n0) (- nameend n0))]
+    (if (>= base 0)
+      (let [n (emb-rows EM base)
+            k2 (emb-group! CP CL WT SGI k EM base n w)
+            u1 (vector-assoc! EM 66 (+ x0 lt))]
+        (if (> lt 0) (text-group! f R xb x0 (+ x0 lt) w CP CL WT SGI k2 EM) k2))
+      ;; not found: with commas around the name, ComfyUI tries the name without them and glues the commas in front of the leftover (this also when that fails)
+      (let [cs (loop [i n0] (if (and (< i nameend) (= (byte-at f (+ pbuf i)) 44)) (recur (+ i 1)) i))
+            ce (loop [i nameend] (if (and (> i cs) (= (byte-at f (+ pbuf (- i 1))) 44)) (recur (- i 1)) i))
+            slen (- ce cs)
+            tlen (- nameend n0)]
+        (if (< slen tlen)
+          (let [b2 (emb-load! f R EM (+ pbuf cs) slen)
+                ;; leftover := name[len(stripped):] + " " + leftover
+                sufflen (- tlen slen)
+                ox (+ x0 lt)
+                nbuf (+ ox 0)
+                c1 (loop [q 0] (if (= q sufflen) 0 (let [y4 (poke8 f (+ xb (+ nbuf q)) (byte-at f (+ pbuf (+ n0 (+ slen q)))))] (recur (+ q 1)))))
+                c2 (poke8 f (+ xb (+ nbuf sufflen)) 32)
+                c3 (loop [q 0] (if (= q lt) 0 (let [y5 (poke8 f (+ xb (+ nbuf (+ sufflen (+ 1 q)))) (byte-at f (+ xb (+ x0 q))))] (recur (+ q 1)))))
+                tot (+ sufflen (+ 1 lt))
+                u2 (vector-assoc! EM 66 (+ nbuf tot))
+                k3 (if (>= b2 0) (emb-group! CP CL WT SGI k EM b2 (emb-rows EM b2) w) k)]
+            (text-group! f R xb nbuf (+ nbuf tot) w CP CL WT SGI k3 EM))
+          (let [u3 (vector-assoc! EM 66 (+ x0 lt))]
+            (if (> lt 0) (text-group! f R xb x0 (+ x0 lt) w CP CL WT SGI k EM) k)))))))
+
+;; a segment [s, e): cut before every "embedding:" that follows whitespace, each piece is its own group; with no embedding directory it is one group
+(defn- emit-segment! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 pbuf :i64 s :i64 e :i64 w :i64 CP :vector-i64 CL :vector-i64 WT :vector-i64 SGI :vector-i64 k :i64
+                      EM :vector-i64] :i64
+  (if (= (string-length (embdir)) 0)
+    (text-group! f R pbuf s e w CP CL WT SGI k EM)
+    (let [SPV (vector-alloc 66)
+          n (loop [i (+ s 1) c 0]
+              (if (> (+ i 10) e) c
+                (if (and (is-asp (byte-at f (+ pbuf (- i 1)))) (= (sub-find f pbuf i (+ i 10) "embedding:") i))
+                  (let [u0 (if (>= c 64) (refuse-text f R "refused: more than 64 embedding words in a segment\n") 0)
+                        u (vector-assoc! SPV c i)]
+                    (recur (+ i 1) (+ c 1)))
+                  (recur (+ i 1) c))))]
+      (loop [j 0 kk k]
+        (if (> j n) kk
+          (let [ps (if (= j 0) s (vector-at SPV (- j 1)))
+                pe (if (= j n) e (vector-at SPV j))
+                isemb (if (and (> pe ps) (and (>= (- pe ps) 10) (= (sub-find f pbuf ps (+ ps 10) "embedding:") ps))) 1 0)]
+            (if (<= pe ps) (recur (+ j 1) kk)
+              (if (= isemb 1)
+                (recur (+ j 1) (emb-word! f R pbuf ps pe w CP CL WT SGI kk EM))
+                (recur (+ j 1) (text-group! f R pbuf ps pe w CP CL WT SGI kk EM))))))))))
+
+(defn- tok-init! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 vpath :string mpath :string VT :vector-i64 PT :vector-i64 arena :i64 st :vector-i64] :i64
+  (let [sz (vector-alloc 1)
+        ttmp (cc f (vector-at R 3) 4096 0 0 0 0)
+        vbuf (slurp f R vpath sz)
+        vlen (vector-at sz 0)
+        mbuf (slurp f R mpath sz)
+        mlen (vector-at sz 0)
+        nv (load-vocab f vbuf vlen VT arena st ttmp)
+        nmg (load-merges f mbuf mlen VT arena PT)]
+    0))
+
+;; the CLIP tokenizer (byte-level BPE; UTF-8 prompts within the supported set, see cls) on the prompt file at path -> 77 ids (BOS, tokens, EOS, then padding: the end token, or 0 after the first end
+;; token when padzero = 1, ComfyUI's rule for the bigG tower) written as uint32 into the buffer ids
+(defn- tokenize! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 PT :vector-i64 arena :i64 path :string ids :i64 padzero :i64 wout :i64 ovout :i64 EM :vector-i64] :i64
+  (let [sz (vector-alloc 1)
+        pbuf (slurp f R path sz)
+        plen (vector-at sz 0)
+        wbuf (cc f (vector-at R 3) 1024 0 0 0 0)
+        bos (vt-find f VT arena (cstr f (vector-at R 3) "<|startoftext|>") 15)
+        eos (vt-find f VT arena (cstr f (vector-at R 3) "<|endoftext|>") 13)
+        SS (zeros 512) SE (zeros 512) SI (zeros 512)
+        OUT (zeros 4096) OUTW (zeros 4096) OUTG (zeros 4096) SGI (zeros 8192) IDS (zeros 320) WTS (zeros 320)
+        SEG (zeros 1840) STK (zeros 1600) PCS (zeros 920) WT (zeros 8192)
+        le (loop [q 0] (if (or (>= q plen) (= (byte-at f (+ pbuf q)) 10)) q (recur (+ q 1))))
+        CP (zeros 8192) CL (zeros 8192) OFF (zeros 520)
+        tmpw (cc f (vector-at R 3) 1024 0 0 0 0)
+        st0 (vector-assoc! EM 64 0) st2 (vector-assoc! EM 66 0)
+        nseg (segments f R pbuf 0 le SEG STK PCS)
+        ncp (loop [g 0 k 0]
+              (if (= g nseg) k
+                (recur (+ g 1) (emit-segment! f R pbuf (vector-at SEG (* g 3)) (vector-at SEG (+ (* g 3) 1)) (vector-at SEG (+ (* g 3) 2)) CP CL WT SGI k EM))))
+        walk (loop [i 0]
+               (if (>= i ncp) 0
+                 (if (= (vector-at CL i) 0) (recur (+ i 1))
+                   (if (= (vector-at CL i) 6)
+                     (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (+ 1000000 (vector-at CP i)))
+                           ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) gg (vector-assoc! OUTG (+ 1 cc) (vector-at SGI i)) v (vector-assoc! OUT 0 (+ cc 1))]
+                       (recur (+ i 1)))
+                   (if (= (vector-at CL i) 5)
+                     (let [cc (vector-at OUT 0) u (vector-assoc! OUT (+ 1 cc) (if (= (vector-at CP i) 2097153) bos eos))
+                           ww (vector-assoc! OUTW (+ 1 cc) (vector-at WT i)) gg (vector-assoc! OUTG (+ 1 cc) (vector-at SGI i)) v (vector-assoc! OUT 0 (+ cc 1))]
+                       (recur (+ i 1)))
+                     (let [n (token-len CP CL i ncp)
+                           r (word-symbols f R CP i n wbuf tmpw OFF)
+                           c0 (vector-at OUT 0)
+                           b2 (bpe-word f R VT arena PT wbuf (vector-at r 0) (vector-at r 1) OFF SS SE SI OUT)
+                           c1 (vector-at OUT 0)
+                           ws (loop [j c0] (if (>= j c1) 0 (let [x (vector-assoc! OUTW (+ 1 j) (vector-at WT i)) y (vector-assoc! OUTG (+ 1 j) (vector-at SGI i))] (recur (+ j 1)))))]
+                       (recur (+ i n))))))))
+        nb (batch-blocks f R OUT OUTW OUTG IDS WTS bos eos (if (= padzero 1) 0 eos))
+        wr (loop [k 0]
+             (if (= k (* nb 77)) 0
+               (let [id0 (vector-at IDS k)
+                     id (if (>= id0 1000000) 0 id0)
+                     ov (if (>= id0 1000000) (+ 1 (- id0 1000000)) 0)
+                     o0 (poke8 f (+ (contents f R ovout) (* k 4)) (bit-and ov 255))
+                     o1 (poke8 f (+ (contents f R ovout) (+ (* k 4) 1)) (bit-and (i64-shift-right ov 8) 255))
+                     o2 (poke8 f (+ (contents f R ovout) (+ (* k 4) 2)) 0)
+                     o3 (poke8 f (+ (contents f R ovout) (+ (* k 4) 3)) 0)
+                     wv (vector-at WTS k)
+                     u (poke8 f (+ (contents f R ids) (* k 4)) (bit-and id 255))
+                     u8 (poke8 f (+ (contents f R ids) (+ (* k 4) 1)) (bit-and (i64-shift-right id 8) 255))
+                     u9 (poke8 f (+ (contents f R ids) (+ (* k 4) 2)) 0)
+                     u10 (poke8 f (+ (contents f R ids) (+ (* k 4) 3)) 0)
+                     w0 (poke8 f (+ (contents f R wout) (* k 4)) (bit-and wv 255))
+                     w1 (poke8 f (+ (contents f R wout) (+ (* k 4) 1)) (bit-and (i64-shift-right wv 8) 255))
+                     w2 (poke8 f (+ (contents f R wout) (+ (* k 4) 2)) (bit-and (i64-shift-right wv 16) 255))
+                     w3 (poke8 f (+ (contents f R wout) (+ (* k 4) 3)) (bit-and (i64-shift-right wv 24) 255))]
+                 (recur (+ k 1)))))]
+    nb))
+
+;; the ids of an empty prompt: start, end, then the padding (the end token for CLIP-L, 0 for the bigG tower), as ComfyUI's gen_empty_tokens
+(defn- empty-ids! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 arena :i64 ids :i64 padzero :i64] :i64
+  (let [bos (vt-find f VT arena (cstr f (vector-at R 3) "<|startoftext|>") 15)
+        eos (vt-find f VT arena (cstr f (vector-at R 3) "<|endoftext|>") 13)]
+    (loop [k 0]
+      (if (= k 77) 0
+        (let [id (if (= k 0) bos (if (= k 1) eos (if (= padzero 1) 0 eos)))
+              u (poke8 f (+ (contents f R ids) (* k 4)) (bit-and id 255))
+              u8 (poke8 f (+ (contents f R ids) (+ (* k 4) 1)) (bit-and (i64-shift-right id 8) 255))
+              u9 (poke8 f (+ (contents f R ids) (+ (* k 4) 2)) 0)
+              u10 (poke8 f (+ (contents f R ids) (+ (* k 4) 3)) 0)]
+          (recur (+ k 1)))))))
+
+(defn- lname2 [pre :string i :i64 suffix :string] :string
+  (nm pre (nm "text_model.encoder.layers." (nm (string-from-i64 i) (nm "." suffix)))))
+
+;; a CLIP text tower (slice 15) recorded with the shared recorder helpers: ids (77 token ids as uint, in a float-sized buffer) -> pen (float, 128 x HID: the
+;; output of layer NL-2, before the final LayerNorm: what SDXL conditions on); with proj = 1 also the pooled vector (final LayerNorm, text_projection at the
+;; end-token row) into pooled (HID floats)
+;; scheme 0: Hugging Face names (text_model.encoder.layers.N.self_attn.q_proj ...); scheme 1: OpenCLIP names as in an SDXL single-file checkpoint under
+;; conditioner.embedders.1.model. (transformer.resblocks.N.attn.in_proj_weight = q, k, v stacked, ln_1, ln_2, mlp.c_fc, mlp.c_proj, ln_final,
+;; positional_embedding, token_embedding.weight, text_projection stored [in, out])
+(defn- lname3 [pre :string i :i64 suffix :string] :string
+  (nm pre (nm "transformer.resblocks." (nm (string-from-i64 i) (nm "." suffix)))))
+
+(defn- tower! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 pre :string ids :i64 NL :i64 HID :i64 HEADS :i64 INTER :i64 ACT :i64
+              pen :i64 pooled :i64 proj :i64 scheme :i64 ovi :i64 tab :i64] :i64
+  (let [d (vector-at S 3)
+        dummy (vector-at S 7)
+        A (* 128 HID)
+        xa (fbuf f R S A) xb (fbuf f R S A)
+        lnh (hbuf f R S A) qh (hbuf f R S A) kh (hbuf f R S A) vh (hbuf f R S A) ath (hbuf f R S A) f1h (hbuf f R S (* 128 INTER))
+        pemb (pu f R S HID 77 0 0 0 0 0 0 0 0)
+        tokn (if (= scheme 0) (nm pre "text_model.embeddings.token_embedding.weight") (nm pre "token_embedding.weight"))
+        posn (if (= scheme 0) (nm pre "text_model.embeddings.position_embedding.weight") (nm pre "positional_embedding"))
+        e0 (emit! S (vector-i64 ids d d xa pemb) (vector-i64 0 (toff f R S tokn) (toff f R S posn) 0 0) 28 0 A 1 64)
+        eo (emit! S (vector-i64 xa tab ovi d pemb) (vector-i64 0 0 0 (toff f R S posn) 0) 46 0 A 1 64)
+        pat (pu f R S 77 HEADS 1 0 0 0 0 0 0 0)
+        pl1 (pu f R S 128 HID INTER 1 0 ACT 0 0 0 0)
+        w (loop [l 0]
+            (if (= l NL) 0
+              (let [ln1w (if (= scheme 0) (lname2 pre l "layer_norm1.weight") (lname3 pre l "ln_1.weight"))
+                    ln1b (if (= scheme 0) (lname2 pre l "layer_norm1.bias") (lname3 pre l "ln_1.bias"))
+                    ln2w (if (= scheme 0) (lname2 pre l "layer_norm2.weight") (lname3 pre l "ln_2.weight"))
+                    ln2b (if (= scheme 0) (lname2 pre l "layer_norm2.bias") (lname3 pre l "ln_2.bias"))
+                    qwn (if (= scheme 0) (lname2 pre l "self_attn.q_proj.weight") (lname3 pre l "attn.in_proj_weight"))
+                    kwn (if (= scheme 0) (lname2 pre l "self_attn.k_proj.weight") qwn)
+                    vwn (if (= scheme 0) (lname2 pre l "self_attn.v_proj.weight") qwn)
+                    qbn (if (= scheme 0) (lname2 pre l "self_attn.q_proj.bias") (lname3 pre l "attn.in_proj_bias"))
+                    kbn (if (= scheme 0) (lname2 pre l "self_attn.k_proj.bias") qbn)
+                    vbn (if (= scheme 0) (lname2 pre l "self_attn.v_proj.bias") qbn)
+                    own (if (= scheme 0) (lname2 pre l "self_attn.out_proj.weight") (lname3 pre l "attn.out_proj.weight"))
+                    obn (if (= scheme 0) (lname2 pre l "self_attn.out_proj.bias") (lname3 pre l "attn.out_proj.bias"))
+                    f1n (if (= scheme 0) (lname2 pre l "mlp.fc1.weight") (lname3 pre l "mlp.c_fc.weight"))
+                    f1b (if (= scheme 0) (lname2 pre l "mlp.fc1.bias") (lname3 pre l "mlp.c_fc.bias"))
+                    f2n (if (= scheme 0) (lname2 pre l "mlp.fc2.weight") (lname3 pre l "mlp.c_proj.weight"))
+                    f2b (if (= scheme 0) (lname2 pre l "mlp.fc2.bias") (lname3 pre l "mlp.c_proj.bias"))
+                    n1 (ln! f R S xa 0 ln1w ln1b lnh 128 HID)
+                    wq (cvle! f R S qwn HID HID 0)
+                    wk (cvle! f R S kwn HID HID (if (= scheme 0) 0 (* HID HID)))
+                    wv (cvle! f R S vwn HID HID (if (= scheme 0) 0 (* 2 (* HID HID))))
+                    wo (cvl! f R S own HID HID)
+                    q1 (linH! f R S lnh wq d (toff f R S qbn) qh 128 HID HID)
+                    k1 (linH! f R S lnh wk d (+ (toff f R S kbn) (if (= scheme 0) 0 (* HID 4))) kh 128 HID HID)
+                    v1 (linH! f R S lnh wv d (+ (toff f R S vbn) (if (= scheme 0) 0 (* 2 (* HID 4)))) vh 128 HID HID)
+                    a1 (emit! S (vector-i64 qh kh vh ath pat) (vector-i64 0 0 0 0 0) 8 1 4 HEADS 128)
+                    o1 (linF! f R S ath wo d (toff f R S obn) xa 0 xb 0 128 HID HID 1)
+                    n2 (ln! f R S xb 0 ln2w ln2b lnh 128 HID)
+                    w1 (cvl! f R S f1n INTER HID) w2 (cvl! f R S f2n HID INTER)
+                    m1 (emit! S (vector-i64 lnh w1 d dummy dummy f1h pl1) (vector-i64 0 0 (toff f R S f1b) 0 0 0 0) 6 1 (quot INTER 64) 2 128)
+                    m2 (linF! f R S f1h w2 d (toff f R S f2b) xb 0 xa 0 128 INTER HID 1)
+                    sn (if (= l (- NL 2)) (emit! S (vector-i64 xa pen) (vector-i64 0 0) 18 0 A 1 64) 0)]
+                (recur (+ l 1)))))]
+    (if (= proj 0) 0
+      (let [flw (if (= scheme 0) (nm pre "text_model.final_layer_norm.weight") (nm pre "ln_final.weight"))
+            flb (if (= scheme 0) (nm pre "text_model.final_layer_norm.bias") (nm pre "ln_final.bias"))
+            fl (ln! f R S xa 0 flw flb lnh 128 HID)
+            wp (if (= scheme 0) (cvl! f R S (nm pre "text_projection.weight") HID HID) (cv32! f R S (nm pre "text_projection")))
+            pj (fbuf f R S A)
+            pl (linF! f R S lnh wp (vector-at S 6) 0 dummy 0 pj 0 128 HID HID 0)
+            ppo (pu f R S HID 0 0 0 0 0 0 0 0 0)]
+        (emit! S (vector-i64 ids pj pooled ppo) (vector-i64 0 0 0 0) 30 0 HID 1 64)))))
+
+(defn- vae-rec! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 X :i64 lat :i64 CH :i64 scalebits :i64] :i64
+  (let [dbuf (vector-at S 3)
+        dummy (vector-at S 7)
+        L lat
+        zh (cvfh! f R S X 0 (* 4 (* L L)))
+        wpq (cv32! f R S "post_quant_conv.weight")
+        zq (fbuf f R S (* 4 (* L L)))
+        cpq (conv! f R S zh wpq dbuf (toff f R S "post_quant_conv.bias") dummy 0 zq 0 (vector-i64 4 4 L L 1 1 1))
+        zqh (cvfh! f R S zq 0 (* 4 (* L L)))
+        wci2 (cv32! f R S "conv_in.weight")
+        VM (* CH 4)
+        FM (* (* CH 128) (* L L))
+        FA (fbuf f R S FM) FB2 (fbuf f R S FM) V1 (fbuf f R S FM) V2 (fbuf f R S FM)
+        VH0 (hbuf f R S FM) VH1 (hbuf f R S FM)
+        FB (vector-i64 FA FB2)
+        cci (conv! f R S zqh wci2 dbuf (toff f R S "conv_in.bias") dummy 0 FA 0 (vector-i64 4 VM L L 3 1 1))
+        vm1 (resv! f R S "mid.block_1." FA VM VM L L VH0 VH1 V1 V2 FB2)
+        TG (hbuf f R S (* VM (* L L))) TQ (hbuf f R S (* VM (* L L))) TK (hbuf f R S (* VM (* L L))) TV (hbuf f R S (* VM (* L L))) TA (hbuf f R S (* VM (* L L)))
+        FT (fbuf f R S (* VM (* L L)))
+        vm2 (attv! f R S "mid.attn_1." FB2 VM (* L L) scalebits TG TQ TK TV TA FT FA)
+        vm3 (resv! f R S "mid.block_2." FA VM VM L L VH0 VH1 V1 V2 FB2)
+        lv3 (level! f R S "up.3." FB 1 VM VM L VH0 VH1 V1 V2 1)
+        lv2 (level! f R S "up.2." FB lv3 VM VM (* 2 L) VH0 VH1 V1 V2 1)
+        lv1 (level! f R S "up.1." FB lv2 VM (* CH 2) (* 4 L) VH0 VH1 V1 V2 1)
+        lv0 (level! f R S "up.0." FB lv1 (* CH 2) CH (* 8 L) VH0 VH1 V1 V2 0)
+        vog (gn! f R S 2 (vector-at FB lv0) 0 "norm_out.weight" "norm_out.bias" VH0 CH (* 64 (* L L)) 32 897988541)
+        wco (cv32! f R S "conv_out.weight")
+        imgb (fbuf f R S (* 3 (* 64 (* L L))))
+        vco (conv! f R S VH0 wco dbuf (toff f R S "conv_out.bias") dummy 0 imgb 0 (vector-i64 CH 3 (* 8 L) (* 8 L) 3 1 1))
+        ]
+    imgb))
+
+(defn- emb-rec! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 MC :i64 TE :i64 Tbuf :i64 yv :i64] :i64
+  (let [dbuf (vector-at S 3)
+        tvec (fbuf f R S MC) e1 (fbuf f R S TE) te (fbuf f R S TE) l1b (fbuf f R S TE) le (fbuf f R S TE) emb (fbuf f R S TE)
+        pt (pu f R S MC 1140457472 0 0 0 0 0 0 0 0)
+        d0 (emit! S (vector-i64 tvec Tbuf pt) (vector-i64 0 0 0) 23 0 MC 1 64)
+        pm1 (pu f R S MC TE 1 0 0 0 0 0 0 0) pm2 (pu f R S TE TE 0 0 0 0 0 0 0 0) pm3 (pu f R S 2816 TE 1 0 0 0 0 0 0 0)
+        d1 (emit! S (vector-i64 tvec dbuf dbuf e1 pm1) (vector-i64 0 (toff f R S "time_embed.0.weight") (toff f R S "time_embed.0.bias") 0 0) 13 0 TE 1 64)
+        d2 (emit! S (vector-i64 e1 dbuf dbuf te pm2) (vector-i64 0 (toff f R S "time_embed.2.weight") (toff f R S "time_embed.2.bias") 0 0) 13 0 TE 1 64)
+        d3 (emit! S (vector-i64 yv dbuf dbuf l1b pm3) (vector-i64 0 (toff f R S "label_emb.0.0.weight") (toff f R S "label_emb.0.0.bias") 0 0) 13 0 TE 1 64)
+        d4 (emit! S (vector-i64 l1b dbuf dbuf le pm2) (vector-i64 0 (toff f R S "label_emb.0.2.weight") (toff f R S "label_emb.0.2.bias") 0 0) 13 0 TE 1 64)
+        d5 (emit! S (vector-i64 te le emb) (vector-i64 0 0 0) 16 0 TE 1 64)
+        ]
+    emb))
+
+;; ---- digest-before-read (slice 37): SHA-256 of the checkpoint file, compared with the pinned digest file ----
+;; The same code as bench/kernels/sha256-metal, as helpers. The expected digest is the first 64 characters of the pinned
+;; digest file (main passes its path); a different digest, or an unreadable file, traps before the checkpoint is read for any other purpose.
+(defn- sha-m32 [] :i64 4294967295)
+(defn- sha-rotr [x :i64 n :i64] :i64
+  (bit-and (bit-or (i64-shift-right x n) (i64-shift-left x (- 32 n))) (sha-m32)))
+(defn- sha-shr [x :i64 n :i64] :i64 (i64-shift-right x n))
+(defn- sha-add [a :i64 b :i64] :i64 (bit-and (+ a b) (sha-m32)))
+
+(defn- sha-ksched [] :vector-i64
+  (vector-i64 1116352408 1899447441 3049323471 3921009573 961987163 1508970993 2453635748 2870763221 3624381080 310598401 607225278 1426881987 1925078388 2162078206 2614888103 3248222580 3835390401 4022224774 264347078 604807628 770255983 1249150122 1555081692 1996064986 2554220882 2821834349 2952996808 3210313671 3336571891 3584528711 113926993 338241895))
+(defn- sha-ksched2 [] :vector-i64
+  (vector-i64 666307205 773529912 1294757372 1396182291 1695183700 1986661051 2177026350 2456956037 2730485921 2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344 430227734 506948616 659060556 883997877 958139571 1322822218 1537002063 1747873779 1955562222 2024104815 2227730452 2361852424 2428436474 2756734187 3204031479 3329325298))
+;; ---- boot(op, a, b): 0 load, 1 store, 2 store byte, 3 call, 4 scratch ------
+(defn- sha-s0 [x :i64] :i64 (bit-xor (bit-xor (sha-rotr x 7) (sha-rotr x 18)) (sha-shr x 3)))
+(defn- sha-s1 [x :i64] :i64 (bit-xor (bit-xor (sha-rotr x 17) (sha-rotr x 19)) (sha-shr x 10)))
+(defn- sha-S0 [x :i64] :i64 (bit-xor (bit-xor (sha-rotr x 2) (sha-rotr x 13)) (sha-rotr x 22)))
+(defn- sha-S1 [x :i64] :i64 (bit-xor (bit-xor (sha-rotr x 6) (sha-rotr x 11)) (sha-rotr x 25)))
+(defn- sha-ch [e :i64 f :i64 g :i64] :i64 (bit-xor (bit-and e f) (bit-and (bit-xor e (sha-m32)) g)))
+(defn- sha-maj [a :i64 b :i64 c :i64] :i64 (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c)))
+
+;; big-endian 32-bit word from four bytes at p
+(defn- sha-be32 [f [:fn [[:i64 :i64 :i64] :i64]] p :i64] :i64
+  (let [w (bit-and (peek f p) (sha-m32))]
+    (bit-or (bit-or (i64-shift-left (bit-and w 255) 24) (i64-shift-left (bit-and (i64-shift-right w 8) 255) 16))
+            (bit-or (i64-shift-left (bit-and (i64-shift-right w 16) 255) 8) (bit-and (i64-shift-right w 24) 255)))))
+
+;; one 64-byte sha-block at p: H is updated in place, K the 64 round constants, W a 64-word scratch vector
+(defn- sha-block [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 H :vector-i64 K :vector-i64 W :vector-i64] :i64
+  (let [u0 (loop [t 0]
+             (if (= t 16) 0
+               (let [u (vector-assoc! W t (sha-be32 f (+ p (* t 4))))] (recur (+ t 1)))))
+        u1 (loop [t 16]
+             (if (= t 64) 0
+               (let [v (sha-add (sha-add (sha-s1 (vector-at W (- t 2))) (vector-at W (- t 7)))
+                            (sha-add (sha-s0 (vector-at W (- t 15))) (vector-at W (- t 16))))
+                     u (vector-assoc! W t v)]
+                 (recur (+ t 1)))))]
+    (loop [t 0
+           a (vector-at H 0) b (vector-at H 1) c (vector-at H 2) d (vector-at H 3)
+           e (vector-at H 4) ff (vector-at H 5) g (vector-at H 6) h (vector-at H 7)]
+      (if (= t 64)
+        (let [x0 (vector-assoc! H 0 (sha-add (vector-at H 0) a)) x1 (vector-assoc! H 1 (sha-add (vector-at H 1) b))
+              x2 (vector-assoc! H 2 (sha-add (vector-at H 2) c)) x3 (vector-assoc! H 3 (sha-add (vector-at H 3) d))
+              x4 (vector-assoc! H 4 (sha-add (vector-at H 4) e)) x5 (vector-assoc! H 5 (sha-add (vector-at H 5) ff))
+              x6 (vector-assoc! H 6 (sha-add (vector-at H 6) g)) x7 (vector-assoc! H 7 (sha-add (vector-at H 7) h))]
+          0)
+        (let [t1 (sha-add (sha-add (sha-add h (sha-S1 e)) (sha-add (sha-ch e ff g) (vector-at K t))) (vector-at W t))
+              t2 (sha-add (sha-S0 a) (sha-maj a b c))]
+          (recur (+ t 1) (sha-add t1 t2) a b c (sha-add d t1) e ff g))))))
+
+(defn- sha-hex-digest [H :vector-i64] :string
+  (loop [i 0 s ""]
+    (if (= i 8) s
+      (let [w (vector-at H i)
+            t (loop [k 0 acc ""]
+                (if (= k 8) acc
+                  (let [d (bit-and (i64-shift-right w (- 28 (* 4 k))) 15)]
+                    (recur (+ k 1) (string-concat acc (string-substring "0123456789abcdef" d (+ d 1)))))))]
+        (recur (+ i 1) (string-concat s t))))))
+
+;; hex digest of the file at path, 64 lowercase hex characters
+(defn- sha-file [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64] :string
+  (let [total (cc f (sym f "lseek") fd 0 2 0 0)
+        chunk 1048576
+        buf (cc f (vector-at R 3) (+ chunk 8) 0 0 0 0)
+        tail (cc f (vector-at R 3) 256 0 0 0 0)
+        K (vector-alloc 64)
+        k1 (loop [t 0] (if (= t 32) 0 (let [u (vector-assoc! K t (vector-at (sha-ksched) t))] (recur (+ t 1)))))
+        k2 (loop [t 0] (if (= t 32) 0 (let [u (vector-assoc! K (+ 32 t) (vector-at (sha-ksched2) t))] (recur (+ t 1)))))
+        W (vector-alloc 64)
+        H (vector-i64 1779033703 3144134277 1013904242 2773480762 1359893119 2600822924 528734635 1541459225)
+        full (* (quot total 64) 64)
+        u1 (loop [off 0]
+             (if (>= off full) 0
+               (let [want (if (< (- full off) chunk) (- full off) chunk)
+                     got (cc f (sym f "pread") fd buf want off 0)
+                     u (if (= got want) 0 (vector-at [0] 1))
+                     w (loop [p 0]
+                         (if (>= p want) 0
+                           (let [b (sha-block f (+ buf p) H K W)] (recur (+ p 64)))))]
+                 (recur (+ off want)))))
+        rem (- total full)
+        z (loop [i 0] (if (= i 256) 0 (let [u (poke8 f (+ tail i) 0)] (recur (+ i 1)))))
+        got2 (if (= rem 0) 0 (cc f (sym f "pread") fd tail rem full 0))
+        u2 (if (= got2 rem) 0 (vector-at [0] 1))
+        u3 (poke8 f (+ tail rem) 128)
+        nb (if (< rem 56) 64 128)
+        bits (* total 8)
+        u4 (loop [i 0]
+             (if (= i 8) 0
+               (let [u (poke8 f (+ tail (+ (- nb 1) (- 0 i))) (bit-and (i64-shift-right bits (* 8 i)) 255))] (recur (+ i 1)))))
+        u5 (sha-block f tail H K W)
+        u6 (if (= nb 128) (sha-block f (+ tail 64) H K W) 0)]
+    (sha-hex-digest H)))
+
+
+;; fstat (macOS arm64 struct stat: st_mtimespec at 48, st_ctimespec at 64, st_size at 96): size, mtime and ctime (seconds and nanoseconds) of an
+;; open file. ctime is set by the kernel on any write or metadata change and cannot be set back by a program.
+(defn- fd-stamp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64] :vector-i64
+  (let [sb (cc f (vector-at R 3) 160 0 0 0 0)
+        r (cc f (sym f "fstat") fd sb 0 0 0)
+        u (if (= r 0) 0 (vector-at [0] 1))]
+    (vector-i64 (peek f (+ sb 96)) (peek f (+ sb 48)) (peek f (+ sb 56)) (peek f (+ sb 64)) (peek f (+ sb 72)))))
+;; traps if the open file's size, modification time or change time differs from the stamp taken before it was hashed
+(defn- stamp-same! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 st0 :vector-i64] :i64
+  (let [st1 (fd-stamp f R fd)]
+    (if (= (+ (+ (+ (bit-xor (vector-at st0 0) (vector-at st1 0)) (bit-xor (vector-at st0 1) (vector-at st1 1))) (+ (bit-xor (vector-at st0 2) (vector-at st1 2)) (bit-xor (vector-at st0 3) (vector-at st1 3)))) (bit-xor (vector-at st0 4) (vector-at st1 4))) 0)
+      0 (vector-at [0] 1))))
+
+(defn- sha-verify! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 fd :i64 expect :string] :vector-i64
+  (let [st0 (fd-stamp f R fd)
+        want (cc f (sym f "open") (cstr f (vector-at R 3) expect) 0 0 0 0)
+        u0 (if (< want 0) (vector-at [0] 1) 0)
+        eb (cc f (vector-at R 3) 80 0 0 0 0)
+        z (loop [i 0] (if (= i 80) 0 (let [u (poke8 f (+ eb i) 0)] (recur (+ i 1)))))
+        got0 (cc f (sym f "pread") want eb 64 0 0)
+        u1 (if (= got0 64) 0 (vector-at [0] 1))
+        have (vector-i64-from-bytes (string-to-utf8 (sha-file f R fd)))
+        bad (loop [i 0 acc 0]
+              (if (= i 64) acc
+                (recur (+ i 1) (+ acc (if (= (bit-and (peek f (+ eb i)) 255) (vector-at have i)) 0 1)))))
+        trap (if (= bad 0) 0 (vector-at [0] 1))]
+    st0))
+
+(defn- alloc-w! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 VT :vector-i64 arena :i64 EM :vector-i64] :vector-i64
+  (let [wb (vector-i64 (fbuf f R S 320) (fbuf f R S 320) (fbuf f R S 128) (fbuf f R S 128) (fbuf f R S (* 128 768)) (fbuf f R S (* 128 1280))
+                       (fbuf f R S 320) (fbuf f R S 320) (fbuf f R S 128) (fbuf f R S (* 32 768)) (fbuf f R S (* 32 1280)) (fbuf f R S 128) (fbuf f R S 65536))
+        x1 (vector-assoc! EM 65 (cc f (vector-at R 3) 65536 0 0 0 0))
+        x2 (vector-assoc! EM 67 (contents f R (vector-at wb 9))) x3 (vector-assoc! EM 68 (contents f R (vector-at wb 10)))
+        e1 (empty-ids! f R VT arena (vector-at wb 2) 0)
+        e2 (empty-ids! f R VT arena (vector-at wb 3) 1)]
+    wb))
+
+;; the dispatches that move one prompt's blocks through the towers: for block c, copy its ids (308 bytes per block) into the tower inputs, and after the
+;; towers (recorded once) copy the 77 rows of each output into block c of outL / outG (the pooled vector of block 0 into pool). Returns the marks:
+;; M[0] the block count, then per block (start, after the id copies, after the output copies)
+(defn- chunk-rec! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 idsL :i64 idsG :i64 idl :i64 idg :i64 penL :i64 penG :i64 poolG :i64
+                   outL :i64 outG :i64 pool :i64 n :i64 ovsrc :i64 ovi :i64] :vector-i64
+  (let [M (vector-alloc 13)
+        u (vector-assoc! M 0 n)
+        d (loop [c 0]
+            (if (= c n) 0
+              (let [m0 (vector-at S 1)
+                    i1 (emit! S (vector-i64 idsL idl) (vector-i64 (* c 308) 0) 18 0 77 1 64)
+                    i2 (emit! S (vector-i64 idsG idg) (vector-i64 (* c 308) 0) 18 0 77 1 64)
+                    i3 (emit! S (vector-i64 ovsrc ovi) (vector-i64 (* c 308) 0) 18 0 77 1 64)
+                    m1 (vector-at S 1)
+                    o1 (emit! S (vector-i64 penL outL) (vector-i64 0 (* c (* 77 3072))) 18 0 (* 77 768) 1 64)
+                    o2 (emit! S (vector-i64 penG outG) (vector-i64 0 (* c (* 77 5120))) 18 0 (* 77 1280) 1 64)
+                    o3 (if (and (= c 0) (> pool 0)) (emit! S (vector-i64 poolG pool) (vector-i64 0 0) 18 0 1280 1 64) 0)
+                    m2 (vector-at S 1)
+                    a (vector-assoc! M (+ 1 (* c 3)) m0) b (vector-assoc! M (+ 2 (* c 3)) m1) e (vector-assoc! M (+ 3 (* c 3)) m2)]
+                (recur (+ c 1)))))]
+    M))
+
+;; the blends of prompt weighting (the weights of block c at byte 308 c of the weight buffers), per block, for both prompts; returns (start, end)
+(defn- blends-rec! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 S :vector-i64 WB :vector-i64 lcx :i64 gc :i64 lu :i64 gu :i64 nc :i64 nu :i64] :vector-i64
+  (let [m0 (vector-at S 1)
+        a (loop [c 0]
+            (if (= c nc) 0
+              (let [b1 (emit! S (vector-i64 lcx (vector-at WB 4) (vector-at WB 0)) (vector-i64 (* c (* 77 3072)) 0 (* c 308)) 44 0 (* 77 768) 1 64)
+                    b2 (emit! S (vector-i64 gc (vector-at WB 5) (vector-at WB 0)) (vector-i64 (* c (* 77 5120)) 0 (* c 308)) 45 0 (* 77 1280) 1 64)]
+                (recur (+ c 1)))))
+        b (loop [c 0]
+            (if (= c nu) 0
+              (let [b1 (emit! S (vector-i64 lu (vector-at WB 4) (vector-at WB 1)) (vector-i64 (* c (* 77 3072)) 0 (* c 308)) 44 0 (* 77 768) 1 64)
+                    b2 (emit! S (vector-i64 gu (vector-at WB 5) (vector-at WB 1)) (vector-i64 (* c (* 77 5120)) 0 (* c 308)) 45 0 (* 77 1280) 1 64)]
+                (recur (+ c 1)))))]
+    (vector-i64 m0 (vector-at S 1))))
+
+;; run one prompt: per block the id copies, the towers (recorded once, [t0, t1)), the output copies
+(defn- run-prompt! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 queue :i64 S :vector-i64 M :vector-i64 t0 :i64 t1 :i64] :i64
+  (loop [c 0]
+    (if (= c (vector-at M 0)) 0
+      (let [a (run-range f R queue S (vector-at M (+ 1 (* c 3))) (vector-at M (+ 2 (* c 3))))
+            b (run-range f R queue S t0 t1)
+            d (run-range f R queue S (vector-at M (+ 2 (* c 3))) (vector-at M (+ 3 (* c 3))))]
+        (recur (+ c 1))))))
+
+;; the whole text side: the three prompts (conditional, unconditional, empty), the blends, then the recorded rest up to iP2
+(defn- run-text! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 queue :i64 S :vector-i64 Mc :vector-i64 Mu :vector-i64 Me :vector-i64 t0 :i64 t1 :i64
+                  bl :vector-i64 iP2 :i64] :i64
+  (let [a (run-prompt! f R queue S Mc t0 t1)
+        b (run-prompt! f R queue S Mu t0 t1)
+        c (run-prompt! f R queue S Me t0 t1)
+        d (run-range f R queue S (vector-at bl 0) (vector-at bl 1))
+        e (run-range f R queue S (vector-at bl 1) iP2)]
+    0))
+
+(defn- lcm-blocks [a :i64 b :i64] :i64
+  (loop [m (if (> a b) a b)]
+    (if (and (= (rem m a) 0) (= (rem m b) 0)) m (recur (+ m 1)))))
+
+;; both towers' token ids of the prompt at path (and the per-position weights into wout); returns the block count
+(defn- tokenize2! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 VT :vector-i64 PT :vector-i64 arena :i64 path :string idl :i64 idg :i64 wout :i64 ovout :i64 EM :vector-i64] :i64
+  (let [a (tokenize! f R VT PT arena path idl 0 wout ovout EM)
+        b (tokenize! f R VT PT arena path idg 1 wout ovout EM)]
+    a))
+
+(defn main [] :i64
+  (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))
+        dlopen (sym f "dlopen")
+        h1 (open-framework f dlopen "/System/Library/Frameworks/Foundation.framework/Foundation")
+        h2 (open-framework f dlopen "/System/Library/Frameworks/Metal.framework/Metal")
+        now (sym f "mach_absolute_time")
+        R (vector-i64 (sym f "objc_msgSend") (sym f "sel_registerName") (sym f "objc_getClass") (sym f "malloc"))
+        device (cc f (sym f "MTLCreateSystemDefaultDevice") 0 0 0 0 0)
+        dev (if (= device 0) (vector-at [0] 1) device)
+        queue (msg f R dev "newCommandQueue" 0 0 0)
+        base (scratch f)
+        errp (+ base 184)
+        u0 (poke f errp 0)
+        lib (msg f R dev "newLibraryWithSource:options:error:" (nsstring f R (kernel-source)) 0 errp)
+        u1 (if (= lib 0) (refuse f R (peek f errp)) 0)
+        S (zeros 152000)
+        s2 (vector-assoc! S 2 dev)
+        pp (loop [i 0]
+             (if (= i 52) 0
+               (let [name (if (= i 0) "cvt32h" (if (= i 1) "cvt_fh" (if (= i 2) "gn_silu_h" (if (= i 3) "gn_tok_h" (if (= i 4) "temb_bias2"
+                          (if (= i 5) "conv" (if (= i 6) "linear_t" (if (= i 7) "ln_h" (if (= i 8) "attn_hc" (if (= i 9) "geglu_h"
+                          (if (= i 10) "untok_add" (if (= i 11) "upsample_h" (if (= i 12) "timestep" (if (= i 13) "matvec"
+                          (if (= i 14) "fill_h" (if (= i 15) "fill_f" (if (= i 16) "vadd" (if (= i 17) "attn_wide" (if (= i 18) "cpy_f" (if (= i 19) "sigma_table" (if (= i 20) "gather" (if (= i 21) "scale_in" (if (= i 22) "cfg_euler" (if (= i 23) "timestep2" (if (= i 24) "cpy_h" (if (= i 25) "tcalc" (if (= i 26) "cat_ctx" (if (= i 27) "adm" (if (= i 28) "embed" (if (= i 29) "ln_f" (if (= i 30) "pool_row" (if (= i 31) "conv_k3s1" (if (= i 32) "cvt32h_t" (if (= i 33) "cph" (if (= i 34) "cph_t" (if (= i 35) "h2f" (if (= i 36) "amax_part" (if (= i 37) "amax_fin" (if (= i 38) "cvfh_sc" (if (= i 39) "upsample_hs" (if (= i 40) "axpb" (if (= i 41) "gn_psum" (if (= i 42) "gn_fin" (if (= i 43) "gn_apply" (if (= i 44) "blend_l" (if (= i 45) "blend_g" (if (= i 46) "embov" (if (= i 47) "sched_normal" (if (= i 48) "sched_karras" (if (= i 49) "cfg_dpmpp2m" (if (= i 50) "sched_exp" "sched_sgm")))))))))))))))))))))))))))))))))))))))))))))))))))
+                     p (pso f R dev lib name)
+                     u (vector-assoc! S (+ (oPS) i) p)]
+                 (recur (+ i 1)))))
+        ;; the safetensors file: opened once, hashed through this descriptor, and every later read uses it too, so replacing
+        ;; the path after the hash (rename over it) cannot change what is read
+        fd (cc f (sym f "open") (cstr f (vector-at R 3) "@MODEL@") 0 0 0 0)
+        u2 (if (< fd 0) (vector-at [0] 1) 0)
+        shv (sha-verify! f R fd "@EXPECT@")
+        lenb (cc f (vector-at R 3) 16 0 0 0 0)
+        u3 (cc f (sym f "pread") fd lenb 8 0 0)
+        hlen (peek f lenb)
+        hdr (cc f (vector-at R 3) (+ hlen 16) 0 0 0 0)
+        u4 (cc f (sym f "pread") fd hdr hlen 8 0)
+        TT (zeros 16384)
+        chk (zeros 3)
+        TD (zeros 8192)
+        nt (index-header f hdr hlen TT chk TD)
+        total (cc f (sym f "lseek") fd 0 2 0 0)
+        dlen (- total (+ 8 hlen))
+        r1 (if (= (vector-at chk 1) 0) 0 (let [w (wr-text f R "refused: a tensor's size differs from its shape and dtype\n")] (vector-at [0] 1)))
+        r2 (if (= (vector-at chk 0) dlen) 0 (let [w (wr-text f R "refused: data_offsets do not match the data region size\n")] (vector-at [0] 1)))
+        r3 (if (= (vector-at chk 2) 0) 0 (let [w (wr-text f R "refused: BF16 tensors are not supported (F16 or F32 checkpoints only)\n")] (vector-at [0] 1)))
+        dbuf (msg f R dev "newBufferWithLength:options:" dlen 0 0)
+        ;; F16 mode if ANY tensor is float16 (safetensors orders the header by dtype, so the first entry says nothing)
+        m16 (loop [i 0] (if (= i nt) 0 (if (= (i64-shift-right (vector-at TD i) 4) 2) 1 (recur (+ i 1)))))
+        pbuf (if (= m16 1) (new-buffer f R dev 805306368) dbuf)
+        got (read-all f fd (msg f R dbuf "contents" 0 0 0) dlen (+ 8 hlen))
+        u6 (if (= got dlen) (stamp-same! f R fd shv) (vector-at [0] 1))
+        s3 (vector-assoc! S 3 pbuf) s8 (vector-assoc! S 8 dbuf) s4 (vector-assoc! S 4 hdr) s5 (vector-assoc! S 5 nt)
+        cp (loop [i 0] (if (= i (* nt 4)) 0 (let [u (vector-assoc! S (+ (oTT) i) (vector-at TT i))] (recur (+ i 1)))))
+        cpd (loop [i 0] (if (= i nt) 0 (let [u (vector-assoc! S (+ (oTD) i) (vector-at TD i))] (recur (+ i 1)))))
+        zero (fbuf f R S 16384) s6 (vector-assoc! S 6 zero)
+        dummy (fbuf f R S 16384) s7 (vector-assoc! S 7 dummy)
+        ;; geometry
+        MC @MC@
+        C0 MC
+        C1 (* 2 MC)
+        C2 (* 4 MC)
+        TE (* 4 MC)
+        lat @LAT@
+        l1 (quot lat 2) l2 (quot lat 4)
+        hw0 (* lat lat) hw1 (* l1 l1) hw2 (* l2 l2)
+        CH @CH@
+        steps @STEPS@
+        ;; inputs and shared buffers
+        X (fbuf f R S (* 4 hw0)) hlx (half-load f R S "@X@" X (* 4 hw0))
+        xin (fbuf f R S (* 4 hw0))
+        ctxfc (fbuf f R S (* 960 2048)) ctxfu (fbuf f R S (* 960 2048))
+        VT (zeros (* (hsize) 3)) PT (zeros (* (psize) 2)) stt (zeros 1)
+        tarena (cc f (vector-at R 3) 4194304 0 0 0 0)
+        tki (tok-init! f R "@VOCAB@" "@MERGES@" VT PT tarena stt)
+        EM (vector-alloc 80)
+        WB (alloc-w! f R S VT tarena EM)
+        idlc (fbuf f R S 320) idgc (fbuf f R S 320) tk1 (tokenize2! f R VT PT tarena "@PROMPTC@" idlc idgc (vector-at WB 0) (vector-at WB 6) EM)
+        idlu (fbuf f R S 320) idgu (fbuf f R S 320) tk3 (tokenize2! f R VT PT tarena "@PROMPTU@" idlu idgu (vector-at WB 1) (vector-at WB 7) EM)
+        ;; the context length: both prompts are repeated to the least common multiple of their block counts (attention over a repeated sequence is the same)
+        LL (lcm-blocks tk1 tk3)
+        RC (* 64 (quot (+ (* 77 LL) 63) 64))
+        ss1 (vector-assoc! S 62 RC) ss2 (vector-assoc! S 63 (* 77 LL))
+        idl (fbuf f R S 128) idg (fbuf f R S 128)
+        penL (fbuf f R S (* 128 768)) penG (fbuf f R S (* 128 1280)) poolG (fbuf f R S 1280)
+        lcx (fbuf f R S (* 320 768)) gc (fbuf f R S (* 320 1280)) pc (fbuf f R S 1280)
+        lu (fbuf f R S (* 320 768)) gu (fbuf f R S (* 320 1280)) pu2 (fbuf f R S 1280)
+        sz (fbuf f R S 8) hlsz (half-load f R S "@SZ@" sz 6)
+        yc (fbuf f R S 2816) yu (fbuf f R S 2816)
+        yv (fbuf f R S 2816)
+        ctxh (hbuf f R S (* 960 2048))
+        ST (fbuf f R S 1024) SG (fbuf f R S 32) Tbuf (fbuf f R S 4)
+        ec (fbuf f R S (* 4 hw0))
+        PB (pu f R S 0 0 0 0 0 0 0 0 0 0)
+        pp0 (contents f R PB)
+        ;; prep segment: sigma table, schedule, half copies of the two contexts
+        iP (vector-at S 1)
+        g1 (emit! S (vector-i64 ST) (vector-i64 0) 19 0 1 1 1)
+        g2 (emit! S (vector-i64 ST SG PB) (vector-i64 0 0 0) (if (= @SCHED@ 1) 47 (if (= @SCHED@ 2) 48 (if (= @SCHED@ 3) 50 (if (= @SCHED@ 4) 51 20)))) 0 32 1 32)
+        mA (vector-at S 1)
+        mT0 (vector-at S 1)
+        tl (tower! f R S "@PRE_L@" idl 12 768 12 3072 1 penL dummy 0 @SCHEME_L@ (vector-at WB 11) (vector-at WB 9))
+        mTL (vector-at S 1)
+        tg (tower! f R S "@PRE_G@" idg 32 1280 20 5120 2 penG poolG 1 @SCHEME_G@ (vector-at WB 11) (vector-at WB 10))
+        mTG (vector-at S 1)
+        Mc (chunk-rec! f R S idlc idgc idl idg penL penG poolG lcx gc pc tk1 (vector-at WB 6) (vector-at WB 11))
+        Mu (chunk-rec! f R S idlu idgu idl idg penL penG poolG lu gu pu2 tk3 (vector-at WB 7) (vector-at WB 11))
+        Me (chunk-rec! f R S (vector-at WB 2) (vector-at WB 3) idl idg penL penG poolG (vector-at WB 4) (vector-at WB 5) 0 1 (vector-at WB 8) (vector-at WB 11))
+        bl (blends-rec! f R S WB lcx gc lu gu tk1 tk3)
+        pcx1 (pu f R S (* 77 LL) (* 77 tk1) 0 0 0 0 0 0 0 0) pcx2 (pu f R S (* 77 LL) (* 77 tk3) 0 0 0 0 0 0 0 0)
+        cx1 (emit! S (vector-i64 lcx gc ctxfc pcx1) (vector-i64 0 0 0 0) 26 0 (* RC 2048) 1 64)
+        cx2 (emit! S (vector-i64 lu gu ctxfu pcx2) (vector-i64 0 0 0 0) 26 0 (* RC 2048) 1 64)
+        ad1 (emit! S (vector-i64 pc sz yc) (vector-i64 0 0 0) 27 0 2816 1 64)
+        ad2 (emit! S (vector-i64 pu2 sz yu) (vector-i64 0 0 0) 27 0 2816 1 64)
+        ctxhc (cvfh! f R S ctxfc 0 (* RC 2048))
+        ctxhu (cvfh! f R S ctxfu 0 (* RC 2048))
+        iP2 (vector-at S 1)
+        ;; B: scale the latent by 1 / sqrt(sigma^2 + 1), find the timestep
+        sc1 (emit! S (vector-i64 X xin SG PB) (vector-i64 0 0 0 0) 21 0 (* 4 hw0) 1 64)
+        sc2 (emit! S (vector-i64 ST SG PB Tbuf) (vector-i64 0 0 0 0) (+ 0 25) 0 1 1 1)
+        iB2 (vector-at S 1)
+        ;; C: conditional context and label
+        cc1 (emit! S (vector-i64 ctxhc ctxh) (vector-i64 0 0) 24 0 (* RC 2048) 1 64)
+        cc2 (emit! S (vector-i64 yc yv) (vector-i64 0 0) 18 0 2816 1 64)
+        iC2 (vector-at S 1)
+;; concatenation buffers: [block output | skip]
+        cat0 (fbuf f R S (* (* 2 C2) hw2)) cat1 (fbuf f R S (* (* 2 C2) hw2)) cat2 (fbuf f R S (* (+ C2 C1) hw2))
+        cat3 (fbuf f R S (* (+ C2 C1) hw1)) cat4 (fbuf f R S (* (* 2 C1) hw1)) cat5 (fbuf f R S (* (+ C1 C0) hw1))
+        cat6 (fbuf f R S (* (+ C1 C0) hw0)) cat7 (fbuf f R S (* (* 2 C0) hw0)) cat8 (fbuf f R S (* (* 2 C0) hw0))
+        o8 (fbuf f R S (* C0 hw0)) outb (fbuf f R S (* 4 hw0))
+        ;; time + label embedding
+        emb (emb-rec! f R S MC TE Tbuf yv)
+        ;; input_blocks.0 : conv 4 -> C0, skip h0
+        xin-h (cvfh! f R S xin 0 (* 4 hw0))
+        wci (cv32! f R S "input_blocks.0.0.weight")
+        c0 (conv! f R S xin-h wci pbuf (toff f R S "input_blocks.0.0.bias") dummy 0 cat8 (* (* C0 hw0) 4) (vector-i64 4 C0 lat lat 3 1 1))
+        ;; input_blocks.1, .2 : ResBlock C0
+        rb1 (resn! f R S "input_blocks.1.0." cat8 (* (* C0 hw0) 4) 0 C0 C0 lat lat emb cat7 (* (* C0 hw0) 4))
+        rb2 (resn! f R S "input_blocks.2.0." cat7 (* (* C0 hw0) 4) 0 C0 C0 lat lat emb cat6 (* (* C1 hw0) 4))
+        ;; input_blocks.3 : Downsample
+        dn1 (downn! f R S "input_blocks.3.0." C0 lat lat cat6 (* (* C1 hw0) 4) cat5 (* (* C1 hw1) 4))
+        ;; input_blocks.4, .5 : ResBlock + ST depth 2 at C1
+        dh1 (cvfh! f R S cat5 (* (* C1 hw1) 4) (* C0 hw1))
+        t4 (fbuf f R S (* C1 hw1))
+        r4 (resn! f R S "input_blocks.4.0." cat5 (* (* C1 hw1) 4) dh1 C0 C1 l1 l1 emb t4 0)
+        sb4 (stn! f R S "input_blocks.4.1." t4 0 cat4 (* (* C1 hw1) 4) C1 l1 l1 2 ctxh)
+        t5 (fbuf f R S (* C1 hw1))
+        r5 (resn! f R S "input_blocks.5.0." cat4 (* (* C1 hw1) 4) 0 C1 C1 l1 l1 emb t5 0)
+        sb5 (stn! f R S "input_blocks.5.1." t5 0 cat3 (* (* C2 hw1) 4) C1 l1 l1 2 ctxh)
+        ;; input_blocks.6 : Downsample
+        dn2 (downn! f R S "input_blocks.6.0." C1 l1 l1 cat3 (* (* C2 hw1) 4) cat2 (* (* C2 hw2) 4))
+        ;; input_blocks.7, .8 : ResBlock + ST depth 10 at C2
+        dh2 (cvfh! f R S cat2 (* (* C2 hw2) 4) (* C1 hw2))
+        t7 (fbuf f R S (* C2 hw2))
+        r7 (resn! f R S "input_blocks.7.0." cat2 (* (* C2 hw2) 4) dh2 C1 C2 l2 l2 emb t7 0)
+        st7 (stn! f R S "input_blocks.7.1." t7 0 cat1 (* (* C2 hw2) 4) C2 l2 l2 10 ctxh)
+        t8 (fbuf f R S (* C2 hw2))
+        r8 (resn! f R S "input_blocks.8.0." cat1 (* (* C2 hw2) 4) 0 C2 C2 l2 l2 emb t8 0)
+        st8 (stn! f R S "input_blocks.8.1." t8 0 cat0 (* (* C2 hw2) 4) C2 l2 l2 10 ctxh)
+        ;; middle block
+        ma (fbuf f R S (* C2 hw2)) mb (fbuf f R S (* C2 hw2))
+        m0 (resn! f R S "middle_block.0." cat0 (* (* C2 hw2) 4) 0 C2 C2 l2 l2 emb ma 0)
+        m1 (stn! f R S "middle_block.1." ma 0 mb 0 C2 l2 l2 10 ctxh)
+        m2 (resn! f R S "middle_block.2." mb 0 0 C2 C2 l2 l2 emb cat0 0)
+        ;; output_blocks.0, .1, .2 at C2 (hw2)
+        c0h (cvfh! f R S cat0 0 (* (* 2 C2) hw2))
+        ra (fbuf f R S (* C2 hw2))
+        o0r (resn! f R S "output_blocks.0.0." cat0 0 c0h (* 2 C2) C2 l2 l2 emb ra 0)
+        o0s (stn! f R S "output_blocks.0.1." ra 0 cat1 0 C2 l2 l2 10 ctxh)
+        c1h (cvfh! f R S cat1 0 (* (* 2 C2) hw2))
+        rb (fbuf f R S (* C2 hw2))
+        o1r (resn! f R S "output_blocks.1.0." cat1 0 c1h (* 2 C2) C2 l2 l2 emb rb 0)
+        o1s (stn! f R S "output_blocks.1.1." rb 0 cat2 0 C2 l2 l2 10 ctxh)
+        c2h (cvfh! f R S cat2 0 (* (+ C2 C1) hw2))
+        rc (fbuf f R S (* C2 hw2)) rd (fbuf f R S (* C2 hw2))
+        o2r (resn! f R S "output_blocks.2.0." cat2 0 c2h (+ C2 C1) C2 l2 l2 emb rc 0)
+        o2s (stn! f R S "output_blocks.2.1." rc 0 rd 0 C2 l2 l2 10 ctxh)
+        o2u (upn! f R S "output_blocks.2.2." C2 l2 l2 rd cat3 0)
+        ;; output_blocks.3, .4, .5 at C1 (hw1)
+        c3h (cvfh! f R S cat3 0 (* (+ C2 C1) hw1))
+        re (fbuf f R S (* C1 hw1))
+        o3r (resn! f R S "output_blocks.3.0." cat3 0 c3h (+ C2 C1) C1 l1 l1 emb re 0)
+        o3s (stn! f R S "output_blocks.3.1." re 0 cat4 0 C1 l1 l1 2 ctxh)
+        c4h (cvfh! f R S cat4 0 (* (* 2 C1) hw1))
+        rf (fbuf f R S (* C1 hw1))
+        o4r (resn! f R S "output_blocks.4.0." cat4 0 c4h (* 2 C1) C1 l1 l1 emb rf 0)
+        o4s (stn! f R S "output_blocks.4.1." rf 0 cat5 0 C1 l1 l1 2 ctxh)
+        c5h (cvfh! f R S cat5 0 (* (+ C1 C0) hw1))
+        rg (fbuf f R S (* C1 hw1)) rh (fbuf f R S (* C1 hw1))
+        o5r (resn! f R S "output_blocks.5.0." cat5 0 c5h (+ C1 C0) C1 l1 l1 emb rg 0)
+        o5s (stn! f R S "output_blocks.5.1." rg 0 rh 0 C1 l1 l1 2 ctxh)
+        o5u (upn! f R S "output_blocks.5.2." C1 l1 l1 rh cat6 0)
+        ;; output_blocks.6, .7, .8 at C0 (hw0)
+        c6h (cvfh! f R S cat6 0 (* (+ C1 C0) hw0))
+        o6r (resn! f R S "output_blocks.6.0." cat6 0 c6h (+ C1 C0) C0 lat lat emb cat7 0)
+        c7h (cvfh! f R S cat7 0 (* (* 2 C0) hw0))
+        o7r (resn! f R S "output_blocks.7.0." cat7 0 c7h (* 2 C0) C0 lat lat emb cat8 0)
+        c8h (cvfh! f R S cat8 0 (* (* 2 C0) hw0))
+        o8r (resn! f R S "output_blocks.8.0." cat8 0 c8h (* 2 C0) C0 lat lat emb o8 0)
+                oh (hbuf f R S (* C0 hw0))
+        og (gn! f R S 2 o8 0 "out.0.weight" "out.0.bias" oh C0 hw0 32 925353388)
+        wo (cv32! f R S "out.2.weight")
+        oc (conv! f R S oh wo pbuf (toff f R S "out.2.bias") dummy 0 outb 0 (vector-i64 C0 4 lat lat 3 1 1))
+        iU2 (vector-at S 1)
+        ;; D: keep the conditional output
+        dd1 (emit! S (vector-i64 outb ec) (vector-i64 0 0) 18 0 (* 4 hw0) 1 64)
+        iD2 (vector-at S 1)
+        ;; E: unconditional context and label
+        ee1 (emit! S (vector-i64 ctxhu ctxh) (vector-i64 0 0) 24 0 (* RC 2048) 1 64)
+        ee2 (emit! S (vector-i64 yu yv) (vector-i64 0 0) 18 0 2816 1 64)
+        iE2 (vector-at S 1)
+        ;; F: guidance on the denoised values and the Euler update
+        ff1 (emit! S (vector-i64 X outb ec SG PB (vector-at WB 12)) (vector-i64 0 0 0 0 0 0) (if (= @SAMPLER@ 1) 49 22) 0 (* 4 hw0) 1 64)
+        iF2 (vector-at S 1)
+        ;; G: the VAE decoder on the final latent
+        imgb (vae-rec! f R S X lat CH @SCALEBITS@)
+        iG2 (vector-at S 1)
+        ;; run: prep once; per step B, C, U, D, E, U, F; then G
+        qa (poke f pp0 (i64-shift-left steps 32))
+        w0a (run-range f R queue S iP mA)
+        w0 (run-text! f R queue S Mc Mu Me mT0 mTG bl iP2)
+        di1 (dump f (contents f R idlc) (* 308 tk1)) di2 (dump f (contents f R idgc) (* 308 tk1)) di3 (dump f (contents f R idlu) (* 308 tk3)) di4 (dump f (contents f R idgu) (* 308 tk3))
+        dq1 (dump f (contents f R ctxfc) (* (* (* 77 LL) 2048) 4))
+        dq2 (dump f (contents f R yc) (* 2816 4))
+        dq3 (dump f (contents f R ctxfu) (* (* (* 77 LL) 2048) 4))
+        dq4 (dump f (contents f R yu) (* 2816 4))
+        w1 (loop [i 0]
+             (if (= i steps) 0
+               (let [q (poke f pp0 (bit-or i (i64-shift-left steps 32)))
+                     q2 (poke f (+ pp0 8) @CFGBITS@)
+                     x1 (run-range f R queue S iP2 iB2)
+                     x2 (run-range f R queue S iB2 iC2)
+                     x3 (run-range f R queue S iC2 iU2)
+                     x4 (run-range f R queue S iU2 iD2)
+                     x5 (run-range f R queue S iD2 iE2)
+                     x6 (run-range f R queue S iC2 iU2)
+                     x7 (run-range f R queue S iE2 iF2)
+                     x8 (dump f (contents f R X) (* (* 4 hw0) 4))]
+                 (recur (+ i 1)))))
+        w2 (run-range f R queue S iF2 iG2)
+        w3 (dump f (contents f R imgb) (* (* 3 (* 64 (* lat lat))) 4))
+        kd (wr-text f R "dispatches ")
+        ke (wr-num f R (vector-at S 1))
+        kf (wr-text f R "\n")]
+    0))

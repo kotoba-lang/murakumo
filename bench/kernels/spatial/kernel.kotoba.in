@@ -1,0 +1,307 @@
+(ns murakumo.spatial (:export [main]))
+
+;; One SDXL-style SpatialTransformer block in f32, composed from the single-kernel
+;; slices as kernel.c (impl.h) does it:
+;;   t0 = proj_in(tokens(groupnorm(x)))
+;;   t1 = t0 + attn_self(LN1(t0));  t2 = t1 + attn_cross(LN2(t1), ctx)
+;;   t3 = t2 + linear(geglu(linear(LN3(t2))));  out = x + untokens(proj_out(t3))
+;; x is [@SC@, @SH@, @SW@], ctx is [@SLC@, @SCC@], @SNH@ heads, @SG@ groups, feed-forward inner
+;; width @SFI@. Q/K/V projections have no bias: a zero vector stands in (0 + p == p).
+;; Every step is one binary32 operation in the order kernel.c uses; sums run in
+;; index order. Values travel as i64 bit patterns in vectors.
+
+(defn- nc [] :i64 @SC@)
+(defn- hh [] :i64 @SH@)
+(defn- ww [] :i64 @SW@)
+(defn- npos [] :i64 (* (hh) (ww)))
+(defn- ng [] :i64 @SG@)
+(defn- nnh [] :i64 @SNH@)
+(defn- dd [] :i64 (quot (nc) (nnh)))
+(defn- nlc [] :i64 @SLC@)
+(defn- ncc [] :i64 @SCC@)
+(defn- nfi [] :i64 @SFI@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64 add :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-add (f32-mul (i64-to-f32-rounded iv) (fb scale)) (fb add))))]
+        (recur (+ i 1) t)))))
+
+(defn- expb [xb :i64] :i64
+  (let [lim (fb 1118699520)
+        x (f32-max (f32-min (fb xb) lim) (f32-neg lim))
+        fx (f32-add (f32-mul x (fb 1069066811)) (fb 1262485504))
+        k (- (bit-and (f32-to-bits fx) 8388607) 4194304)
+        kf (f32-sub fx (fb 1262485504))
+        r (f32-sub (f32-sub x (f32-mul kf (fb 1060208640))) (f32-mul kf (fb 3109978243)))
+        y0 (f32-add (f32-mul (fb 961571175) r) (fb 985088974))
+        y1 (f32-add (f32-mul y0 r) (fb 1007192328))
+        y2 (f32-add (f32-mul y1 r) (fb 1026206145))
+        y3 (f32-add (f32-mul y2 r) (fb 1042983594))
+        y4 (f32-add (f32-mul y3 r) (fb 1056964608))
+        p (f32-add (f32-add (f32-mul (f32-mul y4 r) r) r) (fb 1065353216))]
+    (bf (f32-mul p (f32-from-bits (i32-wrap (i64-shift-left (+ k 127) 23)))))))
+
+(defn- erfb [xb :i64] :i64
+  (let [x (fb xb)
+        ax (f32-abs x)
+        t (f32-div (fb 1065353216) (f32-add (fb 1065353216) (f32-mul (fb 1051179525) ax)))
+        p0 (f32-add (f32-mul (fb 1065868322) t) (fb 3216638179))
+        p1 (f32-add (f32-mul p0 t) (fb 1068888291))
+        p2 (f32-add (f32-mul p1 t) (fb 3197217166))
+        p3 (f32-add (f32-mul p2 t) (fb 1048738054))
+        p (f32-mul p3 t)
+        e (fb (expb (bf (f32-neg (f32-mul ax ax)))))
+        r (f32-sub (fb 1065353216) (f32-mul p e))]
+    (bf (if (f32-lt x (fb 0)) (f32-neg r) r))))
+
+;; ---- GroupNorm (affine), no activation: x,y are [c, hw]
+(defn- grp-sum [x :vector-i64 base :i64 n :i64] :i64
+  (loop [i 0 acc 0]
+    (if (= i n) acc
+      (recur (+ i 1) (bf (f32-add (fb acc) (fb (vector-at x (+ base i)))))))))
+
+(defn- grp-sq [x :vector-i64 base :i64 n :i64 meanb :i64] :i64
+  (loop [i 0 acc 0]
+    (if (= i n) acc
+      (let [d (f32-sub (fb (vector-at x (+ base i))) (fb meanb))]
+        (recur (+ i 1) (bf (f32-add (fb acc) (f32-mul d d))))))))
+
+(defn- gn [x :vector-i64 y :vector-i64 c :i64 hw :i64 ga :vector-i64 be :vector-i64] :i64
+  (let [n (* (quot c (ng)) hw)
+        invn (f32-div (fb 1065353216) (i64-to-f32-rounded n))
+        eps (f64-to-f32-rounded @GNEPS@)]
+    (loop [g 0 z 0]
+      (if (= g (ng)) z
+        (let [base (* g n)
+              meanb (bf (f32-mul (fb (grp-sum x base n)) invn))
+              var (f32-mul (fb (grp-sq x base n meanb)) invn)
+              invb (bf (f32-div (fb 1065353216) (f32-sqrt (f32-add var eps))))
+              w (loop [i 0 zz 0]
+                  (if (= i n) zz
+                    (let [ch (+ (* g (quot c (ng))) (quot i hw))
+                          v0 (f32-mul (f32-sub (fb (vector-at x (+ base i))) (fb meanb)) (fb invb))
+                          v (f32-mul v0 (fb (vector-at ga ch)))
+                          u (vector-assoc! y (+ base i) (bf (f32-add v (fb (vector-at be ch)))))]
+                      (recur (+ i 1) zz))))]
+          (recur (+ g 1) z))))))
+
+;; ---- out[m,n] = b[n] + sum_k x[m,k] * w[k,n]
+(defn- linear [x :vector-i64 w :vector-i64 b :vector-i64 out :vector-i64 m :i64 k :i64 n :i64] :i64
+  (loop [i 0 z 0]
+    (if (= i m) z
+      (let [q (loop [j 0 zj 0]
+                (if (= j n) zj
+                  (let [acc (loop [kk 0 a (vector-at b j)]
+                              (if (= kk k) a
+                                (recur (+ kk 1)
+                                       (bf (f32-add (fb a) (f32-mul (fb (vector-at x (+ (* i k) kk)))
+                                                                     (fb (vector-at w (+ (* kk n) j)))))))))
+                        u (vector-assoc! out (+ (* i n) j) acc)]
+                    (recur (+ j 1) zj))))]
+        (recur (+ i 1) z)))))
+
+;; ---- LayerNorm over the last axis: x,out are [m, n]
+(defn- row-sum [x :vector-i64 base :i64 n :i64] :i64 (grp-sum x base n))
+(defn- row-sq [x :vector-i64 base :i64 n :i64 meanb :i64] :i64 (grp-sq x base n meanb))
+
+(defn- layernorm [x :vector-i64 out :vector-i64 ga :vector-i64 be :vector-i64 m :i64 n :i64] :i64
+  (let [invn (f32-div (fb 1065353216) (i64-to-f32-rounded n))
+        eps (f64-to-f32-rounded 0.00001)]
+    (loop [r 0 z 0]
+      (if (= r m) z
+        (let [base (* r n)
+              meanb (bf (f32-mul (fb (row-sum x base n)) invn))
+              var (f32-mul (fb (row-sq x base n meanb)) invn)
+              invb (bf (f32-div (fb 1065353216) (f32-sqrt (f32-add var eps))))
+              w (loop [i 0 zz 0]
+                  (if (= i n) zz
+                    (let [y0 (f32-mul (f32-sub (fb (vector-at x (+ base i))) (fb meanb)) (fb invb))
+                          y (f32-mul y0 (fb (vector-at ga i)))
+                          u (vector-assoc! out (+ base i) (bf (f32-add y (fb (vector-at be i)))))]
+                      (recur (+ i 1) zz))))]
+          (recur (+ r 1) z))))))
+
+;; ---- non-causal multi-head attention: q is [npos, c], k and v are [lk, c]
+(defn- dotqk [q :vector-i64 k :vector-i64 qo :i64 ko :i64] :i64
+  (loop [c 0 acc 0]
+    (if (= c (dd)) acc
+      (recur (+ c 1)
+             (bf (f32-add (fb acc) (f32-mul (fb (vector-at q (+ qo c))) (fb (vector-at k (+ ko c))))))))))
+
+(defn- scores [q :vector-i64 k :vector-i64 sc :vector-i64 h :i64 i :i64 lk :i64] :i64
+  (let [scale (f32-div (fb 1065353216) (f32-sqrt (i64-to-f32-rounded (dd))))
+        qo (+ (* i (nc)) (* h (dd)))]
+    (loop [j 0 m 0]
+      (if (= j lk) m
+        (let [s (bf (f32-mul (fb (dotqk q k qo (+ (* j (nc)) (* h (dd))))) scale))
+              u (vector-assoc! sc j s)]
+          (recur (+ j 1) (if (or (= j 0) (f32-gt (fb s) (fb m))) s m)))))))
+
+(defn- exps [sc :vector-i64 m :i64 lk :i64] :i64
+  (loop [j 0 sum 0]
+    (if (= j lk) sum
+      (let [e (expb (bf (f32-sub (fb (vector-at sc j)) (fb m))))
+            u (vector-assoc! sc j e)]
+        (recur (+ j 1) (bf (f32-add (fb sum) (fb e))))))))
+
+(defn- normalize [sc :vector-i64 sum :i64 lk :i64] :i64
+  (loop [j 0 z 0]
+    (if (= j lk) z
+      (let [u (vector-assoc! sc j (bf (f32-div (fb (vector-at sc j)) (fb sum))))]
+        (recur (+ j 1) z)))))
+
+(defn- out-at [sc :vector-i64 v :vector-i64 h :i64 c :i64 lk :i64] :i64
+  (loop [j 0 o 0]
+    (if (= j lk) o
+      (recur (+ j 1)
+             (bf (f32-add (fb o) (f32-mul (fb (vector-at sc j)) (fb (vector-at v (+ (+ (* j (nc)) (* h (dd))) c))))))))))
+
+(defn- attention [q :vector-i64 k :vector-i64 v :vector-i64 out :vector-i64 sc :vector-i64 lk :i64] :i64
+  (loop [h 0 z 0]
+    (if (= h (nnh)) z
+      (let [r (loop [i 0 zi 0]
+                (if (= i (npos)) zi
+                  (let [m (scores q k sc h i lk)
+                        sum (exps sc m lk)
+                        z0 (normalize sc sum lk)
+                        w (loop [c 0 zc 0]
+                            (if (= c (dd)) zc
+                              (let [u (vector-assoc! out (+ (+ (* i (nc)) (* h (dd))) c) (out-at sc v h c lk))]
+                                (recur (+ c 1) zc))))]
+                    (recur (+ i 1) zi))))]
+        (recur (+ h 1) z)))))
+
+;; ---- GEGLU: x is [m, 2n], out is [m, n] = a * gelu(g)
+(defn- geglu [x :vector-i64 out :vector-i64 m :i64 n :i64] :i64
+  (loop [r 0 z 0]
+    (if (= r m) z
+      (let [q (loop [i 0 zi 0]
+                (if (= i n) zi
+                  (let [a (fb (vector-at x (+ (* r (* 2 n)) i)))
+                        g (fb (vector-at x (+ (+ (* r (* 2 n)) n) i)))
+                        e (fb (erfb (bf (f32-mul g (fb 1060439283)))))
+                        gelu (f32-mul (f32-mul (fb 1056964608) g) (f32-add (fb 1065353216) e))
+                        u (vector-assoc! out (+ (* r n) i) (bf (f32-mul a gelu)))]
+                    (recur (+ i 1) zi))))]
+        (recur (+ r 1) z)))))
+
+(defn- add-vec [a :vector-i64 b :vector-i64 out :vector-i64 n :i64] :i64
+  (loop [i 0 z 0]
+    (if (= i n) z
+      (let [u (vector-assoc! out i (bf (f32-add (fb (vector-at a i)) (fb (vector-at b i)))))]
+        (recur (+ i 1) z)))))
+
+(defn- to-tokens [g :vector-i64 tok :vector-i64] :i64
+  (loop [p 0 z 0]
+    (if (= p (npos)) z
+      (let [q (loop [c 0 zc 0]
+                (if (= c (nc)) zc
+                  (let [u (vector-assoc! tok (+ (* p (nc)) c) (vector-at g (+ (* c (npos)) p)))]
+                    (recur (+ c 1) zc))))]
+        (recur (+ p 1) z)))))
+
+(defn- from-tokens [x :vector-i64 pp :vector-i64 out :vector-i64] :i64
+  (loop [c 0 z 0]
+    (if (= c (nc)) z
+      (let [q (loop [p 0 zp 0]
+                (if (= p (npos)) zp
+                  (let [u (vector-assoc! out (+ (* c (npos)) p)
+                                         (bf (f32-add (fb (vector-at x (+ (* c (npos)) p)))
+                                                      (fb (vector-at pp (+ (* p (nc)) c))))))]
+                    (recur (+ p 1) zp))))]
+        (recur (+ c 1) z)))))
+
+(defn main [] :i64
+  (let [np (npos)
+        c (nc)
+        lc (nlc)
+        cc (ncc)
+        fi (nfi)
+        maxn (if (> np lc) np lc)
+        x (vector-alloc (* c np))
+        ctx (vector-alloc (* lc cc))
+        gng (vector-alloc c) gnb (vector-alloc c)
+        wi (vector-alloc (* c c)) bi (vector-alloc c)
+        l1g (vector-alloc c) l1b (vector-alloc c)
+        wq1 (vector-alloc (* c c)) wk1 (vector-alloc (* c c)) wv1 (vector-alloc (* c c)) wo1 (vector-alloc (* c c)) bo1 (vector-alloc c)
+        l2g (vector-alloc c) l2b (vector-alloc c)
+        wq2 (vector-alloc (* c c)) wk2 (vector-alloc (* cc c)) wv2 (vector-alloc (* cc c)) wo2 (vector-alloc (* c c)) bo2 (vector-alloc c)
+        l3g (vector-alloc c) l3b (vector-alloc c)
+        wf1 (vector-alloc (* c (* 2 fi))) bf1 (vector-alloc (* 2 fi)) wf2 (vector-alloc (* fi c)) bf2 (vector-alloc c)
+        wout (vector-alloc (* c c)) bout (vector-alloc c)
+        zero (vector-alloc c)
+        z0 (fill zero c 1 0 0)
+        gnv (vector-alloc (* c np)) tok (vector-alloc (* np c)) t0 (vector-alloc (* np c)) ln (vector-alloc (* np c))
+        q (vector-alloc (* np c)) k (vector-alloc (* maxn c)) v (vector-alloc (* maxn c)) at (vector-alloc (* np c))
+        o (vector-alloc (* np c)) t1 (vector-alloc (* np c)) t2 (vector-alloc (* np c))
+        ff (vector-alloc (* np (* 2 fi))) gg (vector-alloc (* np fi)) f2 (vector-alloc (* np c)) t3 (vector-alloc (* np c))
+        p (vector-alloc (* np c)) sc (vector-alloc maxn) out (vector-alloc (* c np))
+        s1 (fill x (* c np) 12345 956301312 0)
+        s2 (fill ctx (* lc cc) s1 964689920 0)
+        s3 (fill gng c s2 931135488 1065353216)
+        s4 (fill gnb c s3 947912704 0)
+        s5 (fill wi (* c c) s4 922746880 0)
+        s6 (fill bi c s5 947912704 0)
+        s7 (fill l1g c s6 931135488 1065353216)
+        s8 (fill l1b c s7 947912704 0)
+        s9 (fill wq1 (* c c) s8 922746880 0)
+        s10 (fill wk1 (* c c) s9 922746880 0)
+        s11 (fill wv1 (* c c) s10 922746880 0)
+        s12 (fill wo1 (* c c) s11 922746880 0)
+        s13 (fill bo1 c s12 947912704 0)
+        s14 (fill l2g c s13 931135488 1065353216)
+        s15 (fill l2b c s14 947912704 0)
+        s16 (fill wq2 (* c c) s15 922746880 0)
+        s17 (fill wk2 (* cc c) s16 922746880 0)
+        s18 (fill wv2 (* cc c) s17 922746880 0)
+        s19 (fill wo2 (* c c) s18 922746880 0)
+        s20 (fill bo2 c s19 947912704 0)
+        s21 (fill l3g c s20 931135488 1065353216)
+        s22 (fill l3b c s21 947912704 0)
+        s23 (fill wf1 (* c (* 2 fi)) s22 922746880 0)
+        s24 (fill bf1 (* 2 fi) s23 947912704 0)
+        s25 (fill wf2 (* fi c) s24 922746880 0)
+        s26 (fill bf2 c s25 947912704 0)
+        s27 (fill wout (* c c) s26 922746880 0)
+        s28 (fill bout c s27 947912704 0)]
+    (loop [r 0 cs (bit-and s28 (mask48))]
+      (if (= r (reps)) cs
+        (let [a1 (gn x gnv c np gng gnb)
+              a2 (to-tokens gnv tok)
+              a3 (linear tok wi bi t0 np c c)
+              b1 (layernorm t0 ln l1g l1b np c)
+              b2 (linear ln wq1 zero q np c c)
+              b3 (linear ln wk1 zero k np c c)
+              b4 (linear ln wv1 zero v np c c)
+              b5 (attention q k v at sc np)
+              b6 (linear at wo1 bo1 o np c c)
+              b7 (add-vec t0 o t1 (* np c))
+              c1 (layernorm t1 ln l2g l2b np c)
+              c2 (linear ln wq2 zero q np c c)
+              c3 (linear ctx wk2 zero k lc cc (nc))
+              c4 (linear ctx wv2 zero v lc cc (nc))
+              c5 (attention q k v at sc lc)
+              c6 (linear at wo2 bo2 o np c c)
+              c7 (add-vec t1 o t2 (* np c))
+              d1 (layernorm t2 ln l3g l3b np c)
+              d2 (linear ln wf1 bf1 ff np c (* 2 fi))
+              d3 (geglu ff gg np fi)
+              d4 (linear gg wf2 bf2 f2 np fi c)
+              d5 (add-vec t2 f2 t3 (* np c))
+              e1 (linear t3 wout bout p np c c)
+              e2 (from-tokens x p out)]
+          (recur (+ r 1)
+                 (loop [i 0 cc2 cs]
+                   (if (= i (* c np)) cc2
+                     (recur (+ i 1) (bit-and (+ (* cc2 31) (bit-and (vector-at out i) 4294967295)) (mask48)))))))))))

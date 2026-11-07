@@ -1,0 +1,6 @@
+PARAMS="M=64 K=320 N=320"
+REPS=5
+TOL=1e-3
+# B indexed transposed (k*N+j -> j*K+k): a classic layout bug
+MUT_FROM='(vector-at b (+ (* k (nn)) j))'
+MUT_TO='(vector-at b (+ (* j (kk)) k))'

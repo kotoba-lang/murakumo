@@ -1,0 +1,13 @@
+--- fixture.kotoba
++++ fixture.kotoba
+@@ -5395 +5395 @@
+-       now (rt-now) head (cp-bytes (str "{\"until\":" (+ now 600000) "}"))
++       now (rt-now) head (cp-bytes (str "{\"until\":" (+ now (if (= mode "budget") 12000 600000)) "}"))
+@@ -5399 +5399,3 @@
+-  (if (= mode "same")
++  (if (= mode "budget")
++    (if (and (= result "profile/budget-refused") (= called "0") (= busy "1")) 0 3)
++    (if (= mode "same")
+@@ -5401 +5403 @@
+-    (if (and (= result "resident/lease-lost") (= called "0") (= busy "1")) 0 2))))
++    (if (and (= result "resident/lease-lost") (= called "0") (= busy "1")) 0 2)))))

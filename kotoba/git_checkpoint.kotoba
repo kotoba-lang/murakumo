@@ -80,23 +80,48 @@
             (if (= k (+ n (- e i))) v
               (recur (+ k 1) (vector-assoc! v k (if (< k n) (vector-at prefix k) (vector-at b (+ i (- k n))))))))
         z (typed-cap-call :fs/app-data :bytes :bytes (bytes-from-vector-i64 v))] 0))
+;; Verification must not issue an unbounded A read after writing. The FS2 E
+;; provider must enforce the requested range and the trusted host must exclude
+;; concurrent replacement and same-size writes throughout the operation.
+(defn- cp-written-equal? [p :string b :vector-i64] :bool
+  (let [n (vector-count b)]
+    (and (= (cp-size p) n)
+         (if (= n 0) (cp-empty-readable? p)
+           (loop [start 0]
+             (if (= start n) true
+               (let [end (if (<= (- n start) 4096) n (+ start 4096))
+                     same (arena-scope
+                            (let [part (cp-range p start (- end start))]
+                              (and (= (vector-count part) (- end start))
+                                   (loop [i 0]
+                                     (if (= i (- end start)) true
+                                       (and (= (vector-at part i) (vector-at b (+ start i)))
+                                            (recur (+ i 1))))))))]
+                 (and same (recur end))))))
+         (= (cp-size p) n))))
 (defn- cp-write [p :string b :vector-i64] :bool
   (let [z (loop [i 0 first true]
             (let [e (cp-cut b i) x (cp-piece p b i e first)]
               (if (= e (vector-count b)) 0 (recur e false))))
         flush (cp-fs "M" p "")]
-    (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
+    (and (= flush "1") (cp-written-equal? p b))))
 (defn- cp-put [store :string b :vector-i64] :string
   (let [cid (cp-cid b) p (str store "/" cid) status (cp-fs "D" p "")]
-    (if (or (> (vector-count b) 131072)
-            (cond (= status "1") (not (= (cp-cid (cp-read p)) cid))
-                  (= status "0") (not (cp-write p b))
-                  :else true)) "" cid)))
+    ;; Even an existing block may be the unsynced remnant of a previous
+    ;; writer. Verify its actual size and bytes, then sync it and its parent.
+    ;; A failed read must never stand in for the empty block.
+    (if (and (<= (vector-count b) 131072)
+             (or (= status "1") (and (= status "0") (cp-write p b)))
+             (cp-block? store cid) (= (cp-fs "M" p "") "1")
+             (= (cp-fs "M" store "") "1")) cid "")))
 (defn- cp-load [store :string cid :string] :vector-i64
   (if (and (cp-raw? cid) (cp-exists? (str store "/" cid))) (cp-read (str store "/" cid)) (vector-alloc 0)))
 (defn- cp-block? [store :string cid :string] :bool
-  (and (cp-raw? cid) (cp-exists? (str store "/" cid))
-    (let [b (cp-read (str store "/" cid))] (and (<= (vector-count b) 131072) (= (cp-cid b) cid)))))
+  (let [path (str store "/" cid) size (if (cp-raw? cid) (cp-size path) -1)
+        b (if (and (>= size 0) (<= size 131072)) (cp-range path 0 size) (vector-alloc 0))]
+    (and (cp-raw? cid) (>= size 0) (<= size 131072) (= (vector-count b) size)
+         (or (> size 0) (cp-empty-readable? path))
+         (= (cp-size path) size) (= (cp-cid b) cid))))
 (defn- cp-str [b :vector-i64 o :i64 k :string] :string
   (let [v (json-member b o k)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
 (defn- cp-num [b :vector-i64 o :i64 k :string] :i64
@@ -176,9 +201,21 @@
             (= (vector-at b i) 32) (if (= field wanted) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ field 1)))
             :else (recur (+ i 1) start field)))))
 (defn- cp-kind [p :string] :string (cp-meta-field (cp-fs "O" p "") 3))
+(defn- cp-meta-digits? [s :string limit :i64] :bool
+  (let [b (cp-bytes s) n (vector-count b)]
+    (and (> n 0) (<= n limit)
+         (loop [i 0] (if (= i n) true
+           (let [c (vector-at b i)]
+             (and (>= c 48) (<= c 57) (recur (+ i 1)))))))))
+(defn- cp-meta-size [m :string] :i64
+  (let [mode (cp-meta-field m 0) size (cp-meta-field m 1)
+        blocks (cp-meta-field m 2) kind (cp-meta-field m 3)]
+    (if (and (= m (str mode " " size " " blocks " " kind))
+             (cp-meta-digits? mode 3) (<= (cp-int mode) 511)
+             (cp-meta-digits? size 9) (cp-meta-digits? blocks 20) (= kind "0"))
+      (cp-int size) -1)))
 (defn- cp-size [p :string] :i64
-  (let [m (cp-fs "O" p "")]
-    (if (= (cp-meta-field m 3) "0") (cp-int (cp-meta-field m 1)) -1)))
+  (cp-meta-size (cp-fs "O" p "")))
 (defn- cp-mkdir [p :string] :bool
   (or (= (cp-fs "I" p "") "1") (= (cp-kind p) "1")))
 
@@ -203,6 +240,26 @@
                                          (= (cp-fs "M" (cp-parent-dir p) "") "1"))))
             (recur (+ i 1)) false))))))
 (defn- cp-range [p :string off :i64 n :i64] :vector-i64 (cp-read-op p "E" (str off ":" n)))
+;; A zero-length reply otherwise loses the distinction between a valid FS2
+;; frame and an unavailable read. Require the complete empty response frame.
+(defn- cp-empty-readable? [p :string] :bool
+  (let [r (typed-cap-call :fs/app-data :string :bytes (cp-frame "E" p "0:0"))]
+    (and (= (bytes-count r) 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70)
+         (= (bytes-at r 2) 83) (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))))
+;; FS2 read failure and a legitimate empty file both yield an empty vector.
+;; Check regular-file size before and after the bounded read so failure to
+;; read a nonempty source cannot silently become an empty checkpoint block.
+;; Exclusive host ownership is still required across the separate calls.
+(defn- cp-capture-read [p :string] :vector-i64
+  (let [n (cp-size p)]
+    (if (and (>= n 0) (<= n 131072)) (cp-range p 0 n) (vector-alloc 0))))
+(defn- cp-capture-read-valid? [p :string b :vector-i64] :bool
+  (let [n (cp-size p)]
+    (and (>= n 0) (<= n 131072) (= n (vector-count b))
+         (or (> n 0) (cp-empty-readable? p)))))
+(defn- cp-capture-block [store :string path :string] :string
+  (let [b (cp-capture-read path)]
+    (if (cp-capture-read-valid? path b) (cp-put store b) "")))
 (defn- cp-chunk-size [size :i64 i :i64] :i64
   (let [remaining (- size (* i 131072))] (if (< remaining 131072) remaining 131072)))
 
@@ -210,7 +267,11 @@
 ;; larger bundles refuse rather than publishing a partial checkpoint.
 (defn- cp-save-chunk [store :string path :string size :i64 i :i64 ids :vector-i64] :bool
   (arena-scope
-    (let [cid (cp-put store (cp-range path (* i 131072) (cp-chunk-size size i))) b (cp-bytes cid)]
+    (let [n (cp-chunk-size size i) before (cp-size path)
+          data (if (= before size) (cp-range path (* i 131072) n) (vector-alloc 0))
+          after (cp-size path)
+          cid (if (and (= before size) (= after size) (= (vector-count data) n)) (cp-put store data) "")
+          b (cp-bytes cid)]
       (and (= (vector-count b) 59)
         (loop [k 0] (if (= k 59) true
           (let [z (vector-assoc! ids (+ (* i 59) k) (vector-at b k))] (recur (+ k 1)))))))))
@@ -228,36 +289,51 @@
                        (recur (+ i 1) (str out (if (= i 0) "" ",") "\"" (cp-chunk-id ids i) "\"")))) "")]
         (if (= chunks "") "" (cp-put store (cp-bytes (str "{\"chunks\":" chunks ",\"kind\":\"itonami.git-bundle/1\",\"size\":" size "}"))))))))
 
+;; Verify the shape before using size, chunk count or entries in loops.
+(defn- cp-bundle-index? [b :vector-i64] :bool
+  (if (not (json-canonical? b)) false
+    (let [chunks (json-member b 0 "chunks") size (cp-num b 0 "size")]
+      (and (= (json-kind b 0) 1) (= (json-count b 0) 3)
+           (= (cp-str b 0 "kind") "itonami.git-bundle/1") (> size 0) (<= size 67108864)
+           (>= chunks 0) (= (json-kind b chunks) 2) (= (json-count b chunks) (quot (+ size 131071) 131072))
+           (loop [i 0]
+             (if (= i (json-count b chunks)) true
+               (let [el (json-element b chunks i)]
+                 (and (= (json-kind b el) 3) (cp-raw? (json-string b el)) (recur (+ i 1))))))))))
+
 (defn- cp-bundle? [store :string cid :string] :bool
   (if (not (cp-block? store cid)) false
-    (let [b (cp-load store cid)]
-      (if (not (json-canonical? b)) false
+    (let [b (cp-capture-read (str store "/" cid))]
+      (if (not (and (cp-reloaded-block-valid? store cid b) (cp-bundle-index? b))) false
         (let [chunks (json-member b 0 "chunks") size (cp-num b 0 "size")]
-          (and (= (json-kind b 0) 1) (= (json-count b 0) 3)
-            (= (cp-str b 0 "kind") "itonami.git-bundle/1") (> size 0) (<= size 67108864)
-            (>= chunks 0) (= (json-kind b chunks) 2) (= (json-count b chunks) (quot (+ size 131071) 131072))
-            (loop [i 0]
-              (if (= i (json-count b chunks)) true
-                (if (arena-scope (let [el (json-element b chunks i) c (if (= (json-kind b el) 3) (json-string b el) "")]
-                      (and (cp-block? store c) (= (cp-size (str store "/" c)) (cp-chunk-size size i)))))
-                  (recur (+ i 1)) false)))))))))
+          (loop [i 0]
+            (if (= i (json-count b chunks)) true
+              (if (arena-scope (let [c (json-string b (json-element b chunks i))]
+                    (and (cp-block? store c) (= (cp-size (str store "/" c)) (cp-chunk-size size i)))))
+                (recur (+ i 1)) false))))))))
 
 (defn- cp-assemble-bundle [store :string cid :string] :bool
-  (let [b (cp-load store cid) chunks (json-member b 0 "chunks") size (cp-num b 0 "size") path (str store "/" cid ".bundle")
-        written (loop [i 0]
-                  (if (= i (json-count b chunks)) true
-                    (if (arena-scope
-                          (let [data (cp-load store (json-string b (json-element b chunks i)))
-                                z (loop [p 0]
-                                    (let [e (cp-cut data p) w (cp-piece path data p e (and (= i 0) (= p 0)))]
-                                      (if (= e (vector-count data)) 0 (recur e))))] true))
-                      (recur (+ i 1)) false)))
-        flush (cp-fs "M" path "")]
-    (and written (= flush "1") (= (cp-size path) size)
-      (loop [i 0]
-        (if (= i (json-count b chunks)) true
-          (if (arena-scope (= (cp-cid (cp-range path (* i 131072) (cp-chunk-size size i))) (json-string b (json-element b chunks i))))
-            (recur (+ i 1)) false))))))
+  (let [b (if (cp-raw? cid) (cp-capture-read (str store "/" cid)) (vector-alloc 0))
+        path (str store "/" cid ".bundle")]
+    (if (not (and (cp-reloaded-block-valid? store cid b) (cp-bundle-index? b))) false
+      (let [chunks (json-member b 0 "chunks") size (cp-num b 0 "size")
+            written (loop [i 0]
+                      (if (= i (json-count b chunks)) true
+                        (if (arena-scope
+                              (let [chunk (json-string b (json-element b chunks i))
+                                    data (cp-capture-read (str store "/" chunk))]
+                                (if (not (and (cp-reloaded-block-valid? store chunk data)
+                                              (= (vector-count data) (cp-chunk-size size i)))) false
+                                  (let [z (loop [p 0]
+                                            (let [e (cp-cut data p) w (cp-piece path data p e (and (= i 0) (= p 0)))]
+                                              (if (= e (vector-count data)) 0 (recur e))))] true))))
+                          (recur (+ i 1)) false)))
+            flush (if written (cp-fs "M" path "") "")]
+        (and written (= flush "1") (= (cp-size path) size)
+          (loop [i 0]
+            (if (= i (json-count b chunks)) true
+              (if (arena-scope (= (cp-cid (cp-range path (* i 131072) (cp-chunk-size size i))) (json-string b (json-element b chunks i))))
+                (recur (+ i 1)) false))))))))
 
 ;; Explicit allowlist only: ignored/registered paths are never captured as
 ;; untracked. FS2 U no-follow metadata exposes all permission bits; the
@@ -274,7 +350,7 @@
               kind (cp-meta-field st 3) bits (cp-meta-field st 0)
               mode (cond (and (= kind "0") (= bits "420")) "644"
                          (and (= kind "0") (= bits "493")) "755" :else "")
-              cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-put store (cp-read (str repo "/" path))) "")]
+              cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-capture-block store (str repo "/" path)) "")]
           (if (= cid "") "" (recur (+ i 1) path (str out (if (= i 0) "" ",") "{\"cid\":\"" cid "\",\"mode\":\"" mode "\",\"path\":\"" path "\"}"))))))))
 
 (defn- cp-required-files? [list :vector-i64 a-path :string a-cid :string b-path :string b-cid :string] :bool
@@ -311,10 +387,13 @@
             bundle-path (str store "/" (if (= stash "none") head stash) ".bundle")
             bundle-r (if (cp-ok? update) (cp-git repo (str "bundle" (cp-a) "create" (cp-a) bundle-path (cp-a) "HEAD" (cp-a) ref)) "refused")]
         (if (not (cp-ok? bundle-r)) (cp-result (str "checkpoint/git-capture " bundle-r " stash " stash-r))
-          (let [bundle (cp-save-bundle store bundle-path) profile-bytes (cp-read (cp-arg 4))
-                profile-cid (cp-put store profile-bytes) profile (str "sha256:" (sha256-hex profile-bytes))
-                policy (cp-put store (cp-read (cp-arg 5))) environment (cp-put store (cp-read (cp-arg 6)))
-                summary (cp-put store (cp-read (cp-arg 7))) us (cp-capture-untracked repo store (cp-read (cp-arg 8)))
+          (let [bundle (cp-save-bundle store bundle-path) profile-bytes (cp-capture-read (cp-arg 4))
+                profile-cid (if (cp-capture-read-valid? (cp-arg 4) profile-bytes) (cp-put store profile-bytes) "")
+                profile (str "sha256:" (sha256-hex profile-bytes))
+                policy (cp-capture-block store (cp-arg 5)) environment (cp-capture-block store (cp-arg 6))
+                summary (cp-capture-block store (cp-arg 7))
+                list-bytes (cp-capture-read (cp-arg 8))
+                us (if (cp-capture-read-valid? (cp-arg 8) list-bytes) (cp-capture-untracked repo store list-bytes) "")
                 did (did-from-public (public-from-seed seed))
                 payload (str "{\"bundle\":\"" bundle "\",\"did\":\"" did "\",\"environment\":\"" environment
                   "\",\"epoch\":" epoch ",\"head\":\"" head "\",\"kind\":\"itonami.git-checkpoint/1\",\"parent\":\"" parent
@@ -328,9 +407,10 @@
                     (not (= head-r (cp-git repo "rev-parseARG_SEP--verifyARG_SEPHEAD"))))
               (cp-result "checkpoint/capture-incomplete-or-busy")
               (if (not (= verdict "checkpoint/ok")) (cp-result verdict)
+                (if (not (cp-closure? store envelope)) (cp-result "checkpoint/capture-closure-incomplete")
                 (let [cid (cp-put store envelope)]
                   (if (= cid "") (cp-result "checkpoint/root-publication-failed")
-                    (cp-result (str "checkpoint/created " cid "\n" (cp-text envelope)))))))))))))
+                    (cp-result (str "checkpoint/created " cid "\n" (cp-text envelope))))))))))))))
 
 (defn- cp-capture [] :i64 (cp-capture-with-required "" "" "" ""))
 
@@ -344,6 +424,12 @@
 
 (defn- cp-parent-dir [p :string] :string
   (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+;; Revalidate the exact bytes of every sensitive reload, not just an earlier
+;; closure check: a later failed read must not masquerade as an empty block.
+(defn- cp-reloaded-block-valid? [store :string cid :string data :vector-i64] :bool
+  (and (cp-raw? cid) (cp-capture-read-valid? (str store "/" cid) data)
+       (= (cp-cid data) cid)))
+
 (defn- cp-materialize [store :string b :vector-i64 dest :string] :string
   (let [p (cp-payload b) head (cp-str b p "head") stash (cp-str b p "stash")
         stage (str dest ".partial") ref (str "refs/itonami/checkpoints/" (if (= stash "none") head stash))
@@ -362,8 +448,10 @@
                 files (if (cp-ok? fsck)
                   (loop [i 0]
                     (if (= i (json-count b us)) true
-                      (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))]
-                        (if (and (cp-real-parents? stage (cp-str b u "path") true) (cp-absent? path) (cp-write path (cp-load store (cp-str b u "cid")))
+                      (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))
+                            cid (cp-str b u "cid") data (if (cp-raw? cid) (cp-capture-read (str store "/" cid)) (vector-alloc 0))]
+                        (if (and (cp-reloaded-block-valid? store cid data)
+                                 (cp-real-parents? stage (cp-str b u "path") true) (cp-absent? path) (cp-write path data)
                                  (= (cp-fs "H" path (cp-str b u "mode")) "1")
                                  (= (cp-fs "M" path "") "1") (= (cp-fs "M" (cp-parent-dir path) "") "1"))
                           (recur (+ i 1)) false)))) false)]
@@ -378,8 +466,12 @@
 ;; before publishing, and the host must keep the source store quiescent.
 ;; CID repeats are allowed (for example when policy and summary coincide).
 (defn- cp-closure-list [store :string cid :string b :vector-i64] :i64
-  (let [p (cp-payload b) bundle (cp-str b p "bundle") index (cp-load store bundle)
-        chunks (json-member index 0 "chunks") us (json-member b p "untracked")
+  (let [p (cp-payload b) bundle (cp-str b p "bundle")
+        index (if (cp-raw? bundle) (cp-capture-read (str store "/" bundle)) (vector-alloc 0))
+        chunks (if (json-canonical? index) (json-member index 0 "chunks") -1)
+        valid (and (cp-reloaded-block-valid? store bundle index) (cp-bundle-index? index))]
+    (if (not valid) (cp-result "checkpoint/missing-or-corrupt-block")
+      (let [us (json-member b p "untracked")
         a (cp-say (str "checkpoint/block " cid))
         d (cp-say (str "checkpoint/block " bundle))
         e (cp-say (str "checkpoint/block " (cp-str b p "policy")))
@@ -390,13 +482,14 @@
             (let [x (cp-say (str "checkpoint/block " (cp-str b (json-element b us n) "cid")))] (recur (+ n 1)))))
         j (loop [n 0] (if (= n (json-count index chunks)) 0
             (let [x (cp-say (str "checkpoint/block " (json-string index (json-element index chunks n))))] (recur (+ n 1)))))]
-    (cp-result "checkpoint/closure-complete")))
+        (cp-result "checkpoint/closure-complete")))))
 
 (defn- cp-restore [] :i64
   (let [store (cp-arg 1) cid (cp-arg 2)]
     (if (not (cp-block? store cid)) (cp-result "checkpoint/missing-or-corrupt-root")
-      (let [b (cp-load store cid)
-            v (checkpoint-problem b (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6) (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9))]
+      (let [b (cp-capture-read (str store "/" cid))
+            valid (cp-reloaded-block-valid? store cid b)
+            v (if valid (checkpoint-problem b (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6) (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9)) "checkpoint/missing-or-corrupt-root")]
         (cond (not (= v "checkpoint/ok")) (cp-result v)
               (not (cp-closure? store b)) (cp-result "checkpoint/missing-or-corrupt-block")
               (= (cp-arg 0) "verify") (cp-result "checkpoint/verified")
@@ -409,8 +502,9 @@
   (let [store (cp-arg 1) from (cp-arg 2) to (cp-arg 3) seed (cp-seed (cp-arg 4)) task (cp-arg 5)]
     (if (or (not (= (vector-count seed) 32)) (not (cp-block? store from)) (not (cp-block? store to)))
       (cp-result "recovery/missing-input")
-      (let [a (cp-load store from) b (cp-load store to)]
-        (if (or (not (json-canonical? a)) (not (json-canonical? b))
+      (let [a (cp-capture-read (str store "/" from)) b (cp-capture-read (str store "/" to))]
+        (if (or (not (cp-reloaded-block-valid? store from a)) (not (cp-reloaded-block-valid? store to b))
+                (not (json-canonical? a)) (not (json-canonical? b))
                 (< (cp-payload a) 0) (< (cp-payload b) 0)) (cp-result "recovery/noncanonical")
           (let [pa (cp-payload a) pb (cp-payload b) did (did-from-public (public-from-seed seed))
                 ea (if (>= pa 0) (cp-num a pa "epoch") -1) eb (if (>= pb 0) (cp-num b pb "epoch") -1)
@@ -425,13 +519,14 @@
                            ",\"kind\":\"itonami.recovery/1\",\"resumed\":\"" to "\",\"task\":\"" task "\"}")
                     envelope (cp-bytes (str "{\"payload\":" text ",\"signature\":\"" (sign-statement seed text) "\"}"))
                     cid (cp-put store envelope)]
-                (cp-result (str "recovery/recorded " cid "\n" (cp-text envelope)))))))))))
+                (if (= cid "") (cp-result "recovery/publication-unknown")
+                  (cp-result (str "recovery/recorded " cid "\n" (cp-text envelope))))))))))))
 
 (defn- cp-verify-recovery [] :i64
   (let [store (cp-arg 1) cid (cp-arg 2)]
     (if (not (cp-block? store cid)) (cp-result "recovery/missing-or-corrupt")
-      (let [b (cp-load store cid)]
-        (if (not (json-canonical? b)) (cp-result "recovery/noncanonical")
+      (let [b (cp-capture-read (str store "/" cid))]
+        (if (or (not (cp-reloaded-block-valid? store cid b)) (not (json-canonical? b))) (cp-result "recovery/noncanonical")
           (let [p (cp-payload b) did (cp-arg 3)]
             (cond (or (< p 0) (not (= (json-kind b 0) 1)) (not (= (json-count b 0) 2))
                       (not (= (json-kind b p) 1)) (not (= (json-count b p) 6))) (cp-result "recovery/schema")

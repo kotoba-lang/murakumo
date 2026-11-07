@@ -1,0 +1,9 @@
+;; Pure USTAR header and observation vectors; no filesystem operations.
+(ns murakumo.fleet-model-flint-assets-pack-test (:export [test-flint-pack-header]))
+
+(defn test-flint-pack-header [] :bool
+  (let [header (pk-header ".kapitsa/manifest.json" 1443)
+        wrong (pk-header ".kapitsa/other.json" 1443)]
+    (and (ta-header? header) (= (ta-octal header 124 136) 1443)
+         (= (ft-id header) 6) (= (ft-id wrong) -1)
+         (= (pk-padded 1443) 1536))))

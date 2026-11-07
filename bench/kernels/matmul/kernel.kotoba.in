@@ -1,0 +1,52 @@
+(ns murakumo.matmul (:export [main]))
+
+;; Linear layer C = A.B + bias in f32: the Q/K/V, output and feed-forward
+;; projections of a transformer block. A is [@M@, @K@], B is [@K@, @N@] row-major,
+;; bias is [@N@]. The accumulator starts at the bias and adds one product per k
+;; in order, each multiply and add rounded alone, as kernel.c does.
+
+(defn- mm [] :i64 @M@)
+(defn- kk [] :i64 @K@)
+(defn- nn [] :i64 @N@)
+(defn- reps [] :i64 @REPS@)
+(defn- mask48 [] :i64 281474976710655)
+
+(defn- lcg [s :i64] :i64
+  (bit-and (+ (* s 1103515245) 12345) 2147483647))
+
+(defn- fb [b :i64] :f32 (f32-from-bits (i32-wrap b)))
+(defn- bf [x :f32] :i64 (f32-to-bits x))
+
+(defn- fill [v :vector-i64 n :i64 seed :i64 scale :i64] :i64
+  (loop [i 0 s seed]
+    (if (= i n) s
+      (let [t (lcg s)
+            iv (- (bit-and (i64-shift-right t 8) 65535) 32768)
+            u (vector-assoc! v i (bf (f32-add (f32-mul (i64-to-f32-rounded iv) (fb scale)) (fb 0))))]
+        (recur (+ i 1) t)))))
+
+(defn- at [a :vector-i64 b :vector-i64 bias :vector-i64 i :i64 j :i64] :i64
+  (loop [k 0 acc (vector-at bias j)]
+    (if (= k (kk)) acc
+      (recur (+ k 1)
+             (bf (f32-add (fb acc) (f32-mul (fb (vector-at a (+ (* i (kk)) k)))
+                                            (fb (vector-at b (+ (* k (nn)) j))))))))))
+
+(defn- pass [a :vector-i64 b :vector-i64 bias :vector-i64 c0 :i64] :i64
+  (loop [i 0 c c0]
+    (if (= i (mm)) c
+      (recur (+ i 1)
+             (loop [j 0 cc c]
+               (if (= j (nn)) cc
+                 (recur (+ j 1) (bit-and (+ (* cc 31) (bit-and (at a b bias i j) 4294967295)) (mask48)))))))))
+
+(defn main [] :i64
+  (let [a (vector-alloc (* (mm) (kk)))
+        b (vector-alloc (* (kk) (nn)))
+        bias (vector-alloc (nn))
+        s1 (fill a (* (mm) (kk)) 12345 956301312)
+        s2 (fill b (* (kk) (nn)) s1 931135488)
+        s3 (fill bias (nn) s2 947912704)]
+    (loop [i 0 c (bit-and s3 (mask48))]
+      (if (= i (reps)) c
+        (recur (+ i 1) (pass a b bias c))))))
