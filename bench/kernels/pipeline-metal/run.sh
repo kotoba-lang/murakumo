@@ -25,8 +25,12 @@ AMU=${1:?amu checkout}; COMFY=${2:?ComfyUI v0.44.0 source dir}; STUBS=${3:?stubs
 HERE=$(cd "$(dirname "$0")" && pwd)
 WK=$(mktemp -d "${TMPDIR:-/tmp}/pipeline-metal.XXXXXX")
 fail=0
-MC=64; LAT=32; CH=32; STEPS=4
+MC=64; LAT=32; CH=32; STEPS=${STEPS:-4}
 LAYOUT=${LAYOUT:-hf}
+# scheduler (simple, normal, karras) and sampler (euler, dpmpp_2m) of the render; the fixture's oracle uses ComfyUI's own source for the same pair
+export SCHED=${SCHED:-simple} SAMPLER=${SAMPLER:-euler}
+case "$SCHED" in simple) SCHEDN=0;; normal) SCHEDN=1;; karras) SCHEDN=2;; *) echo "unknown SCHED $SCHED"; exit 1;; esac
+case "$SAMPLER" in euler) SAMPLERN=0;; dpmpp_2m) SAMPLERN=1;; *) echo "unknown SAMPLER $SAMPLER"; exit 1;; esac
 # the conditional prompt mixes ASCII, Japanese, accented Latin, fullwidth forms and an emoji, so the whole path (tokenizer, towers, render) is exercised on non-ASCII text
 # ComfyUI prompt weighting in both prompts: nested and explicit weights, an escaped parenthesis, a weighted special token
 # both prompts run past 75 tokens: ComfyUI cuts them into blocks of 77 (here 2 and 3), each through the towers, joined along the sequence axis; the shorter is repeated to the common length
@@ -42,9 +46,9 @@ printf "%s%s" "$(cut -c1-63 "$WK/fx/model.sha256")" "$flip" > "$WK/fx/bad.sha256
 SB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',($CH*4)**-0.5))[0])")
 CFGB=$(python3 -c "import struct;print(struct.unpack('<I',struct.pack('<f',4.0))[0])")
 build() { # name [from to]
-  sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@EMBDIR@#$WK/fx/emb#;s#@EXPECT@#$WK/fx/model.sha256#;s#@PRE_L@#$PRE_L#;s#@PRE_G@#$PRE_G#;s#@SCHEME_L@#0#;s#@SCHEME_G@#$SCH_G#;s#@X@#$WK/fx/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/fx/prompt_c.txt#;s#@PROMPTU@#$WK/fx/prompt_u.txt#;s#@SZ@#$WK/fx/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/$1.kotoba"
+  sed -e "s#@MODEL@#$WK/fx/model.safetensors#;s#@SCHED@#$SCHEDN#g;s#@SAMPLER@#$SAMPLERN#;s#@EMBDIR@#$WK/fx/emb#;s#@EXPECT@#$WK/fx/model.sha256#;s#@PRE_L@#$PRE_L#;s#@PRE_G@#$PRE_G#;s#@SCHEME_L@#0#;s#@SCHEME_G@#$SCH_G#;s#@X@#$WK/fx/x.f32#;s#@VOCAB@#$TOKDIR/vocab.json#;s#@MERGES@#$TOKDIR/merges.txt#;s#@PROMPTC@#$WK/fx/prompt_c.txt#;s#@PROMPTU@#$WK/fx/prompt_u.txt#;s#@SZ@#$WK/fx/sz.f32#;s#@MC@#$MC#g;s#@LAT@#$LAT#g;s#@CH@#$CH#g;s#@STEPS@#$STEPS#g;s#@TE@#$((4 * MC))#g;s#@NDC@#$((CH * 4 / 64))#g;s#@SCALEBITS@#$SB#;s#@CFGBITS@#$CFGB#" "$HERE/pipeline_metal.kotoba.in" > "$WK/$1.kotoba"
   if [ -n "${2:-}" ]; then
-    FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/$1.kotoba"
+    FROM=$2 TO=$3 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/'"${MUTG:+g}"' or die "mutation did not apply\n"' "$WK/$1.kotoba"
   fi
   "$AMU/bin/amu" compile "$WK/$1.kotoba" --runtime-profile amu-program-metal -o "$WK/$1" >/dev/null
   s0=$(date +%s); { "$WK/$1" > /dev/null 2> "$WK/$1.err"; } 2>/dev/null || true; s1=$(date +%s); echo $((s1 - s0)) > "$WK/$1.sec"
@@ -61,6 +65,7 @@ echo "$STEPS Euler steps (2 UNet passes each) + VAE decode, 256 px, $(grep -a -o
 build mbad '/model.sha256' '/bad.sha256'
 if grep -a -q 'dispatches' "$WK/mbad.err"; then echo "digest mismatch: render still ran (NOT refused)"; fail=1; else echo "digest mismatch: checkpoint refused, no render output (detected)"; fi
 mutant() { # label from to
+  [ "${MUTANTS:-1}" = 1 ] || return 0
   build "m$1" "$2" "$3"
   line=$(cmp_ "m$1"); worst=$(echo "$line" | awk '{m=0; for(i=1;i<=NF;i++){split($i,a,"="); if((a[1] ~ /^(step|image|ctx|y|ids)/) && a[2]+0>m) m=a[2]+0}; print m}')
   bad=$(awk -v e="$worst" 'BEGIN{print (e+0 > 0.2 || e != e+0) ? 1 : 0}')
@@ -78,7 +83,13 @@ mutant embedding-row-index 'Tab[(Ov[r] - 1u) * H + c] + Pos[r * H + c];' 'Tab[(O
 mutant context-repeat 'uint s = r % src;' 'uint s = (r < src) ? r : 0u;'
 mutant block-ids 'i1 (emit! S (vector-i64 idsL idl) (vector-i64 (* c 308) 0)' 'i1 (emit! S (vector-i64 idsL idl) (vector-i64 0 0)'
 mutant block-output 'o1 (emit! S (vector-i64 penL outL) (vector-i64 0 (* c (* 77 3072)))' 'o1 (emit! S (vector-i64 penL outL) (vector-i64 0 0)'
-mutant guidance 'float den = du + (dc - du) * cfg;' 'float den = dc;'
+MUTG=1; mutant guidance 'float den = du + (dc - du) * cfg;' 'float den = dc;'; MUTG=
+if [ "$SAMPLER" = dpmpp_2m ]; then
+  mutant dpmpp-old-denoised 'float dd = (1.0f + 1.0f / (2.0f * r)) * den - (1.0f / (2.0f * r)) * OLD[i];' 'float dd = den;'
+  mutant dpmpp-step-ratio 'float r = hl / h;' 'float r = 1.0f;'
+fi
+if [ "$SCHED" = karras ]; then mutant karras-rho 'precise::pow(mx + ramp * (mn - mx), 7.0f)' 'precise::pow(mx + ramp * (mn - mx), 6.0f)'; fi
+if [ "$SCHED" = normal ]; then mutant normal-endpoint 'float step = (steps > 1u) ? (0.0f - 999.0f) / float(steps - 1u) : 0.0f;' 'float step = (steps > 1u) ? (0.0f - 899.0f) / float(steps - 1u) : 0.0f;'; fi
 mutant timestep-reversed '  Tb[0] = float(bj);' '  Tb[0] = float(999u - bj);'
 mutant uncond-context '(vector-i64 ctxhu ctxh) (vector-i64 0 0) 24' '(vector-i64 ctxhc ctxh) (vector-i64 0 0) 24'
 mutant concat-order 'O[i] = (c < 768u) ? L[s * 768u + c] : G[s * 1280u + (c - 768u)];' 'O[i] = (c < 1280u) ? G[s * 1280u + c] : L[s * 768u + (c - 1280u)];'
