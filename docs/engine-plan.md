@@ -4,12 +4,12 @@ Owner direction, 2026-11-07: murakumo had grown several unrelated directions. Pu
 **the fastest inference engine, written in Kotoba and built by Amu selfhost.** The reference to beat is
 [Kapitsa](https://github.com/nace-ai/kapitsa) (nace-ai, C++ and Metal, Apple silicon only).
 
-Status: plan. Nothing here is implemented by this document. Numbers under "Where it stands" were measured and are
-linked; every later number is a target. Sections marked **proposed** are decisions for the owner.
+Status: plan, decided by the owner on 2026-11-08 (D1–D4 below, as proposed). Nothing here is implemented by this
+document. Numbers under "Where it stands" were measured and are linked; every later number is a target.
 
 This document is the one plan. [inference-roadmap.md](inference-roadmap.md) (S0–S8) and
 [media-generation-roadmap.md](media-generation-roadmap.md) (I0–I5, stage M) stay as detailed records; where they
-disagree with this plan on order or scope, this plan is the proposal.
+disagree with this plan on order or scope, this plan wins.
 
 ## The goal, in one sentence
 
@@ -67,12 +67,12 @@ is Kotoba built by Amu; the kernels are not yet emitted by Amu from KIR v2. Clos
 The lesson for the order: a plain decode at memory bandwidth comes first, because speculative decoding multiplies
 whatever one target pass costs. The lead over MLX and llama.cpp then comes from the drafter and tree verify.
 
-## Proposed scope: what is in and what stops
+## Scope: what is in and what stops
 
 **In:** one Mac, one process: read a model file, run the forward pass on the GPU, keep the KV cache, sample, draft and
 verify, and answer `/v1/chat/completions`. Benchmarks against the other engines on the same Mac.
 
-**Paused (proposed, owner decision D1).** Not deleted; no new work until the engine leads on the Mac.
+**Paused (owner decision D1, 2026-11-08).** Not deleted; no new work until the engine leads on the Mac.
 
 | Direction | Issues | Why it stops |
 | --- | --- | --- |
@@ -104,13 +104,12 @@ recorded number under `bench/results/`, and the same-day comparison engines on t
 E7 can run beside E2–E6, kernel by kernel; the claim "built by Amu selfhost" in full waits for it. Other machines
 (Linux nodes, route C, other GPUs) come after the Mac leads, using the same Kotoba sources.
 
-## Owner decisions
+## Owner decisions (2026-11-08, all as proposed)
 
-- **D1.** Pause the directions in the table above (proposed: yes).
-- **D2.** Accept hand-written MSL text inside Kotoba as the first GPU tier, with E7 as the condition for the full
-  selfhost claim (proposed: yes; the alternative, KIR v2 → MSL first, delays the first token by the whole of E7).
-- **D3.** The headline model for E6 (proposed: Qwen3.5-4B 4-bit first, because Kapitsa publishes it on an M1 and it fits
-  any Mac).
+- **D1.** The directions in the table above are paused.
+- **D2.** Hand-written MSL text inside Kotoba is accepted as the first GPU tier. The full "built by Amu selfhost" claim
+  waits for E7 (KIR v2 → MSL); doing E7 first would have delayed the first token by the whole of E7.
+- **D3.** The headline model for E6 is Qwen3.5-4B 4-bit first: Kapitsa publishes it on an M1 and it fits any Mac.
 - **D4.** Kapitsa, MLX and llama.cpp run on the developer Mac as comparison engines in E0/E5 benchmarks only, recorded
   with versions, never on the engine's path or in a gate.
 
