@@ -12,7 +12,7 @@
 # the checksum; a truncated copy, a copy with a bad magic, and a copy whose first tensor's shape disagrees with
 # its offsets are refused (a message, a trap, no checksum); a digest that differs in one character refuses the
 # run before any tensor line is printed. Not covered: dtypes other than F32 and Q8_0, alignments other than 32,
-# files over 16 MiB (refused; chunked data reads land in S8), names with backslash escapes or non-UTF-8 bytes,
+# headers over 64 MiB, names with backslash escapes or non-UTF-8 bytes,
 # data regions not a multiple of 8 bytes. A GPU host is required (not a CI step).
 #
 #   sh run.sh /path/to/amu-checkout [python3]
@@ -61,6 +61,13 @@ shasum -a 256 "$WK/badshape.gguf" | cut -c1-64 > "$WK/badshape.sha256"
 build bs "$WK/badshape.gguf" "$WK/badshape.sha256"
 { "$WK/bs" > /dev/null 2> "$WK/bs.txt"; rc=$?; } 2>/dev/null || true
 if grep -q checksum "$WK/bs.txt" || [ "$rc" = 0 ]; then echo "file with a wrong shape: NOT refused"; fail=1; else echo "file with a wrong shape refused (exit $rc): $(grep refused "$WK/bs.txt" | head -1)"; fi
+"$PY" "$HERE/make_fixture.py" write-big "$WK/big.gguf"
+"$PY" "$HERE/make_fixture.py" expect "$WK/big.gguf" > "$WK/big-expect.txt"
+shasum -a 256 "$WK/big.gguf" | cut -c1-64 > "$WK/big.sha256"
+build big "$WK/big.gguf" "$WK/big.sha256"
+"$WK/big" > /dev/null 2> "$WK/big-got.txt" || true
+if cmp -s "$WK/big-got.txt" "$WK/big-expect.txt"; then echo "file over 16 MiB ($(wc -c < "$WK/big.gguf" | tr -d ' ') bytes): catalog and checksum equal the Python expectation, data read in chunks"
+else echo "file over 16 MiB: MISMATCH"; diff "$WK/big-expect.txt" "$WK/big-got.txt" | head -20; fail=1; fi
 build mbad "$WK/fixture.gguf" "$WK/bad.sha256"
 { "$WK/mbad" > /dev/null 2> "$WK/mbad.txt"; rc=$?; } 2>/dev/null || true
 if grep -q "tensors \|^kv " "$WK/mbad.txt" || [ "$rc" = 0 ]; then echo "digest mismatch: catalog printed (NOT refused)"; fail=1; else echo "digest mismatch: refused before any tensor is read (exit $rc): $(grep refused "$WK/mbad.txt" | head -1)"; fi
