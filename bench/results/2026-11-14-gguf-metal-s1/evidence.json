@@ -1,0 +1,24 @@
+{
+  "schema": "murakumo.bench.gate.v1",
+  "step": "engine-plan E1, slice S1 (GGUF reader on the Metal route)",
+  "date": "2026-11-14",
+  "host": {"machine": "MacBook Pro, Apple M1 Max, 32 GB", "os": "macOS 26.4"},
+  "amu": {"repo": "kotoba-lang/amu", "rev": "f759f4f74", "cli": "bin/amu -> seed/bootstrap/aarch64-macos/amu-cli.macho", "cliSha256Prefix": "016aaefcac44eff3", "profile": "amu-program-metal (ADR 0405)", "metalGate": "scripts/seed/check-macos-metal.py PASS_MACOS_METAL_KERNEL on the same host and day"},
+  "command": "sh bench/kernels/gguf-metal/run.sh <amu checkout> python3",
+  "oracle": "bench/kernels/gguf-metal/make_fixture.py (Python 3 stdlib, local oracle only, not on the engine path)",
+  "fixture": {"tensors": 290, "kvs": 18, "dtypes": ["F32", "Q8_0"]},
+  "rows": {
+    "exact": "catalog and checksum equal the oracle (311 lines, expect.txt)",
+    "mutant": "weight byte flipped: checksum 126426542307805 != 45598559121918 (detected)",
+    "truncated": "refused (exit 133): data_offsets do not match the data region size",
+    "badMagic": "refused (exit 133): bad magic",
+    "badShape": "refused (exit 133): a tensor's size differs from its shape and dtype",
+    "digestMismatch": "refused before any tensor is read (exit 133, trap without a message)"
+  },
+  "fixesBeforePass": [
+    "reader: 1- and 2-byte scalar KVs (bool, u8, u16 ...) were read as u32 and took bytes of the next field",
+    "reader: tensor lines printed `name shape dtype`; the contract is `name dtype shape begin end`",
+    "oracle: string arrays printed `str:count`; the contract is numeric `elemtype:count`"
+  ],
+  "notCovered": "the real Qwen2.5-0.5B Q8_0 file (531 MB) is refused over 16 MiB until chunked reads (S8); dtypes other than F32/Q8_0; no forward pass yet"
+}
