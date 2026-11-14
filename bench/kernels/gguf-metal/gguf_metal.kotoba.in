@@ -6,7 +6,7 @@
 ;; n_tensors i64, n_kv i64, KVs, tensor infos, aligned data blob) and ggml.h dtype ids (F32 = 0, Q8_0 = 8; a Q8_0
 ;; block is one fp16 scale + 32 int8 = 34 bytes). The program first checks the file's SHA-256 against the pinned
 ;; digest file (@EXPECT@, first 64 characters; the same helpers as bench/kernels/pipeline-metal slice 37 and
-;; bench/kernels/sha256-metal), then reads the whole file (refused over 16 MiB; chunked data reads land in S8),
+;; bench/kernels/sha256-metal), then reads the header through a prefix of at most 64 MiB (S2; a header that does not fit traps),
 ;; walks the KVs (printing each; the tokenizer arrays are skipped by length, never decoded — no Qwen encode in E1,
 ;; the gate feeds fixed id vectors), walks the tensor infos (one line per tensor in file order:
 ;; `name dtype d0xd1... begin end`), reads the data region into a Metal buffer (newBufferWithLength + pread into
@@ -14,7 +14,8 @@
 ;; mod 2^48. Refused before the checksum is printed (a message on stderr, then a trap): a digest mismatch (before
 ;; any tensor is read), bad magic, a version other than 3, a truncated file, an unknown dtype, a Q8_0 tensor whose
 ;; length is not a multiple of 32 elements, a span that disagrees with shape and dtype, a largest data_offsets end
-;; that is not the data region's size, a file over 16 MiB. KV pin expectations (arch qwen2, block counts, head
+;; that is not the data region's size, a header longer than 64 MiB. The data region is pread into the Metal buffer in 8 MiB
+;; chunks (S2), so files over 16 MiB are read. KV pin expectations (arch qwen2, block counts, head
 ;; counts, rope base, rms eps, tokenizer ids and lengths) are asserted by line-for-line equality with the Python
 ;; oracle in run.sh, which embeds them — the same mechanism every stage-M gate uses. Not implemented: dtypes other
 ;; than F32 and Q8_0, alignments other than 32, names with bytes outside UTF-8, files whose data region is not a
@@ -355,34 +356,41 @@
         shv (sha-verify! f R fd "@EXPECT@")
         total (cc f (sym f "lseek") fd 0 2 0 0)
         u1 (if (< total 24) (let [w (wr-text f R "refused: truncated header\n")] (vector-at [0] 1)) 0)
-        u1b (if (> total 16777216) (let [w (wr-text f R "refused: file over 16 MiB, chunked reads land in S8\n")] (vector-at [0] 1)) 0)
-        fbuf (cc f (vector-at R 3) total 0 0 0 0)
-        got (cc f (sym f "pread") fd fbuf total 0 0)
-        u2 (if (= got total) 0 (let [w (wr-text f R "refused: short read\n")] (vector-at [0] 1)))
+        hb (if (> total 67108864) 67108864 total)
+        fbuf (cc f (vector-at R 3) hb 0 0 0 0)
+        got (cc f (sym f "pread") fd fbuf hb 0 0)
+        u2 (if (= got hb) 0 (let [w (wr-text f R "refused: short read\n")] (vector-at [0] 1)))
         m (if (= (+ (+ (+ (bit-xor (byte-at f fbuf) 71) (bit-xor (byte-at f (+ fbuf 1)) 71)) (bit-xor (byte-at f (+ fbuf 2)) 85)) (bit-xor (byte-at f (+ fbuf 3)) 70)) 0) 0 (let [w (wr-text f R "refused: bad magic\n")] (vector-at [0] 1)))
         ver (u32le f fbuf 4)
         u3 (if (= ver 3) 0 (let [w (wr-text f R "refused: bad version\n")] (vector-at [0] 1)))
         nt (peek f (+ fbuf 8))
         nk (peek f (+ fbuf 16))
         u4 (if (or (<= nt 0) (< nk 0)) (let [w (wr-text f R "refused: bad counts\n")] (vector-at [0] 1)) 0)
-        kpos (kv-walk f R fbuf 24 nk total)
+        kpos (kv-walk f R fbuf 24 nk hb)
         u5 (wr-text f R "kvs ")
         u6 (wr-num f R nk)
         u7 (wr-text f R "\n")
         chk (vector-alloc 2)
-        tpos (tensor-walk f R fbuf kpos nt total chk)
+        tpos (tensor-walk f R fbuf kpos nt hb chk)
         u8 (wr-text f R "tensors ")
         u9 (wr-num f R nt)
         u10 (wr-text f R "\n")
         r (rem tpos 32)
         dstart (if (= r 0) tpos (+ tpos (- 32 r)))
+        u10b (if (> dstart total) (let [w (wr-text f R "refused: data region starts past the end of the file\n")] (vector-at [0] 1)) 0)
         dlen (- total dstart)
         r1 (if (= (vector-at chk 1) 0) 0 (let [w (wr-text f R "refused: a tensor's size differs from its shape and dtype\n")] (vector-at [0] 1)))
         r2 (if (= (vector-at chk 0) dlen) 0 (let [w (wr-text f R "refused: data_offsets do not match the data region size\n")] (vector-at [0] 1)))
         buf (msg f R dev "newBufferWithLength:options:" dlen 0 0)
         u11 (if (= buf 0) (vector-at [0] 1) 0)
         data (msg f R buf "contents" 0 0 0)
-        got2 (cc f (sym f "pread") fd data dlen dstart 0)
+        prd (sym f "pread")
+        got2 (loop [o 0]
+               (if (>= o dlen) o
+                 (let [want (if (< (- dlen o) 8388608) (- dlen o) 8388608)
+                       g (cc f prd fd (+ data o) want (+ dstart o) 0)]
+                   (if (= g want) (recur (+ o want))
+                     (let [w (wr-text f R "refused: short read in the data region\n")] (vector-at [0] 1))))))
         u12 (if (= got2 dlen) (stamp-same! f R fd shv) (vector-at [0] 1))
         c (loop [i 0 c 0]
             (if (>= i dlen) c

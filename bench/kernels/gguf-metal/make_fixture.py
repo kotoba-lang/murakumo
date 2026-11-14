@@ -2,6 +2,8 @@
 """Local test fixture and oracle for gguf_metal.kotoba.in (not a gate, not a route).
   python3 make_fixture.py write FILE        write a synthetic GGUF v3 file (E1 tensor names,
                                             scaled-down shapes, F32 + Q8_0 only)
+  python3 make_fixture.py write-big FILE    the same file plus one 20 MiB F32 tensor (pad.weight), so the
+                                            file is over 16 MiB and the data region is read in chunks
   python3 make_fixture.py expect FILE       print what the Kotoba program must print, from an
                                             independent re-parse of the file
   python3 make_fixture.py corrupt-data SRC DST
@@ -104,9 +106,10 @@ def _f32(rng, n):
     return struct.pack(f"<{n}f", *[rng.uniform(-1, 1) for _ in range(n)])
 
 
-def write(path):
+def write(path, big=False):
     rng = random.Random(7)
-    hdr = bytearray(b"GGUF" + struct.pack("<I", 3) + struct.pack("<q", len(TENSORS)) + struct.pack("<q", len(KVS)))
+    tensors = TENSORS + ([("pad.weight", 0, (5 * 1024 * 1024,))] if big else [])
+    hdr = bytearray(b"GGUF" + struct.pack("<I", 3) + struct.pack("<q", len(tensors)) + struct.pack("<q", len(KVS)))
     for k, t, v in KVS:
         _str(hdr, k)
         hdr += struct.pack("<i", t)
@@ -114,7 +117,7 @@ def write(path):
     data, offs = bytearray(), []
     off = 0
     infos = bytearray()
-    for name, dt, shape in TENSORS:
+    for name, dt, shape in tensors:
         n = 1
         for d in shape:
             n *= d
@@ -307,5 +310,5 @@ def corrupt_magic(src, dst):
 
 
 if __name__ == "__main__":
-    {"write": write, "expect": expect, "corrupt-data": corrupt_data,
+    {"write": write, "write-big": lambda path: write(path, True), "expect": expect, "corrupt-data": corrupt_data,
      "corrupt-shape": corrupt_shape, "corrupt-magic": corrupt_magic}[sys.argv[1]](sys.argv[2], *sys.argv[3:])
