@@ -85,3 +85,17 @@
 ;; the uint32 at float offset o of the arena
 (defn arena-u32 [f [:fn [[:i64 :i64 :i64] :i64]] X :vector-i64 o :i64] :i64
   (bit-and (b/peek f (+ (vector-at X 7) (* 4 o))) 4294967295))
+
+;; a command buffer and a concurrent compute encoder (MTLDispatchTypeConcurrent: dispatches may overlap unless a
+;; barrier! separates them) with W and A bound; returns [cb en]
+(defn open-enc-c [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64] :vector-i64
+  (let [ms (vector-at R 0)
+        cb (b/msg f R (vector-at X 4) "commandBuffer" 0 0 0)
+        en (b/msg f R cb "computeCommandEncoderWithDispatchType:" 1 0 0)
+        b0 (b/cc f ms en (vector-at X 8) (vector-at X 5) 0 0)
+        b1 (b/cc f ms en (vector-at X 8) (vector-at X 6) 0 1)]
+    (vector-i64 cb en)))
+
+;; every dispatch after this sees the buffer writes of every dispatch before it (memoryBarrierWithScope: buffers)
+(defn barrier! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64] :i64
+  (b/msg f R en "memoryBarrierWithScope:" 1 0 0))

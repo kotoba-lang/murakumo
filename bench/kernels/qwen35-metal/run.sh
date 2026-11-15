@@ -61,7 +61,7 @@ else echo "exact: FAILED (exit $rc): $got $(head -3 "$WK/ok.txt")"; fail=1; fi
 mutant tile-mutant "value heads by hv / 2" kernels/deltanet.kotoba "hk = hv % 16;" "hk = hv / 2;"
 mutant conv-mutant "conv1d without its state" kernels/deltanet.kotoba "float o = w[0] * s[0] + w[1] * s[1] + w[2] * s[2] + w[3] * x;" "float o = w[3] * x;"
 mutant gate-mutant "attention output gate dropped" kernels/attn.kotoba "(o / z) * (1.0f / (1.0f + precise::exp(-gt)))" "(o / z)"
-mutant q6k-mutant "Q6_K scale index" kernels/quant.kotoba "(float(sc[2 * k]) * a0 + float(sc[2 * k + 1]) * a1)" "(float(sc[2 * k + 1]) * a0 + float(sc[2 * k]) * a1)"
+mutant q6k-mutant "Q6_K scale index" kernels/quant.kotoba "[li / 16 + 2 * k]);" "[1 - li / 16 + 2 * k]);"
 
 # residual after 4 layers (3 delta-net layers and the first gated-attention one), last prompt position, first 6 values,
 # against ref_forward35.py --layers 4 (numpy, recorded 2026-11-15): within 2e-4 of each
