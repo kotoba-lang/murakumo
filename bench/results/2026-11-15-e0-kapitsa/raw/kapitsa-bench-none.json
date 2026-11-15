@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "kind": "kapitsa-bench",
+  "mode": "quick",
+  "time_utc": "2026-11-15T08:48:06Z",
+  "kapitsa": {
+    "version": "0.2.36",
+    "commit": "fe6a17a"
+  },
+  "mac": {
+    "identifier": "MacBookPro18,4",
+    "name": "MacBook Pro (14-inch, 2021)",
+    "year": 2021,
+    "chip": "Apple M1 Max",
+    "cpu_cores": 10,
+    "gpu_cores": 32,
+    "memory_gb": 32,
+    "macos": "26.4",
+    "macos_build": "25E246"
+  },
+  "model": {
+    "name": "qwen3.5-4b",
+    "title": "Qwen3.5-4B",
+    "variant": "4bit",
+    "precision": "4-bit",
+    "catalog": true,
+    "revision": "9f7d327",
+    "decoding": "MTP",
+    "decoding_detail": "MTP speculative decoding depth 4, KFlash (MTP)",
+    "drafter": null,
+    "drafter_kind": "MTP",
+    "drafter_source": null,
+    "drafter_reason": "turned off with --dflash none or NI_DFLASH, MTP head drafts depth 4"
+  },
+  "protocol": {
+    "corpus_sha256": "58a7756fd94fc48a7b7306d330b2c44663bdf22faa943f82430966c2878081b2",
+    "decode_tokens": 512,
+    "decode_runs": 3,
+    "greedy_runs": 3,
+    "sizes": [
+      4000
+    ],
+    "temperature": 0.6,
+    "dflash": "none"
+  },
+  "results": {
+    "decode": {
+      "median_tps": 78.64,
+      "runs_tps": [
+        126.54,
+        78.64,
+        76.85
+      ],
+      "median_accepted_draft_tps": 51.76,
+      "median_accepted_draft_share": 0.6367
+    },
+    "decode_greedy": {
+      "median_tps": 79.81,
+      "runs_tps": [
+        81.5,
+        77.44,
+        79.81
+      ],
+      "median_accepted_draft_tps": 52.22,
+      "median_accepted_draft_share": 0.6543
+    },
+    "prefill": [
+      {
+        "size": 4000,
+        "prompt_tokens": 4135,
+        "ttft_s": 7.4114,
+        "tps": 557.9,
+        "followup_s": [
+          0.1062,
+          0.0869,
+          0.0689
+        ],
+        "followup_median_s": 0.0869,
+        "followup_suffix_tps": 290.3
+      }
+    ],
+    "tool_calls": "pass",
+    "peak_memory_gb": 3.58
+  },
+  "conditions": {
+    "power_source": "ac",
+    "power_mode": "automatic",
+    "low_power_mode": false,
+    "thermal_state": "fair",
+    "swapouts": 0,
+    "gpu_quiet_wait_s": 121.7,
+    "gpu_other_mean_pct": 13.0,
+    "gpu_other_max_pct": 24.09,
+    "gpu_ambient_mean_pct": 0.0,
+    "gpu_users": [
+      "Claude",
+      "Ghostty",
+      "ChatGPT"
+    ],
+    "contention": [
+      "decode",
+      "decode_greedy",
+      "prefill_4000",
+      "tools"
+    ]
+  },
+  "flags": [
+    "CONTENTION: sustained foreign GPU load > 5% in ['decode', 'decode_greedy', 'prefill_4000', 'tools'] (mean 13%, top ['Claude'])",
+    "drafter: the catalog's drafter z-lab/Qwen3.5-4B-DFlash@9a1996c was not used (turned off with --dflash none or NI_DFLASH, MTP head drafts depth 4); decoding: MTP"
+  ],
+  "invalid": []
+}

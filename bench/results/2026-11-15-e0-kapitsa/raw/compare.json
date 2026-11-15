@@ -1,0 +1,137 @@
+{
+ "schema": "kapitsa-bench-compare/1",
+ "when": "2026-11-15 17:39",
+ "profile": "quick",
+ "model": {
+  "name": "Qwen3.5-4B",
+  "prefix": "q35-4b",
+  "folder": "qwen3.5-4b-4bit",
+  "id": "qwen3.5-4b",
+  "pull": "4b",
+  "key": "4b"
+ },
+ "sizes": "4000",
+ "machine": {
+  "chip": "Apple M1 Max",
+  "memory_gb": 32,
+  "macos": "26.4"
+ },
+ "kapitsa": {
+  "version": "kapitsa 0.2.36 (fe6a17a)"
+ },
+ "harness": {
+  "commit": "e1d86b9",
+  "dirty": true,
+  "version": null
+ },
+ "out_dir": "<worktree>/.agent-output/e0/cmp",
+ "engines": [
+  {
+   "engine": "kapitsa",
+   "name": "Kapitsa",
+   "variant": "q35-4b-mtp-kapitsa",
+   "display": "Kapitsa (MTP head)",
+   "version": "0.2.36",
+   "model_path": "{models}/qwen3.5-4b-4bit-mtp",
+   "status": "ok",
+   "flags": [
+    "CONTENTION: sustained foreign GPU load > 5% in ['decode', 'prefill_4000'] (mean 11.75%, top ['Claude Helper'])"
+   ],
+   "invalid": [],
+   "result_file": null,
+   "decode_tps": 137.47,
+   "decode_min_tps": 128.89,
+   "decode_max_tps": 146.05,
+   "decode_runs": 2,
+   "prefill_short_tokens": 4133,
+   "prefill_short_tps": 763.9254548861401,
+   "prefill_long_tokens": null,
+   "prefill_long_tps": null,
+   "ttft_cold_s": 5.4102137500000005,
+   "ttft_cached_s": 0.0779,
+   "memory_gb": 3.75,
+   "tools_pass": null,
+   "command": "<worktree>/.agent-output/e0/tools/kapitsa-0.2.36-darwin-arm64/kapitsa serve --model <worktree>/.agent-output/e0/bm/qwen3.5-4b-4bit-mtp --model-id qwen3.5-4b --dflash none --host 127.0.0.1 --port 8091 --ctx 32768 --slots 1",
+   "log": "<worktree>/.agent-output/e0/cmp/logs/compare-q35-4b-mtp-kapitsa.log",
+   "tried_first": []
+  },
+  {
+   "engine": "mlx-lm",
+   "name": "mlx-lm",
+   "variant": "q35-4b-mlxlm",
+   "display": "mlx-lm",
+   "version": "mlx_lm 0.31.1 mlx 0.31.1",
+   "model_path": "{models}/qwen3.5-4b-4bit-mtp",
+   "status": "ok",
+   "flags": [
+    "CONTENTION: sustained foreign GPU load > 5% in ['decode', 'prefill_4000'] (mean 22.09%, top ['Claude Helper'])"
+   ],
+   "invalid": [],
+   "result_file": null,
+   "decode_tps": 64.59,
+   "decode_min_tps": 58.75,
+   "decode_max_tps": 70.44,
+   "decode_runs": 2,
+   "prefill_short_tokens": 4134,
+   "prefill_short_tps": 268.38239303761793,
+   "prefill_long_tokens": null,
+   "prefill_long_tps": null,
+   "ttft_cold_s": 15.403394958999996,
+   "ttft_cached_s": 0.5768,
+   "memory_gb": 5.11,
+   "tools_pass": null,
+   "command": "/opt/homebrew/bin/mlx_lm.server --model <worktree>/.agent-output/e0/bm/qwen3.5-4b-4bit-mtp --host 127.0.0.1 --port 8081 --prompt-cache-size 4 --prompt-cache-bytes 8589934592 --max-tokens 16384 --prefill-step-size 2048",
+   "log": "<worktree>/.agent-output/e0/cmp/logs/compare-q35-4b-mlxlm.log",
+   "tried_first": []
+  },
+  {
+   "engine": "llama.cpp",
+   "name": "llama.cpp",
+   "variant": "q35-4b-llamacpp",
+   "display": "llama.cpp",
+   "version": "0.7.0 (b11669, 620d2225c)",
+   "model_path": "Ollama's GGUF of qwen3.5:4b-mtp-q4_K_M (Q4_K_M, blob a9d0a3e1; its MTP head is the tag's separate draft GGUF, blob 83ba6dc1)",
+   "status": "ok",
+   "flags": [
+    "decode: repetition loop (distinct-4-gram 0.4761)",
+    "CONTENTION: sustained foreign GPU load > 5% in ['decode', 'prefill_4000'] (mean 10.39%, top ['Claude Helper'])"
+   ],
+   "invalid": [],
+   "result_file": null,
+   "decode_tps": 28.73,
+   "decode_min_tps": 28.41,
+   "decode_max_tps": 29.04,
+   "decode_runs": 2,
+   "prefill_short_tokens": 4134,
+   "prefill_short_tps": 297.9378273495124,
+   "prefill_long_tokens": null,
+   "prefill_long_tps": null,
+   "ttft_cold_s": 13.875378083999998,
+   "ttft_cached_s": 0.2972,
+   "memory_gb": 5.49,
+   "tools_pass": null,
+   "command": "/opt/homebrew/bin/llama-server -m <worktree>/.agent-output/e0/models/Qwen3.5-4B-Q4_K_M.gguf --host 127.0.0.1 --port 8083 -a qwen3.5-4b -c 32768 -np 1 -ngl 999 -fa on -b 2048 -ub 2048 -lm none --jinja --chat-template-file <worktree>/.agent-output/e0/bm/qwen3.5-4b-4bit-mtp/chat_template.jinja --reasoning-format deepseek --cache-ram 8192 --ctx-checkpoints 32 --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --no-webui",
+   "log": "<worktree>/.agent-output/e0/cmp/logs/compare-q35-4b-llamacpp.log",
+   "tried_first": [
+    {
+     "label": "q35-4b-llamacpp-mtp1",
+     "why": "Ollama tag qwen3.5:4b-mtp-q4_K_M not found in ~/.ollama/models/manifests*"
+    },
+    {
+     "label": "q35-4b-llamacpp-mtp2",
+     "why": "Ollama tag qwen3.5:4b-mtp-q4_K_M not found in ~/.ollama/models/manifests*"
+    },
+    {
+     "label": "q35-4b-llamacpp-mtp3",
+     "why": "Ollama tag qwen3.5:4b-mtp-q4_K_M not found in ~/.ollama/models/manifests*"
+    },
+    {
+     "label": "q35-4b-llamacpp-mtp6",
+     "why": "Ollama tag qwen3.5:4b-mtp-q4_K_M not found in ~/.ollama/models/manifests*"
+    }
+   ]
+  }
+ ],
+ "skipped": [],
+ "interrupted": false
+}
