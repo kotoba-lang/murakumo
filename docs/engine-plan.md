@@ -34,7 +34,7 @@ MacBook Pro M1 Max, 32 GB. Qwen2.5-0.5B-Instruct Q8_0 unless noted.
 | murakumo E1, Amu selfhost, Metal (hand-written MSL) | about 174 | 2026-11-15, diagnostic, load average about 9 ([record](../bench/results/2026-11-15-e1-first-token/README.md)) |
 | murakumo E2, Amu selfhost, Metal (hand-written MSL) | 292.3–294.3 | 2026-11-15, 128 tokens, loaded host; same hour MLX 250.7–253.0 (`-p 8`), llama.cpp 155.8–186.6 ([record](../bench/results/2026-11-15-e2-decode/README.md)) |
 | murakumo E3 prefill, pp512 | 8,540–9,087 (prefill) | 2026-11-15, very busy host, four undisturbed rounds; same hour llama.cpp 8,537–9,125 (level within about ±1 %), MLX 5,938–7,421 ([record](../bench/results/2026-11-15-e3-f16/README.md); third unit 8,170–8,322, [record](../bench/results/2026-11-15-e3-split/README.md); second unit 6,558–6,858, [record](../bench/results/2026-11-15-e3-gemm/README.md); first unit 6,227–6,314, [record](../bench/results/2026-11-15-e3-prefill/README.md)) |
-| Kapitsa | not measured here | its own M1 Pro 16 GB runs: Qwen3.5-4B 4-bit 97, Qwen3.6-35B-A3B 2-bit 52, both with KFlash ([benchmarks.md](benchmarks.md#other-engines-as-published)) |
+| Kapitsa 0.2.36, Qwen3.5-4B 4-bit (not Qwen2.5: Kapitsa does not read it) | 106–110 (DFlash2 drafter), 78–80 (MTP head); its harness 137.5 | 2026-11-15, same M1 Max, busy host; same day on the same model MLX 48 (plain), llama.cpp 32–36 (plain) ([E0 record](../bench/results/2026-11-15-e0-kapitsa/README.md)). Its own M1 Pro 16 GB runs: Qwen3.5-4B 4-bit 97, Qwen3.6-35B-A3B 2-bit 52 ([benchmarks.md](benchmarks.md#other-engines-as-published)) |
 
 **Update 2026-11-15:** E1 generates tokens on the GPU (gate passed, greedy `314 746 600 220`). The other bars of ours above are dated records or kernel bounds.
 
