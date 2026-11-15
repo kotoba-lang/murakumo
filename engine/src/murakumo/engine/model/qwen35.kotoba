@@ -199,13 +199,19 @@
         t1 (b/cc f now 0 0 0 0 0)
         out (vector-alloc steps)
         o0 (vector-assoc! out 0 (m/arena-u32 f X (+ (oLOG) (- np 1))))
-        gen (loop [s 1]
-              (if (= s steps) 0
-                (let [pos (+ np (- s 1))
-                      cb (step-enc! f R X PL P 0 pos 1 nl)
-                      w (m/wait! f R X cb)
-                      a (vector-assoc! out s (m/arena-u32 f X (+ (oLOG) pos)))]
-                  (recur (+ s 1)))))
+        ;; decode: step s's buffer (whose embedding reads the token the previous argmax left in the arena) is committed
+        ;; before the CPU waits for step s - 1's, so the GPU never idles between tokens; each token is read back as
+        ;; soon as its own buffer completes
+        gen (loop [s 1 prev 0]
+              (if (= s steps)
+                (if (= prev 0) 0
+                  (let [w (m/wait! f R X prev)
+                        a (vector-assoc! out (- s 1) (m/arena-u32 f X (+ (oLOG) (+ np (- s 2)))))] 0))
+                (let [cb (step-enc! f R X PL P 0 (+ np (- s 1)) 1 nl)
+                      a (if (= prev 0) 0
+                          (let [w (m/wait! f R X prev)
+                                v (vector-assoc! out (- s 1) (m/arena-u32 f X (+ (oLOG) (+ np (- s 2)))))] 0))]
+                  (recur (+ s 1) cb))))
         t2 (b/cc f now 0 0 0 0 0)
         text (loop [s 0 accs "greedy"]
                (if (= s steps) (string-concat accs "\n")
