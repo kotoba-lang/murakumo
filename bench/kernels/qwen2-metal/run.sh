@@ -9,6 +9,8 @@
 #   long           129 greedy tokens equal the continuation pinned below (LONG, recorded 2026-11-15 from ref_forward.py,
 #                  numpy, a local oracle run once on the same file; the oracle itself is not run here)
 #   kernel-mutant  the RoPE rotation with one sign flipped changes the tokens
+#   partial-mutant the RMSNorm that adds the split-k partial products of the o and down GEMMs into the residual
+#                  dropping the last partial changes the tokens
 #   chain-mutant   decode steps that embed the step's own parameter (0) instead of the previous argmax change the tokens
 #   prefill-check  a 512-token synthetic prompt through the batched prefill and through one token per step: the last
 #                  token's argmax is the same and the logits differ by at most 0.05 (the batched GEMM rounds the
@@ -83,6 +85,12 @@ rc=0; runit km
 got=$(grep '^greedy' "$WK/km.txt" || true)
 if [ -n "$got" ] && [ "$got" != "$WANT" ]; then echo "kernel-mutant (RoPE sign): $got (detected)"
 else echo "kernel-mutant NOT detected (exit $rc): $got"; fail=1; fi
+
+build sm "$MODEL" "$WK/model.sha256" "for (uint s = 0; s < p.e; s++) v += q0" "for (uint s = 0; s + 1u < p.e; s++) v += q0"
+rc=0; runit sm
+got=$(grep '^greedy' "$WK/sm.txt" || true)
+if [ -n "$got" ] && [ "$got" != "$WANT" ]; then echo "partial-mutant (one split-k partial dropped): $got (detected)"
+else echo "partial-mutant NOT detected (exit $rc): $got"; fail=1; fi
 
 "$PY" "$HERE/flip_scale.py" "$MODEL" "$WK/mut.gguf"
 shasum -a 256 "$WK/mut.gguf" | cut -c1-64 > "$WK/mut.sha256"
