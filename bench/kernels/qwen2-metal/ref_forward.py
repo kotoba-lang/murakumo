@@ -2,6 +2,7 @@
 """Local reference forward pass for Qwen2.5-0.5B Q8_0 GGUF (a test-time oracle, not a gate, not a route).
 
   python3 ref_forward.py FILE.gguf [ids...]        greedy-continue the ids (default 760 6511 314 9338 369, 4 steps)
+  python3 ref_forward.py FILE.gguf --steps N ids..  greedy-continue for N tokens
   python3 ref_forward.py FILE.gguf --dump N ids..   also print the first N values of the hidden state after each stage
                                                    of the LAST prompt position (embedding, layer-0 attn_norm, q, k, v,
                                                    attn out, ffn out, final norm, logits)
@@ -59,7 +60,11 @@ def rope(x, pos, base):  # x: [heads, d], NEOX pairing
 def main(argv):
     path = argv[0]
     dump = 0
+    steps = 4
     rest = argv[1:]
+    if rest[:1] == ["--steps"]:
+        steps = int(rest[1])
+        rest = rest[2:]
     if rest[:1] == ["--dump"]:
         dump = int(rest[1])
         rest = rest[2:]
@@ -122,7 +127,7 @@ def main(argv):
         nxt, top = step(t, pos, i == len(ids) - 1)
         pos += 1
     out = [nxt]
-    for _ in range(3):
+    for _ in range(steps - 1):
         nxt, top = step(nxt, pos, False)
         pos += 1
         out.append(nxt)

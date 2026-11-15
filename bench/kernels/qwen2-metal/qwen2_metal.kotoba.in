@@ -5,11 +5,15 @@
 ;; against the pinned digest first (the S1/S2 reader's helpers), indexes the KVs and tensor infos, refuses a model whose
 ;; block count, widths or head counts are not Qwen2.5-0.5B's or whose tensors have another dtype, shape or span, preads
 ;; the data region into one Metal buffer (8 MiB chunks), then runs every prompt token and @STEPS@ greedy steps through
-;; the model: embedding (Q8_0 row), per layer RMSNorm, q/k/v matvec with bias, NEOX RoPE, KV cache store, causal GQA
-;; attention (14 query heads over 2 kv heads), output matvec into the residual, RMSNorm, gate/up matvec, SwiGLU, down
-;; matvec into the residual; final RMSNorm, the tied head over the 151,936-row embedding table, argmax. One command
-;; buffer per token holds all of its dispatches; the CPU reads back one token id per step. The kernels are MSL text in
-;; this program, written by hand (engine-plan D2); E7 replaces them with kernels Amu emits.
+;; the model, six dispatches per layer (E2, AWAI-2917): RMSNorm fused into one q|k|v Q8_0 matvec with biases; NEOX RoPE
+;; on q and k with the KV cache store; causal GQA attention (14 query heads over 2 kv heads, split over 4 thread groups
+;; per head); the output matvec into the residual; RMSNorm fused into one gate|up matvec; the down matvec with SwiGLU
+;; applied to its input, into the residual. Then the final RMSNorm fused into the tied head over the 151,936-row
+;; embedding table, and argmax, which leaves the token id in the arena and in a per-position log. One command buffer per
+;; token; during decode the next step's buffer (whose embedding reads the token id the previous argmax left) is
+;; committed before the CPU waits for the previous one, so two are in flight and each token is still read back as soon
+;; as its own buffer completes. The KV cache holds 256 positions. The kernels are MSL text in this program, written by
+;; hand (engine-plan D2); E7 replaces them with kernels Amu emits.
 ;; Prints `greedy t0 t1 ...` and `e1-ns ...` (diagnostic timing) on stderr.
 ;; The path is @PATH@, the pinned digest file @EXPECT@, the prompt ids @IDS@.
 
@@ -337,120 +341,172 @@
   "#include <metal_stdlib>
 using namespace metal;
 struct P { uint a, b, c, d, e, f, g, h; };
+struct P16 { uint a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, q; };
 
-// Q8_0 matvec, one simdgroup per row: y = W x (+ bias) ; a weight off, b rows, c cols, d bias off,
-// e flags (1 bias, 2 add into y), f x off, g y off. 8 rows per 256-thread threadgroup.
+// Q8_0 matvec: y = W x (+ bias) ; a weight off, b rows, c cols, d bias off, e flags (1 bias, 2 add into y,
+// 4 SwiGLU input: x[k] = silu(A[f + k]) * A[f + c + k]), f x off, g y off. Two simdgroups of 32 per 64-thread threadgroup, 4 rows per simdgroup (8 rows per threadgroup).
+// Lane l works on block l/4 (stepping by 8 blocks) and quants (l%4)*8 .. +7, keeping that x slice in registers
+// for the 4 rows; each row is summed with simd_sum.
 kernel void mv(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
                uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
                uint ln [[thread_index_in_simdgroup]]) {
-  uint r = tg * 8 + sg;
-  if (r >= p.b) return;
+  uint r0 = (tg * 2 + sg) * 4;
+  if (r0 >= p.b) return;
   uint nb = p.c / 32;
-  device const uchar *row = W + p.a + r * nb * 34;
+  uint ix = ln / 4, il = ln % 4;
   device const float *x = A + p.f;
-  float s = 0.0f;
-  for (uint j = ln; j < nb; j += 32) {
-    device const uchar *bl = row + j * 34;
-    float d = float(*(device const half *)bl);
-    device const char *q = (device const char *)(bl + 2);
-    float t = 0.0f;
-    for (uint k = 0; k < 32; k++) t += float(q[k]) * x[j * 32 + k];
-    s += d * t;
+  device const uchar *w0 = W + p.a + r0 * nb * 34;
+  float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+  for (uint ib = ix; ib < nb; ib += 8) {
+    device const float4 *xv = (device const float4 *)(x + ib * 32 + il * 8);
+    float4 y0 = xv[0], y1 = xv[1];
+    if (p.e & 4u) {
+      device const float4 *uv = (device const float4 *)(x + p.c + ib * 32 + il * 8);
+      y0 = y0 / (1.0f + exp(-y0)) * uv[0];
+      y1 = y1 / (1.0f + exp(-y1)) * uv[1];
+    }
+    device const uchar *bl = w0 + ib * 34;
+    for (uint r = 0; r < 4; r++) {
+      device const uchar *br = bl + r * nb * 34;
+      device const char *q = (device const char *)(br + 2 + il * 8);
+      float t = dot(float4(q[0], q[1], q[2], q[3]), y0) + dot(float4(q[4], q[5], q[6], q[7]), y1);
+      t *= float(*(device const half *)br);
+      if (r == 0) s0 += t; else if (r == 1) s1 += t; else if (r == 2) s2 += t; else s3 += t;
+    }
   }
-  s = simd_sum(s);
-  if (ln == 0) {
+  s0 = simd_sum(s0); s1 = simd_sum(s1); s2 = simd_sum(s2); s3 = simd_sum(s3);
+  if (ln < 4 && r0 + ln < p.b) {
+    uint r = r0 + ln;
+    float s = ln == 0 ? s0 : ln == 1 ? s1 : ln == 2 ? s2 : s3;
     if (p.e & 1u) s += *(device const float *)(W + p.d + r * 4);
     if (p.e & 2u) A[p.g + r] += s; else A[p.g + r] = s;
   }
 }
 
-// one dequantized embedding row: a table off, b token, c row length, g out off
+// RMSNorm fused into a Q8_0 matvec over up to three stacked weight segments (q|k|v, gate|up, or the head):
+// a w0, b bias0, c w1, d bias1, e w2, f bias2, g norm weight off, h epsilon bits, i x off, j y off, k cols,
+// l rows0, m rows1, n rows2, o flags (1 biases). Segment lengths are multiples of 4, so a simdgroup's 4 rows are
+// in one segment. Every simdgroup recomputes the norm scale of x (k floats) itself.
+kernel void nmv(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P16 &p [[buffer(2)]],
+                uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                uint ln [[thread_index_in_simdgroup]]) {
+  uint r0 = (tg * 2 + sg) * 4;
+  uint total = p.l + p.m + p.n;
+  if (r0 >= total) return;
+  device const float *x = A + p.i;
+  float ss = 0.0f;
+  for (uint k = ln; k < p.k; k += 32) ss += x[k] * x[k];
+  ss = simd_sum(ss);
+  float scale = 1.0f / precise::sqrt(ss / float(p.k) + as_type<float>(p.h));
+  device const float *nw = (device const float *)(W + p.g);
+  uint wo, bo, rr;
+  if (r0 < p.l) { wo = p.a; bo = p.b; rr = r0; }
+  else if (r0 < p.l + p.m) { wo = p.c; bo = p.d; rr = r0 - p.l; }
+  else { wo = p.e; bo = p.f; rr = r0 - p.l - p.m; }
+  uint nb = p.k / 32;
+  uint ix = ln / 4, il = ln % 4;
+  device const uchar *w0 = W + wo + rr * nb * 34;
+  float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+  for (uint ib = ix; ib < nb; ib += 8) {
+    uint k0 = ib * 32 + il * 8;
+    device const float4 *xv = (device const float4 *)(x + k0);
+    device const float4 *nv = (device const float4 *)(nw + k0);
+    float4 y0 = xv[0] * scale * nv[0], y1 = xv[1] * scale * nv[1];
+    device const uchar *bl = w0 + ib * 34;
+    for (uint r = 0; r < 4; r++) {
+      device const uchar *br = bl + r * nb * 34;
+      device const char *q = (device const char *)(br + 2 + il * 8);
+      float t = dot(float4(q[0], q[1], q[2], q[3]), y0) + dot(float4(q[4], q[5], q[6], q[7]), y1);
+      t *= float(*(device const half *)br);
+      if (r == 0) s0 += t; else if (r == 1) s1 += t; else if (r == 2) s2 += t; else s3 += t;
+    }
+  }
+  s0 = simd_sum(s0); s1 = simd_sum(s1); s2 = simd_sum(s2); s3 = simd_sum(s3);
+  if (ln < 4) {
+    float s = ln == 0 ? s0 : ln == 1 ? s1 : ln == 2 ? s2 : s3;
+    if (p.o & 1u) s += *(device const float *)(W + bo + (rr + ln) * 4);
+    A[p.j + r0 + ln] = s;
+  }
+}
+
+// NEOX RoPE on q (14 heads) and k (2 heads) in place, k and v stored into the cache, in one dispatch of 640 threads:
+// a layer, b position, c positions per layer, d q off, e k off, f v off, g k cache off, h v cache off, i base bits
+kernel void ropekv(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P16 &p [[buffer(2)]],
+                   uint t [[thread_position_in_grid]]) {
+  uint cache = (p.a * p.c + p.b) * 128;
+  if (t < 512) {
+    bool isk = t >= 448;
+    uint u = isk ? t - 448 : t;
+    uint h = u / 32, j = u % 32;
+    float inv = precise::pow(as_type<float>(p.i), -float(2 * j) / 64.0f);
+    float ang = float(p.b) * inv;
+    float c = precise::cos(ang), s = precise::sin(ang);
+    device float *y = A + (isk ? p.e : p.d) + h * 64;
+    float a = y[j], b = y[j + 32];
+    float lo = a * c - b * s, hi = a * s + b * c;
+    y[j] = lo;
+    y[j + 32] = hi;
+    if (isk) { A[p.g + cache + h * 64 + j] = lo; A[p.g + cache + h * 64 + j + 32] = hi; }
+  } else if (t < 640) {
+    uint i = t - 512;
+    A[p.h + cache + i] = A[p.f + i];
+  }
+}
+
+// one dequantized embedding row: a table off, b token, c row length, d 1 = take the token from the uint word at e
+// (the previous step's argmax) instead of b, g out off
 kernel void embed(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
                   uint i [[thread_position_in_grid]]) {
   if (i >= p.c) return;
-  device const uchar *bl = W + p.a + p.b * (p.c / 32) * 34 + (i / 32) * 34;
+  uint tok = p.d == 1u ? ((device const uint *)A)[p.e] : p.b;
+  device const uchar *bl = W + p.a + tok * (p.c / 32) * 34 + (i / 32) * 34;
   A[p.g + i] = float(*(device const half *)bl) * float(((device const char *)(bl + 2))[i % 32]);
 }
 
-// RMSNorm in one 256-thread threadgroup: a weight off, c n, f x off, g y off, h epsilon bits
-kernel void rmsn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                 uint t [[thread_position_in_threadgroup]]) {
-  threadgroup float sh[256];
-  float s = 0.0f;
-  for (uint i = t; i < p.c; i += 256) { float v = A[p.f + i]; s += v * v; }
-  sh[t] = s;
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  for (uint w = 128; w > 0; w >>= 1) {
-    if (t < w) sh[t] += sh[t + w];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-  }
-  float r = 1.0f / precise::sqrt(sh[0] / float(p.c) + as_type<float>(p.h));
-  device const float *w = (device const float *)(W + p.a);
-  for (uint i = t; i < p.c; i += 256) A[p.g + i] = A[p.f + i] * r * w[i];
-}
-
-// NEOX RoPE on 64-wide heads in place: b heads, c position, g off, h base bits
-kernel void rope(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                 uint i [[thread_position_in_grid]]) {
-  if (i >= p.b * 32) return;
-  uint h = i / 32, j = i % 32;
-  float inv = precise::pow(as_type<float>(p.h), -float(2 * j) / 64.0f);
-  float ang = float(p.c) * inv;
-  float c = precise::cos(ang), s = precise::sin(ang);
-  device float *y = A + p.g + h * 64;
-  float a = y[j], b = y[j + 32];
-  y[j] = a * c - b * s;
-  y[j + 32] = a * s + b * c;
-}
-
-// store k and v (128 each) into the cache: a layer, c position, d positions per layer, e k off, f v off,
-// g k cache off, h v cache off
-kernel void kvs(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                uint i [[thread_position_in_grid]]) {
-  if (i >= 128) return;
-  uint at = (p.a * p.d + p.c) * 128 + i;
-  A[p.g + at] = A[p.e + i];
-  A[p.h + at] = A[p.f + i];
-}
-
-// causal GQA attention, one 64-thread threadgroup per query head: a layer, b query heads per kv head,
-// c positions so far, d positions per layer, e q off, f out off, g k cache off, h v cache off
+// causal GQA attention, one 256-thread threadgroup per query head: a layer, b query heads per kv head,
+// c positions so far (at most 256), d positions per layer, e q off, f out off, g k cache off, h v cache off.
+// Thread s scores position s (a 64-wide float4 dot product); the max and the sum of exp come from simdgroup and
+// threadgroup reductions, each exp computed once; then 4 groups of 64 threads (one output dimension each) sum a
+// quarter of the positions and the four partial outputs are added.
 kernel void attn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                 uint h [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]]) {
-  threadgroup float red[64];
-  threadgroup float sc[64];
+                 uint h [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]],
+                 uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]]) {
+  threadgroup float sc[256];
+  threadgroup float red[8];
+  threadgroup float part[256];
   uint kh = h / p.b;
-  device const float *q = A + p.e + h * 64;
+  uint n = p.c;
   device const float *kc = A + p.g + p.a * p.d * 128 + kh * 64;
   device const float *vc = A + p.h + p.a * p.d * 128 + kh * 64;
-  for (uint s = 0; s < p.c; s++) {
-    red[t] = q[t] * kc[s * 128 + t];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint w = 32; w > 0; w >>= 1) {
-      if (t < w) red[t] += red[t + w];
-      threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    if (t == 0) sc[s] = red[0] * 0.125f;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+  float v = -INFINITY;
+  if (t < n) {
+    device const float4 *qv = (device const float4 *)(A + p.e + h * 64);
+    device const float4 *kr = (device const float4 *)(kc + t * 128);
+    float acc = 0.0f;
+    for (uint i = 0; i < 16; i++) acc += dot(qv[i], kr[i]);
+    v = acc * 0.125f;
   }
-  float m = -INFINITY;
-  for (uint s = 0; s < p.c; s++) m = max(m, sc[s]);
-  float z = 0.0f;
-  for (uint s = 0; s < p.c; s++) z += precise::exp(sc[s] - m);
+  float m = simd_max(v);
+  if (ln == 0) red[sg] = m;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  m = max(max(max(red[0], red[1]), max(red[2], red[3])), max(max(red[4], red[5]), max(red[6], red[7])));
+  float e = t < n ? precise::exp(v - m) : 0.0f;
+  sc[t] = e;
+  float z = simd_sum(e);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (ln == 0) red[sg] = z;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  z = ((red[0] + red[1]) + (red[2] + red[3])) + ((red[4] + red[5]) + (red[6] + red[7]));
+  uint g = t / 64, d = t % 64;
   float o = 0.0f;
-  for (uint s = 0; s < p.c; s++) o += precise::exp(sc[s] - m) / z * vc[s * 128 + t];
-  A[p.f + h * 64 + t] = o;
+  for (uint s = g; s < n; s += 4) o += sc[s] * vc[s * 128 + d];
+  part[t] = o;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (g == 0) A[p.f + h * 64 + d] = ((part[d] + part[d + 64]) + (part[d + 128] + part[d + 192])) / z;
 }
 
-// SwiGLU in place: c n, e gate off (silu(gate) * up written here), f up off
-kernel void swiglu(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                   uint i [[thread_position_in_grid]]) {
-  if (i >= p.c) return;
-  float g = A[p.e + i];
-  A[p.e + i] = g / (1.0f + precise::exp(-g)) * A[p.f + i];
-}
-
-// argmax (first index on ties) in one 1024-thread threadgroup: c n, f logits off, g out word (uint)
+// argmax (first index on ties) in one 1024-thread threadgroup: c n, f logits off, g out word (uint),
+// also logged at word h + e (e the position)
 kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
                    uint t [[thread_position_in_threadgroup]]) {
   threadgroup float bv[1024];
@@ -464,7 +520,7 @@ kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer
     if (t < w && (bv[t + w] > bv[t] || (bv[t + w] == bv[t] && bi[t + w] < bi[t]))) { bv[t] = bv[t + w]; bi[t] = bi[t + w]; }
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
-  if (t == 0) ((device uint *)A)[p.g] = bi[0];
+  if (t == 0) { ((device uint *)A)[p.g] = bi[0]; ((device uint *)A)[p.h + p.e] = bi[0]; }
 }
 ")
 
@@ -484,22 +540,23 @@ kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer
 (defn- pk [lo :i64 hi :i64] :i64 (bit-or (bit-and lo 4294967295) (i64-shift-left hi 32)))
 
 ;; C: 0 setComputePipelineState: 1 setBytes:length:atIndex: 2 dispatchThreadgroups:threadsPerThreadgroup:
-;;    3 parameter scratch, 4 queue, 5 W, 6 A, 7 A contents, 8.. pipelines (mv embed rmsn rope kvs attn swiglu argmax),
-;;    16 setBuffer:offset:atIndex:
+;;    3 parameter scratch, 4 queue, 5 W, 6 A, 7 A contents, 8..13 pipelines (mv embed attn argmax nmv ropekv),
+;;    14 setBuffer:offset:atIndex:, 15 timing accumulators (encode, gpu wait), 16 mach_absolute_time
 ;; one dispatch of pipeline k: gx threadgroups of tx threads, parameters pv (eight words)
 (defn- disp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 C :vector-i64 k :i64 pv :vector-i64 gx :i64 tx :i64] :i64
   (let [pm (vector-at C 3)
-        u0 (poke f pm (pk (vector-at pv 0) (vector-at pv 1)))
-        u1 (poke f (+ pm 8) (pk (vector-at pv 2) (vector-at pv 3)))
-        u2 (poke f (+ pm 16) (pk (vector-at pv 4) (vector-at pv 5)))
-        u3 (poke f (+ pm 24) (pk (vector-at pv 6) (vector-at pv 7)))
-        grid (+ pm 64)
-        group (+ pm 96)
+        np2 (quot (vector-count pv) 2)
+        u0 (loop [i 0]
+             (if (= i np2) 0
+               (let [u (poke f (+ pm (* 8 i)) (pk (vector-at pv (* 2 i)) (vector-at pv (+ (* 2 i) 1))))] (recur (+ i 1)))))
+        grid (+ pm 72)
+        group (+ pm 104)
+        u3 0
         v0 (poke f grid gx) v1 (poke f (+ grid 8) 1) v2 (poke f (+ grid 16) 1)
         v3 (poke f group tx) v4 (poke f (+ group 8) 1) v5 (poke f (+ group 16) 1)
         ms (vector-at R 0)
         s0 (cc f ms en (vector-at C 0) (vector-at C (+ 8 k)) 0 0)
-        s1 (cc f ms en (vector-at C 1) pm 32 2)
+        s1 (cc f ms en (vector-at C 1) pm (* 4 (vector-count pv)) 2)
         s2 (cc f ms en (vector-at C 2) grid group 0)]
     0))
 
@@ -514,51 +571,57 @@ kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer
 (defn- oU [] :i64 8704)
 (defn- oLG [] :i64 13568)
 (defn- oKC [] :i64 165504)
-(defn- oVC [] :i64 362112)
-(defn- oTOK [] :i64 558720)
-(defn- arena-floats [] :i64 558784)
-(defn- tmax [] :i64 64)
+(defn- oVC [] :i64 951936)
+(defn- oTOK [] :i64 1738368)
+(defn- oLOG [] :i64 1738369)
+(defn- arena-floats [] :i64 1738752)
+(defn- tmax [] :i64 256)
 
 ;; L: 12 offsets per layer (attn_norm q.w q.b k.w k.b v.w v.b o.w ffn_norm gate up down), then 288 embedding,
 ;; 289 output_norm, 290 epsilon bits, 291 rope base bits
 (defn- lw [L :vector-i64 l :i64 k :i64] :i64 (vector-at L (+ (* l 12) k)))
 
 ;; one token through the model in one command buffer; returns the argmax token id
-(defn- step! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 C :vector-i64 L :vector-i64 tok :i64 pos :i64] :i64
+(defn- step-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 C :vector-i64 L :vector-i64 tok :i64 pos :i64 from-gpu :i64] :i64
   (let [ms (vector-at R 0)
+        ta (cc f (vector-at C 16) 0 0 0 0 0)
         cb (msg f R (vector-at C 4) "commandBuffer" 0 0 0)
         en (msg f R cb "computeCommandEncoder" 0 0 0)
-        b0 (cc f ms en (vector-at C 16) (vector-at C 5) 0 0)
-        b1 (cc f ms en (vector-at C 16) (vector-at C 6) 0 1)
+        b0 (cc f ms en (vector-at C 14) (vector-at C 5) 0 0)
+        b1 (cc f ms en (vector-at C 14) (vector-at C 6) 0 1)
         eps (vector-at L 290)
         base (vector-at L 291)
-        e0 (disp f R en C 1 (vector-i64 (vector-at L 288) tok 896 0 0 0 (oX) 0) 7 128)
+        e0 (disp f R en C 1 (vector-i64 (vector-at L 288) tok 896 from-gpu (oTOK) 0 (oX) 0) 7 128)
         ly (loop [l 0]
              (if (= l 24) 0
-               (let [d1 (disp f R en C 2 (vector-i64 (lw L l 0) 0 896 0 0 (oX) (oH) eps) 1 256)
-                     d2 (disp f R en C 0 (vector-i64 (lw L l 1) 896 896 (lw L l 2) 1 (oH) (oQ) 0) 112 256)
-                     d3 (disp f R en C 0 (vector-i64 (lw L l 3) 128 896 (lw L l 4) 1 (oH) (oK) 0) 16 256)
-                     d4 (disp f R en C 0 (vector-i64 (lw L l 5) 128 896 (lw L l 6) 1 (oH) (oV) 0) 16 256)
-                     d5 (disp f R en C 3 (vector-i64 0 14 pos 0 0 0 (oQ) base) 7 64)
-                     d6 (disp f R en C 3 (vector-i64 0 2 pos 0 0 0 (oK) base) 1 64)
-                     d7 (disp f R en C 4 (vector-i64 l 0 pos (tmax) (oK) (oV) (oKC) (oVC)) 1 128)
-                     d8 (disp f R en C 5 (vector-i64 l 7 (+ pos 1) (tmax) (oQ) (oO) (oKC) (oVC)) 14 64)
-                     d9 (disp f R en C 0 (vector-i64 (lw L l 7) 896 896 0 2 (oO) (oX) 0) 112 256)
-                     d10 (disp f R en C 2 (vector-i64 (lw L l 8) 0 896 0 0 (oX) (oH) eps) 1 256)
-                     d11 (disp f R en C 0 (vector-i64 (lw L l 9) 4864 896 0 0 (oH) (oG) 0) 608 256)
-                     d12 (disp f R en C 0 (vector-i64 (lw L l 10) 4864 896 0 0 (oH) (oU) 0) 608 256)
-                     d13 (disp f R en C 6 (vector-i64 0 0 4864 0 (oG) (oU) 0 0) 38 128)
-                     d14 (disp f R en C 0 (vector-i64 (lw L l 11) 896 4864 0 2 (oG) (oX) 0) 112 256)]
+               (let [d1 (disp f R en C 4 (vector-i64 (lw L l 1) (lw L l 2) (lw L l 3) (lw L l 4) (lw L l 5) (lw L l 6)
+                                                     (lw L l 0) eps (oX) (oQ) 896 896 128 128 1 0) 144 64)
+                     d2 (disp f R en C 5 (vector-i64 l pos (tmax) (oQ) (oK) (oV) (oKC) (oVC) base 0 0 0 0 0 0 0) 10 64)
+                     d3 (disp f R en C 2 (vector-i64 l 7 (+ pos 1) (tmax) (oQ) (oO) (oKC) (oVC)) 14 256)
+                     d4 (disp f R en C 0 (vector-i64 (lw L l 7) 896 896 0 2 (oO) (oX) 0) 112 64)
+                     d5 (disp f R en C 4 (vector-i64 (lw L l 9) 0 (lw L l 10) 0 0 0
+                                                     (lw L l 8) eps (oX) (oG) 896 4864 4864 0 0 0) 1216 64)
+                     d6 (disp f R en C 0 (vector-i64 (lw L l 11) 896 4864 0 6 (oG) (oX) 0) 112 64)]
                  (recur (+ l 1)))))
-        f1 (disp f R en C 2 (vector-i64 (vector-at L 289) 0 896 0 0 (oX) (oH) eps) 1 256)
-        f2 (disp f R en C 0 (vector-i64 (vector-at L 288) 151936 896 0 0 (oH) (oLG) 0) 18992 256)
-        f3 (disp f R en C 7 (vector-i64 0 0 151936 0 0 (oLG) (oTOK) 0) 1 1024)
+        f2 (disp f R en C 4 (vector-i64 (vector-at L 288) 0 0 0 0 0 (vector-at L 289) eps (oX) (oLG) 896 151936 0 0 0 0) 18992 64)
+        f3 (disp f R en C 3 (vector-i64 0 0 151936 0 pos (oLG) (oTOK) (oLOG)) 1 1024)
         z0 (msg f R en "endEncoding" 0 0 0)
         z1 (msg f R cb "commit" 0 0 0)
+        tb (cc f (vector-at C 16) 0 0 0 0 0)
+        acc (vector-at C 15)
+        k0 (poke f acc (+ (peek f acc) (- tb ta)))]
+    cb))
+
+;; wait for one step's command buffer; returns the token it logged at pos
+(defn- step-wait! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 C :vector-i64 cb :i64 pos :i64] :i64
+  (let [tb (cc f (vector-at C 16) 0 0 0 0 0)
         z2 (msg f R cb "waitUntilCompleted" 0 0 0)
+        tc (cc f (vector-at C 16) 0 0 0 0 0)
+        acc (vector-at C 15)
+        k1 (poke f (+ acc 8) (+ (peek f (+ acc 8)) (- tc tb)))
         st (msg f R cb "status" 0 0 0)
         u (if (= st 4) 0 (refuse f R (msg f R cb "error" 0 0 0)))]
-    (bit-and (peek f (+ (vector-at C 7) (* 4 (oTOK)))) 4294967295)))
+    (bit-and (peek f (+ (vector-at C 7) (* 4 (+ (oLOG) pos)))) 4294967295)))
 
 (defn- ticks-ns [f [:fn [[:i64 :i64 :i64] :i64]] t :i64] :i64
   (let [tb (+ (scratch f) 192)
@@ -639,32 +702,40 @@ kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer
         A (msg f R dev "newBufferWithLength:options:" (* 4 (arena-floats)) 0 0)
         u13 (if (= A 0) (vector-at [0] 1) 0)
         queue (msg f R dev "newCommandQueue" 0 0 0)
+        acc0 (cc f (vector-at R 3) 16 0 0 0 0)
         errp (+ (scratch f) 184)
         u14 (poke f errp 0)
         lib (msg f R dev "newLibraryWithSource:options:error:" (nsstring f R (kernel-source)) 0 errp)
         u15 (if (= lib 0) (refuse f R (peek f errp)) 0)
         C (vector-i64 (sel f R "setComputePipelineState:") (sel f R "setBytes:length:atIndex:")
                       (sel f R "dispatchThreadgroups:threadsPerThreadgroup:")
-                      (cc f (vector-at R 3) 128 0 0 0 0) queue W A (msg f R A "contents" 0 0 0)
+                      (cc f (vector-at R 3) 160 0 0 0 0) queue W A (msg f R A "contents" 0 0 0)
                       (pipeline f R dev lib errp "mv") (pipeline f R dev lib errp "embed")
-                      (pipeline f R dev lib errp "rmsn") (pipeline f R dev lib errp "rope")
-                      (pipeline f R dev lib errp "kvs") (pipeline f R dev lib errp "attn")
-                      (pipeline f R dev lib errp "swiglu") (pipeline f R dev lib errp "argmax")
-                      (sel f R "setBuffer:offset:atIndex:"))
+                      (pipeline f R dev lib errp "attn") (pipeline f R dev lib errp "argmax")
+                      (pipeline f R dev lib errp "nmv") (pipeline f R dev lib errp "ropekv")
+                      (sel f R "setBuffer:offset:atIndex:") acc0 now)
+        acc0z (poke f acc0 0)
+        acc0w (poke f (+ acc0 8) 0)
         ids (vector-i64 @IDS@)
         np (vector-count ids)
         t0 (cc f now 0 0 0 0 0)
-        first (loop [i 0 tk 0]
-                (if (= i np) tk
-                  (recur (+ i 1) (step! f R C L (vector-at ids i) i))))
+        pcbs (vector-alloc np)
+        pe (loop [i 0]
+             (if (= i np) 0
+               (let [a (vector-assoc! pcbs i (step-enc! f R C L (vector-at ids i) i 0))] (recur (+ i 1)))))
+        pw (loop [i 0 tk 0]
+             (if (= i np) tk
+               (recur (+ i 1) (step-wait! f R C (vector-at pcbs i) i))))
+        first pw
         t1 (cc f now 0 0 0 0 0)
         out (vector-alloc @STEPS@)
         o0 (vector-assoc! out 0 first)
-        gen (loop [s 1 tk first]
-              (if (= s @STEPS@) 0
-                (let [nx (step! f R C L tk (+ np (- s 1)))
-                      a (vector-assoc! out s nx)]
-                  (recur (+ s 1) nx))))
+        gen (loop [s 1 prev 0]
+              (if (= s @STEPS@)
+                (if (= prev 0) 0 (let [w (vector-assoc! out (- s 1) (step-wait! f R C prev (+ np (- s 2))))] 0))
+                (let [cb (step-enc! f R C L 0 (+ np (- s 1)) 1)
+                      a (if (= prev 0) 0 (let [w (vector-assoc! out (- s 1) (step-wait! f R C prev (+ np (- s 2))))] 0))]
+                  (recur (+ s 1) cb))))
         t2 (cc f now 0 0 0 0 0)
         text (loop [s 0 acc "greedy"]
                (if (= s @STEPS@) (string-concat acc "\n")
@@ -673,5 +744,7 @@ kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer
         w2 (wr-text f R (string-concat "e1-ns prompt-tokens " (string-concat (string-from-i64 np)
              (string-concat " prompt " (string-concat (string-from-i64 (ticks-ns f (- t1 t0)))
              (string-concat " decode-steps " (string-concat (string-from-i64 (- @STEPS@ 1))
-             (string-concat " decode " (string-concat (string-from-i64 (ticks-ns f (- t2 t1))) "\n")))))))))]
+             (string-concat " decode " (string-concat (string-from-i64 (ticks-ns f (- t2 t1))) "\n")))))))))
+        w3 (wr-text f R (string-concat "e1-split all-steps encode " (string-concat (string-from-i64 (ticks-ns f (peek f acc0)))
+             (string-concat " gpu-wait " (string-concat (string-from-i64 (ticks-ns f (peek f (+ acc0 8)))) "\n")))))]
     0))
