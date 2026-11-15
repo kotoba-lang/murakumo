@@ -31,9 +31,10 @@ MacBook Pro M1 Max, 32 GB. Qwen2.5-0.5B-Instruct Q8_0 unless noted.
 | llama.cpp Metal | 218.4 | same Mac, 2026-11-03 |
 | murakumo decode guest, GLSL kernels via MoltenVK and a C loader | 71.2 | 2026-10-19; the loader is gone, so this cannot be rerun |
 | murakumo, Amu selfhost, one Q8_0 kernel on the CPU | 3.6 (kernel bound) | not a token rate |
+| murakumo E1, Amu selfhost, Metal (hand-written MSL) | about 174 | 2026-11-15, diagnostic, load average about 9 ([record](../bench/results/2026-11-15-e1-first-token/README.md)) |
 | Kapitsa | not measured here | its own M1 Pro 16 GB runs: Qwen3.5-4B 4-bit 97, Qwen3.6-35B-A3B 2-bit 52, both with KFlash ([benchmarks.md](benchmarks.md#other-engines-as-published)) |
 
-**murakumo generates no tokens today.** Every bar above that is ours is a dated record or a kernel bound.
+**Update 2026-11-15:** E1 generates tokens on the GPU (gate passed, greedy `314 746 600 220`). The other bars of ours above are dated records or kernel bounds.
 
 What the last week built that this plan can use (stage M, JUN-927, 50 slices, all on the M1 Max through the
 `amu-program-metal` profile of amu ADR 0405):
