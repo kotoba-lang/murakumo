@@ -14,13 +14,13 @@ inline void k4_scale_min(device const uchar *q, uint j, thread float &sc, thread
   else { sc = float((q[j + 4] & 15) | ((q[j - 4] >> 6) << 4)); m = float((q[j + 4] >> 4) | ((q[j] >> 6) << 4)); }
 }
 
-// dot of sub-block s (32 values) of a row with x[0 .. 31]
-template <uint T> inline float sbdot(device const uchar *row, uint s, device const float *x) {
+// dot of sub-block s (32 values) of a row with the 32 activations xv (8 float4 in registers)
+template <uint T> inline float sbdot(device const uchar *row, uint s, thread const float4 *xv) {
   if (T == 8) {
     device const uchar *bl = row + s * 34;
     device const char *q = (device const char *)(bl + 2);
     float acc = 0.0f;
-    FU for (uint i = 0; i < 32; i += 4) acc += dot(float4(q[i], q[i + 1], q[i + 2], q[i + 3]), *(device const float4 *)(x + i));
+    FU for (uint i = 0; i < 32; i += 4) acc += dot(float4(q[i], q[i + 1], q[i + 2], q[i + 3]), xv[i / 4]);
     return acc * float(*(device const half *)bl);
   }
   if (T == 12 || T == 13) {
@@ -34,15 +34,15 @@ template <uint T> inline float sbdot(device const uchar *row, uint s, device con
     uint sh = (j % 2) * 4;
     float acc = 0.0f, sx = 0.0f;
     FU for (uint i = 0; i < 32; i += 4) {
-      float4 xv = *(device const float4 *)(x + i);
+      float4 xw = xv[i / 4];
       uchar4 b4 = *(device const uchar4 *)(qs + i);
       float4 qv = float4((b4 >> uchar(sh)) & uchar(15));
       if (T == 13) {
         uchar4 h4 = *(device const uchar4 *)(qh + i);
         qv += 16.0f * float4((h4 >> uchar(j)) & uchar(1));
       }
-      acc += dot(qv, xv);
-      sx += (xv.x + xv.y) + (xv.z + xv.w);
+      acc += dot(qv, xw);
+      sx += (xw.x + xw.y) + (xw.z + xw.w);
     }
     return d * sc * acc - dm * m * sx;
   }
@@ -55,13 +55,66 @@ template <uint T> inline float sbdot(device const uchar *row, uint s, device con
   uint nsh = (k / 2) * 4, hsh = 2 * k;
   float a0 = 0.0f, a1 = 0.0f;
   FU for (uint i = 0; i < 32; i += 4) {
-    float4 xv = *(device const float4 *)(x + i);
-    uchar4 l4 = uchar4(ql[i], ql[i + 1], ql[i + 2], ql[i + 3]);  // Q6_K blocks are 210 bytes: no 4-byte alignment
-    uchar4 h4 = uchar4(qh[i], qh[i + 1], qh[i + 2], qh[i + 3]);
+    float4 xw = xv[i / 4];
+    // Q6_K blocks are 210 bytes: 2-byte aligned only, so two ushort loads per 4 bytes
+    uchar4 l4 = as_type<uchar4>(uint(*(device const ushort *)(ql + i)) | (uint(*(device const ushort *)(ql + i + 2)) << 16));
+    uchar4 h4 = as_type<uchar4>(uint(*(device const ushort *)(qh + i)) | (uint(*(device const ushort *)(qh + i + 2)) << 16));
     float4 qv = float4(int4(((l4 >> uchar(nsh)) & uchar(15)) | (((h4 >> uchar(hsh)) & uchar(3)) << uchar(4))) - 32);
-    if (i < 16) a0 += dot(qv, xv); else a1 += dot(qv, xv);
+    if (i < 16) a0 += dot(qv, xw); else a1 += dot(qv, xw);
   }
   return float(*(device const half *)(bl + 208)) * (float(sc[2 * k]) * a0 + float(sc[2 * k + 1]) * a1);
+}
+
+// Q4_K / Q5_K scale and min of sub-block j from the 12 scale bytes read as three words (no byte loads, no branch)
+inline void k4_sm_words(uint u0, uint u1, uint u2, uint j, thread float &sc, thread float &m) {
+  uint i = (j % 4) * 8;
+  uint b0 = (u0 >> i) & 255u, b1 = (u1 >> i) & 255u, b2 = (u2 >> i) & 255u;
+  sc = float(j < 4 ? (b0 & 63u) : ((b2 & 15u) | ((b0 >> 6) << 4)));
+  m = float(j < 4 ? (b1 & 63u) : ((b2 >> 4) | ((b1 >> 6) << 4)));
+}
+
+// dot of the 8 values 256 blk + 8 l .. + 7 of a row with x0, x1 (lane l of a simdgroup that walks one 256-value
+// span per step, so one load instruction of the simdgroup reads one contiguous stretch of the row)
+template <uint T> inline float cdot(device const uchar *row, uint blk, uint l, float4 x0, float4 x1) {
+  uint o = (l % 4) * 8;
+  if (T == 8) {
+    device const uchar *bl = row + (blk * 8 + l / 4) * 34;
+    device const ushort *q = (device const ushort *)(bl + 2 + o);
+    char2 c0 = as_type<char2>(q[0]), c1 = as_type<char2>(q[1]), c2 = as_type<char2>(q[2]), c3 = as_type<char2>(q[3]);
+    float t = dot(float4(c0.x, c0.y, c1.x, c1.y), x0) + dot(float4(c2.x, c2.y, c3.x, c3.y), x1);
+    return t * float(*(device const half *)bl);
+  }
+  uint j = l / 4;
+  if (T == 12 || T == 13) {
+    device const uchar *bl = row + blk * (T == 12 ? 144 : 176);
+    device const uint *bw = (device const uint *)bl;
+    float2 dd = float2(as_type<half2>(bw[0]));
+    float sc, m;
+    k4_sm_words(bw[1], bw[2], bw[3], j, sc, m);
+    float d = dd.x, dm = dd.y;
+    uint2 qq = *(device const uint2 *)(bl + (T == 12 ? 16 : 48) + (j / 2) * 32 + o);
+    uchar sh = uchar((j % 2) * 4);
+    float4 q0 = float4((as_type<uchar4>(qq.x) >> sh) & uchar(15)), q1 = float4((as_type<uchar4>(qq.y) >> sh) & uchar(15));
+    if (T == 13) {
+      uint2 hh = *(device const uint2 *)(bl + 16 + o);
+      q0 += 16.0f * float4((as_type<uchar4>(hh.x) >> uchar(j)) & uchar(1));
+      q1 += 16.0f * float4((as_type<uchar4>(hh.y) >> uchar(j)) & uchar(1));
+    }
+    float4 xs = x0 + x1;
+    return d * sc * (dot(q0, x0) + dot(q1, x1)) - dm * m * ((xs.x + xs.y) + (xs.z + xs.w));
+  }
+  // Q6_K (210-byte blocks: 2-byte aligned): lane l covers half h = l / 16, values r = (l % 16) * 8 .. + 7 of it
+  device const uchar *bl = row + blk * 210;
+  uint h = l / 16, r = (l % 16) * 8, k = r / 32, li = r % 32;
+  device const ushort *ql = (device const ushort *)(bl + 64 * h + (k % 2) * 32 + li);
+  device const ushort *qh = (device const ushort *)(bl + 128 + 32 * h + li);
+  uchar ns = uchar((k / 2) * 4), hs = uchar(2 * k);
+  uchar4 l0 = as_type<uchar4>(uint(ql[0]) | (uint(ql[1]) << 16)), l1 = as_type<uchar4>(uint(ql[2]) | (uint(ql[3]) << 16));
+  uchar4 h0 = as_type<uchar4>(uint(qh[0]) | (uint(qh[1]) << 16)), h1 = as_type<uchar4>(uint(qh[2]) | (uint(qh[3]) << 16));
+  float4 q0 = float4(int4(((l0 >> ns) & uchar(15)) | (((h0 >> hs) & uchar(3)) << uchar(4))) - 32);
+  float4 q1 = float4(int4(((l1 >> ns) & uchar(15)) | (((h1 >> hs) & uchar(3)) << uchar(4))) - 32);
+  float sc = float(((device const char *)(bl + 192 + 8 * h))[li / 16 + 2 * k]);
+  return float(*(device const half *)(bl + 208)) * sc * (dot(q0, x0) + dot(q1, x1));
 }
 
 // one value i of a row
@@ -89,20 +142,34 @@ template <uint T> inline float deq_el(device const uchar *row, uint i) {
 constant constexpr uint QB[15] = {0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 144, 176, 210};
 constant constexpr uint QE[15] = {0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 256, 256, 256};
 
-// y = W x: a weight off, b rows, c cols, e flags (2 add into y), f x off, g y off. One row per simdgroup, 8 rows
-// per 256-thread threadgroup; lanes walk the row's 32-value sub-blocks.
+// y = W x: a weight off, b rows, c cols, e flags (2 add into y), f x off, g y off. Each 256-thread threadgroup takes MR
+// rows; its 8 simdgroups split the row into 256-value steps (simdgroup s takes steps s, s + 8, ...), lane l taking
+// values 8 l .. + 7 of a step for all MR rows, and the partial sums meet in threadgroup memory (a row length must be
+// a multiple of 256).
+constant constexpr uint MR = 4;
 template <uint T>
 kernel void mvq(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
                 uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
                 uint ln [[thread_index_in_simdgroup]]) {
-  uint r = tg * 8 + sg;
-  if (r >= p.b) return;
-  device const uchar *row = W + p.a + ulong(r) * (p.c / QE[T]) * QB[T];
+  threadgroup float red[8 * MR];
+  uint r0 = tg * MR;
+  ulong rb = ulong(p.c / QE[T]) * QB[T];
+  device const uchar *row = W + p.a + ulong(r0) * rb;
   device const float *x = A + p.f;
-  float s = 0.0f;
-  for (uint sb = ln; sb < p.c / 32; sb += 32) s += sbdot<T>(row, sb, x + sb * 32);
-  s = simd_sum(s);
-  if (ln == 0) { if (p.e & 2u) A[p.g + r] += s; else A[p.g + r] = s; }
+  uint nr = min(MR, p.b - r0);
+  float s[MR];
+  FU for (uint r = 0; r < MR; r++) s[r] = 0.0f;
+  for (uint blk = sg; blk < p.c / 256; blk += 8) {
+    float4 x0 = *(device const float4 *)(x + blk * 256 + ln * 8), x1 = *(device const float4 *)(x + blk * 256 + ln * 8 + 4);
+    FU for (uint r = 0; r < MR; r++) if (r < nr) s[r] += cdot<T>(row + r * rb, blk, ln, x0, x1);
+  }
+  FU for (uint r = 0; r < MR; r++) { float t = simd_sum(s[r]); if (ln == 0) red[sg * MR + r] = t; }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sg == 0 && ln < nr) {
+    float t = 0.0f;
+    FU for (uint i = 0; i < 8; i++) t += red[i * MR + ln];
+    if (p.e & 2u) A[p.g + r0 + ln] += t; else A[p.g + r0 + ln] = t;
+  }
 }
 
 // embedding row of a token into g: a table off, b token, c row length, d 1 = the token is the uint word at e

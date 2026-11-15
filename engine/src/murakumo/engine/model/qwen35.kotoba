@@ -46,7 +46,10 @@
 
 ;; y (rows) = W x (cols) with the kernel for dtype dt; add 1 adds into y
 (defn- mv [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 woff :i64 dt :i64 rows :i64 cols :i64 xo :i64 yo :i64 add :i64] :i64
-  (d f R en X PL (k/k-mv dt) (vector-i64 woff rows cols 0 (if (= add 1) 2 0) xo yo 0) (quot (+ rows 7) 8) 256))
+  (d f R en X PL (k/k-mv dt) (vector-i64 woff rows cols 0 (if (= add 1) 2 0) xo yo 0) (quot (+ rows 3) 4) 256))
+
+;; a barrier in a concurrent encoder
+(defn- bar [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64] :i64 (m/barrier! f R en))
 
 (defn- rms [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 w :i64 xo :i64 yo :i64 eps :i64] :i64
   (d f R en X PL (k/k-rms1) (vector-i64 w 0 2560 0 0 xo yo eps) 1 1024))
@@ -57,40 +60,56 @@
         base (vector-at P (+ g 4))
         ord (vector-at P (pr/ps l 3))
         r1 (rms f R en X PL (vector-at P (pr/ps l 0)) (oX) (oH) eps)
+        b1 (bar f R en)
         body (if (= (vector-at P (pr/ps l 2)) 0)
                (let [q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0)
                      z (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 4096 2560 (oH) (oZ) 0)
                      al (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 32 2560 (oH) (oAB) 0)
                      be (mv f R en X PL (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) 32 2560 (oH) (+ (oAB) 32) 0)
+                     b2 (bar f R en)
                      cv (d f R en X PL (k/k-conv) (vector-i64 (vector-at P (pr/ps l 18)) 0 8192 0 (oCO) (oQ) (+ (oCONV) (* ord 24576)) 0) 32 256)
+                     b3 (bar f R en)
                      dn (d f R en X PL (k/k-dnet) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (oCO) (oAB)
                                                               (+ (oSSM) (* ord 524288)) (oY) 0 0) 1024 128)
-                     gn (d f R en X PL (k/k-gnorm) (vector-i64 (vector-at P (pr/ps l 21)) 0 0 0 (oZ) (oY) 0 eps) 32 32)]
+                     b4 (bar f R en)
+                     gn (d f R en X PL (k/k-gnorm) (vector-i64 (vector-at P (pr/ps l 21)) 0 0 0 (oZ) (oY) 0 eps) 32 32)
+                     b5 (bar f R en)]
                  (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1))
                (let [kc (+ (oKC) (* ord (* (tmax) 1024)))
                      vc (+ (oVC) (* ord (* (tmax) 1024)))
                      q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0)
                      kk (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 1024 2560 (oH) (oK) 0)
                      vv (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 1024 2560 (oH) (oV) 0)
+                     b2 (bar f R en)
                      qk (d f R en X PL (k/k-qkr) (vector-i64 (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) pos (oQ) (oK) (oV) kc vc base eps) 20 32)
-                     at (d f R en X PL (k/k-attd) (vector-i64 0 0 (+ pos 1) (oQ) 0 (oY) kc vc) 16 256)]
+                     b3 (bar f R en)
+                     at (d f R en X PL (k/k-attd) (vector-i64 0 0 (+ pos 1) (oQ) 0 (oY) kc vc) 16 256)
+                     b4 (bar f R en)]
                  (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1)))
+        b6 (bar f R en)
         r2 (rms f R en X PL (vector-at P (pr/ps l 1)) (oX) (oH) eps)
+        b7 (bar f R en)
         fg (mv f R en X PL (vector-at P (pr/ps l 4)) (vector-at P (pr/ps l 5)) 9216 2560 (oH) (oFG) 0)
         fu (mv f R en X PL (vector-at P (pr/ps l 6)) (vector-at P (pr/ps l 7)) 9216 2560 (oH) (oFU) 0)
-        sw (d f R en X PL (k/k-swiglu) (vector-i64 0 0 9216 0 (oFU) (oFG) (oG2) 0) 36 256)]
-    (mv f R en X PL (vector-at P (pr/ps l 8)) (vector-at P (pr/ps l 9)) 2560 9216 (oG2) (oX) 1)))
+        b8 (bar f R en)
+        sw (d f R en X PL (k/k-swiglu) (vector-i64 0 0 9216 0 (oFU) (oFG) (oG2) 0) 36 256)
+        b9 (bar f R en)
+        dn2 (mv f R en X PL (vector-at P (pr/ps l 8)) (vector-at P (pr/ps l 9)) 2560 9216 (oG2) (oX) 1)]
+    (bar f R en)))
 
 ;; one token through the model in one command buffer (committed); tok, or the arena's token word when from-gpu is 1
 (defn step-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 tok :i64 pos :i64 from-gpu :i64 nl :i64] :i64
   (let [t0 (b/cc f (vector-at X 10) 0 0 0 0 0)
-        ce (m/open-enc f R X)
+        ce (m/open-enc-c f R X)
         en (vector-at ce 1)
         g (pr/gbase)
         e0 (d f R en X PL (k/k-emb (vector-at P (+ g 1))) (vector-i64 (vector-at P g) tok 2560 from-gpu (oTOK) 0 (oX) 0) 10 256)
+        eb (bar f R en)
         ly (loop [l 0] (if (= l nl) 0 (let [u (layer! f R en X PL P l pos)] (recur (+ l 1)))))
         fr (rms f R en X PL (vector-at P (+ g 2)) (oX) (oH) (vector-at P (+ g 3)))
+        fb (bar f R en)
         hd (mv f R en X PL (vector-at P g) (vector-at P (+ g 1)) (pr/q35-vocab) 2560 (oH) (oLG) 0)
+        hb (bar f R en)
         am (d f R en X PL (k/k-argmax) (vector-i64 0 0 (pr/q35-vocab) 0 pos (oLG) (oTOK) (oLOG)) 1 1024)]
     (m/commit! f R X ce t0)))
 
@@ -195,5 +214,7 @@
         w2 (b/wr-text f R (string-concat "q35-ns prompt-tokens " (string-concat (string-from-i64 np)
              (string-concat " prompt " (string-concat (string-from-i64 (m/ticks-ns f (- t1 t0)))
              (string-concat " decode-steps " (string-concat (string-from-i64 (- steps 1))
-             (string-concat " decode " (string-concat (string-from-i64 (m/ticks-ns f (- t2 t1))) "\n")))))))))]
+             (string-concat " decode " (string-concat (string-from-i64 (m/ticks-ns f (- t2 t1))) "\n")))))))))
+        w3 (b/wr-text f R (string-concat "q35-split encode " (string-concat (string-from-i64 (m/ticks-ns f (b/peek f acc)))
+             (string-concat " gpu-wait " (string-concat (string-from-i64 (m/ticks-ns f (b/peek f (+ acc 8)))) "\n")))))]
     0))
