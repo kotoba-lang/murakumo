@@ -11,6 +11,7 @@
 #   kernel-mutant  the RoPE rotation with one sign flipped changes the tokens
 #   partial-mutant the RMSNorm that adds the split-k partial products of the o and down GEMMs into the residual
 #                  dropping the last partial changes the tokens
+#   deq-mutant     the load-time Q8_0 to f16 copy of the GEMM weights swapping neighbouring values changes the tokens
 #   chain-mutant   decode steps that embed the step's own parameter (0) instead of the previous argmax change the tokens
 #   prefill-check  a 512-token synthetic prompt through the batched prefill and through one token per step: the last
 #                  token's argmax is the same and the logits differ by at most 0.05 (the batched GEMM rounds the
@@ -91,6 +92,12 @@ rc=0; runit sm
 got=$(grep '^greedy' "$WK/sm.txt" || true)
 if [ -n "$got" ] && [ "$got" != "$WANT" ]; then echo "partial-mutant (one split-k partial dropped): $got (detected)"
 else echo "partial-mutant NOT detected (exit $rc): $got"; fail=1; fi
+
+build dm "$MODEL" "$WK/model.sha256" "o[k] = half(d * float(q[k]));" "o[k] = half(d * float(q[k ^ 1u]));"
+rc=0; runit dm
+got=$(grep '^greedy' "$WK/dm.txt" || true)
+if [ -n "$got" ] && [ "$got" != "$WANT" ]; then echo "deq-mutant (f16 weight copy with neighbours swapped): $got (detected)"
+else echo "deq-mutant NOT detected (exit $rc): $got"; fail=1; fi
 
 "$PY" "$HERE/flip_scale.py" "$MODEL" "$WK/mut.gguf"
 shasum -a 256 "$WK/mut.gguf" | cut -c1-64 > "$WK/mut.sha256"
