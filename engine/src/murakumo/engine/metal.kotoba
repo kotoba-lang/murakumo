@@ -1,0 +1,87 @@
+(ns murakumo.engine.metal
+  (:require [murakumo.engine.base :as b]))
+
+;; Metal helpers of the engine library (docs/engine-profiles.md). A context X carries what every dispatch needs:
+;;   0 setComputePipelineState:  1 setBytes:length:atIndex:  2 dispatchThreadgroups:threadsPerThreadgroup:
+;;   3 parameter scratch (160 bytes: parameters at 0..95, grid at 96, group at 128)  4 command queue
+;;   5 weights buffer W (binding 0)  6 arena buffer A (binding 1)  7 A contents  8 setBuffer:offset:atIndex:
+;;   9 timing accumulators (encode ns ticks, gpu-wait ticks)  10 mach_absolute_time
+;; Pipelines live in their own vector, indexed by the kernel ids of the kernel library.
+
+;; trap with the NSError's description on stderr
+(defn refuse [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 err :i64] :i64
+  (let [d (b/msg f R err "localizedDescription" 0 0 0)
+        t (b/msg f R d "UTF8String" 0 0 0)
+        n (b/cc f (b/sym f "strlen") t 0 0 0 0)
+        w (b/cc f (b/sym f "write") 2 t n 0 0)]
+    (vector-at [0] 1)))
+
+(defn pipeline [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 lib :i64 errp :i64 name :string] :i64
+  (let [fnc (b/msg f R lib "newFunctionWithName:" (b/nsstring f R name) 0 0)
+        u (if (= fnc 0) (let [w (b/wr-text f R (string-concat "refused: no kernel " (string-concat name "\n")))] (vector-at [0] 1)) 0)
+        po (b/msg f R dev "newComputePipelineStateWithFunction:error:" fnc errp 0)]
+    (if (= po 0) (refuse f R (b/peek f errp)) po)))
+
+;; compile MSL source text into a library, trapping with the compiler's message
+(defn library [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 src :string errp :i64] :i64
+  (let [u (b/poke f errp 0)
+        lib (b/msg f R dev "newLibraryWithSource:options:error:" (b/nsstring f R src) 0 errp)]
+    (if (= lib 0) (refuse f R (b/peek f errp)) lib)))
+
+(defn pk [lo :i64 hi :i64] :i64 (bit-or (bit-and lo 4294967295) (i64-shift-left hi 32)))
+
+;; one dispatch of pipeline k: gx threadgroups of tx threads, parameters pv (an even count of at most 24 uint words)
+(defn disp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 k :i64 pv :vector-i64 gx :i64 tx :i64] :i64
+  (let [pm (vector-at X 3)
+        np2 (quot (vector-count pv) 2)
+        u2 (if (or (> (vector-count pv) 24) (= (rem (vector-count pv) 2) 1)) (vector-at [0] 1) 0)
+        u0 (loop [i 0]
+             (if (= i np2) 0
+               (let [u (b/poke f (+ pm (* 8 i)) (pk (vector-at pv (* 2 i)) (vector-at pv (+ (* 2 i) 1))))] (recur (+ i 1)))))
+        grid (+ pm 96)
+        group (+ pm 128)
+        v0 (b/poke f grid gx) v1 (b/poke f (+ grid 8) 1) v2 (b/poke f (+ grid 16) 1)
+        v3 (b/poke f group tx) v4 (b/poke f (+ group 8) 1) v5 (b/poke f (+ group 16) 1)
+        ms (vector-at R 0)
+        s0 (b/cc f ms en (vector-at X 0) (vector-at PL k) 0 0)
+        s1 (b/cc f ms en (vector-at X 1) pm (* 4 (vector-count pv)) 2)
+        s2 (b/cc f ms en (vector-at X 2) grid group 0)]
+    0))
+
+;; a command buffer and compute encoder with W (binding 0) and A (binding 1) bound; returns [cb en]
+(defn open-enc [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64] :vector-i64
+  (let [ms (vector-at R 0)
+        cb (b/msg f R (vector-at X 4) "commandBuffer" 0 0 0)
+        en (b/msg f R cb "computeCommandEncoder" 0 0 0)
+        b0 (b/cc f ms en (vector-at X 8) (vector-at X 5) 0 0)
+        b1 (b/cc f ms en (vector-at X 8) (vector-at X 6) 0 1)]
+    (vector-i64 cb en)))
+
+;; end encoding and commit; adds the encode time since t0 (ticks) to the accumulator
+(defn commit! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 ce :vector-i64 t0 :i64] :i64
+  (let [z0 (b/msg f R (vector-at ce 1) "endEncoding" 0 0 0)
+        z1 (b/msg f R (vector-at ce 0) "commit" 0 0 0)
+        t1 (b/cc f (vector-at X 10) 0 0 0 0 0)
+        acc (vector-at X 9)
+        k0 (b/poke f acc (+ (b/peek f acc) (- t1 t0)))]
+    (vector-at ce 0)))
+
+;; wait for a command buffer, trapping with its error unless it completed; adds the wait to the accumulator
+(defn wait! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 cb :i64] :i64
+  (let [t0 (b/cc f (vector-at X 10) 0 0 0 0 0)
+        z (b/msg f R cb "waitUntilCompleted" 0 0 0)
+        t1 (b/cc f (vector-at X 10) 0 0 0 0 0)
+        acc (+ (vector-at X 9) 8)
+        k (b/poke f acc (+ (b/peek f acc) (- t1 t0)))
+        st (b/msg f R cb "status" 0 0 0)]
+    (if (= st 4) 0 (refuse f R (b/msg f R cb "error" 0 0 0)))))
+
+(defn ticks-ns [f [:fn [[:i64 :i64 :i64] :i64]] t :i64] :i64
+  (let [tb (+ (b/scratch f) 192)
+        u (b/cc f (b/sym f "mach_timebase_info") tb 0 0 0 0)
+        w (b/peek f tb)]
+    (quot (* t (bit-and w 4294967295)) (u64-shift-right w 32))))
+
+;; the uint32 at float offset o of the arena
+(defn arena-u32 [f [:fn [[:i64 :i64 :i64] :i64]] X :vector-i64 o :i64] :i64
+  (bit-and (b/peek f (+ (vector-at X 7) (* 4 o))) 4294967295))

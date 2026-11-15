@@ -1,0 +1,199 @@
+(ns murakumo.engine.model.qwen35
+  (:require [murakumo.engine.base :as b]
+            [murakumo.engine.metal :as m]
+            [murakumo.engine.kernels :as k]
+            [murakumo.engine.profile :as pr]))
+
+;; Qwen3.5 (qwen35) on the Metal route, decode one token per command buffer (AWAI-2938 slice 2/3): the step encoder
+;; walks the profile's layers and picks each matvec's kernel from that tensor's dtype (docs/engine-profiles.md).
+;; Gated DeltaNet layer: RMSNorm; q|k|v, z, alpha, beta matvecs; conv1d + SiLU with its state; delta rule; gated
+;; RMSNorm; out matvec into the residual. Gated attention layer: RMSNorm; q|gate, k, v matvecs; q/k norm + RoPE + KV
+;; store; attention times sigmoid(gate); output matvec into the residual. Then RMSNorm, gate and up matvecs, SwiGLU,
+;; down matvec into the residual. Final RMSNorm, the tied head over the embedding table, argmax.
+
+;; arena A offsets (floats; every one a multiple of 4)
+(defn oX [] :i64 0)
+(defn oH [] :i64 2560)
+(defn oQ [] :i64 5120)
+(defn oZ [] :i64 13312)
+(defn oAB [] :i64 17408)
+(defn oCO [] :i64 17472)
+(defn oY [] :i64 25664)
+(defn oK [] :i64 29760)
+(defn oV [] :i64 30784)
+(defn oFG [] :i64 31808)
+(defn oFU [] :i64 41024)
+(defn oG2 [] :i64 50240)
+(defn oLG [] :i64 59456)
+(defn oTOK [] :i64 307776)
+(defn oLOG [] :i64 307780)
+(defn oCONV [] :i64 308804)
+(defn oSSM [] :i64 898628)
+(defn oKC [] :i64 13481540)
+(defn oVC [] :i64 17675844)
+(defn arena-floats [] :i64 21870148)
+;; positions the KV cache and the position log hold
+(defn tmax [] :i64 512)
+
+;; the parameter vector padded to the 16 words of struct P
+(defn p16 [v :vector-i64] :vector-i64
+  (let [o (vector-alloc 16)
+        u (loop [i 0] (if (= i 16) 0 (let [w (vector-assoc! o i (if (< i (vector-count v)) (vector-at v i) 0))] (recur (+ i 1)))))]
+    o))
+
+(defn- d [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 kid :i64 pv :vector-i64 gx :i64 tx :i64] :i64
+  (m/disp f R en X PL kid (p16 pv) gx tx))
+
+;; y (rows) = W x (cols) with the kernel for dtype dt; add 1 adds into y
+(defn- mv [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 woff :i64 dt :i64 rows :i64 cols :i64 xo :i64 yo :i64 add :i64] :i64
+  (d f R en X PL (k/k-mv dt) (vector-i64 woff rows cols 0 (if (= add 1) 2 0) xo yo 0) (quot (+ rows 7) 8) 256))
+
+(defn- rms [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 w :i64 xo :i64 yo :i64 eps :i64] :i64
+  (d f R en X PL (k/k-rms1) (vector-i64 w 0 2560 0 0 xo yo eps) 1 1024))
+
+(defn- layer! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 l :i64 pos :i64] :i64
+  (let [g (pr/gbase)
+        eps (vector-at P (+ g 3))
+        base (vector-at P (+ g 4))
+        ord (vector-at P (pr/ps l 3))
+        r1 (rms f R en X PL (vector-at P (pr/ps l 0)) (oX) (oH) eps)
+        body (if (= (vector-at P (pr/ps l 2)) 0)
+               (let [q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0)
+                     z (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 4096 2560 (oH) (oZ) 0)
+                     al (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 32 2560 (oH) (oAB) 0)
+                     be (mv f R en X PL (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) 32 2560 (oH) (+ (oAB) 32) 0)
+                     cv (d f R en X PL (k/k-conv) (vector-i64 (vector-at P (pr/ps l 18)) 0 8192 0 (oCO) (oQ) (+ (oCONV) (* ord 24576)) 0) 32 256)
+                     dn (d f R en X PL (k/k-dnet) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (oCO) (oAB)
+                                                              (+ (oSSM) (* ord 524288)) (oY) 0 0) 1024 128)
+                     gn (d f R en X PL (k/k-gnorm) (vector-i64 (vector-at P (pr/ps l 21)) 0 0 0 (oZ) (oY) 0 eps) 32 32)]
+                 (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1))
+               (let [kc (+ (oKC) (* ord (* (tmax) 1024)))
+                     vc (+ (oVC) (* ord (* (tmax) 1024)))
+                     q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0)
+                     kk (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 1024 2560 (oH) (oK) 0)
+                     vv (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 1024 2560 (oH) (oV) 0)
+                     qk (d f R en X PL (k/k-qkr) (vector-i64 (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) pos (oQ) (oK) (oV) kc vc base eps) 20 32)
+                     at (d f R en X PL (k/k-attd) (vector-i64 0 0 (+ pos 1) (oQ) 0 (oY) kc vc) 16 256)]
+                 (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1)))
+        r2 (rms f R en X PL (vector-at P (pr/ps l 1)) (oX) (oH) eps)
+        fg (mv f R en X PL (vector-at P (pr/ps l 4)) (vector-at P (pr/ps l 5)) 9216 2560 (oH) (oFG) 0)
+        fu (mv f R en X PL (vector-at P (pr/ps l 6)) (vector-at P (pr/ps l 7)) 9216 2560 (oH) (oFU) 0)
+        sw (d f R en X PL (k/k-swiglu) (vector-i64 0 0 9216 0 (oFU) (oFG) (oG2) 0) 36 256)]
+    (mv f R en X PL (vector-at P (pr/ps l 8)) (vector-at P (pr/ps l 9)) 2560 9216 (oG2) (oX) 1)))
+
+;; one token through the model in one command buffer (committed); tok, or the arena's token word when from-gpu is 1
+(defn step-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 tok :i64 pos :i64 from-gpu :i64 nl :i64] :i64
+  (let [t0 (b/cc f (vector-at X 10) 0 0 0 0 0)
+        ce (m/open-enc f R X)
+        en (vector-at ce 1)
+        g (pr/gbase)
+        e0 (d f R en X PL (k/k-emb (vector-at P (+ g 1))) (vector-i64 (vector-at P g) tok 2560 from-gpu (oTOK) 0 (oX) 0) 10 256)
+        ly (loop [l 0] (if (= l nl) 0 (let [u (layer! f R en X PL P l pos)] (recur (+ l 1)))))
+        fr (rms f R en X PL (vector-at P (+ g 2)) (oX) (oH) (vector-at P (+ g 3)))
+        hd (mv f R en X PL (vector-at P g) (vector-at P (+ g 1)) (pr/q35-vocab) 2560 (oH) (oLG) 0)
+        am (d f R en X PL (k/k-argmax) (vector-i64 0 0 (pr/q35-vocab) 0 pos (oLG) (oTOK) (oLOG)) 1 1024)]
+    (m/commit! f R X ce t0)))
+
+;; debug: the first 6 floats of the residual (oX) and of oH as float bits
+(defn- dump [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64] :i64
+  (let [ac (vector-at X 7)
+        s (loop [i 0 acc "dump-x"] (if (= i 6) acc (recur (+ i 1) (string-concat acc (string-concat " " (string-from-i64 (bit-and (b/peek f (+ ac (* 4 i))) 4294967295)))))))
+        t (loop [i 0 acc " h"] (if (= i 6) acc (recur (+ i 1) (string-concat acc (string-concat " " (string-from-i64 (bit-and (b/peek f (+ ac (* 4 (+ (oH) i)))) 4294967295)))))))]
+    (b/wr-text f R (string-concat s (string-concat t "\n")))))
+
+;; the pipelines in kernel-id order (murakumo.engine.kernels)
+(defn pipelines [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 lib :i64 errp :i64] :vector-i64
+  (vector-i64 (m/pipeline f R dev lib errp "mv_q8_0") (m/pipeline f R dev lib errp "mv_q4_k")
+              (m/pipeline f R dev lib errp "mv_q5_k") (m/pipeline f R dev lib errp "mv_q6_k")
+              (m/pipeline f R dev lib errp "emb_q8_0") (m/pipeline f R dev lib errp "emb_q4_k")
+              (m/pipeline f R dev lib errp "emb_q5_k") (m/pipeline f R dev lib errp "emb_q6_k")
+              (m/pipeline f R dev lib errp "rms1") (m/pipeline f R dev lib errp "swiglu")
+              (m/pipeline f R dev lib errp "conv") (m/pipeline f R dev lib errp "dnet")
+              (m/pipeline f R dev lib errp "gnorm") (m/pipeline f R dev lib errp "qkr")
+              (m/pipeline f R dev lib errp "attd") (m/pipeline f R dev lib errp "argmax")))
+
+;; load the pinned file, build the profile, run the prompt ids one token at a time and steps greedy tokens;
+;; prints `greedy ...` and `q35-ns ...` on stderr
+(defn run [f [:fn [[:i64 :i64 :i64] :i64]] path :string expect :string ids :vector-i64 steps :i64 nl :i64] :i64
+  (let [dlopen (b/sym f "dlopen")
+        h1 (b/open-framework f dlopen "/System/Library/Frameworks/Foundation.framework/Foundation")
+        h2 (b/open-framework f dlopen "/System/Library/Frameworks/Metal.framework/Metal")
+        R (vector-i64 (b/sym f "objc_msgSend") (b/sym f "sel_registerName") (b/sym f "objc_getClass") (b/sym f "malloc"))
+        now (b/sym f "mach_absolute_time")
+        device (b/cc f (b/sym f "MTLCreateSystemDefaultDevice") 0 0 0 0 0)
+        dev (if (= device 0) (vector-at [0] 1) device)
+        fd (b/cc f (b/sym f "open") (b/cstr f (vector-at R 3) path) 0 0 0 0)
+        u0 (if (< fd 0) (let [w (b/wr-text f R "refused: cannot open the model\n")] (vector-at [0] 1)) 0)
+        shv (b/sha-verify! f R fd expect)
+        total (b/cc f (b/sym f "lseek") fd 0 2 0 0)
+        u1 (if (< total 24) (let [w (b/wr-text f R "refused: truncated header\n")] (vector-at [0] 1)) 0)
+        hb (if (> total 67108864) 67108864 total)
+        fbuf (b/cc f (vector-at R 3) hb 0 0 0 0)
+        got (b/cc f (b/sym f "pread") fd fbuf hb 0 0)
+        u2 (if (= got hb) 0 (let [w (b/wr-text f R "refused: short read\n")] (vector-at [0] 1)))
+        mg (if (= (+ (+ (+ (bit-xor (b/byte-at f fbuf) 71) (bit-xor (b/byte-at f (+ fbuf 1)) 71)) (bit-xor (b/byte-at f (+ fbuf 2)) 85)) (bit-xor (b/byte-at f (+ fbuf 3)) 70)) 0) 0 (let [w (b/wr-text f R "refused: bad magic\n")] (vector-at [0] 1)))
+        u3 (if (= (b/u32le f fbuf 4) 3) 0 (let [w (b/wr-text f R "refused: bad version\n")] (vector-at [0] 1)))
+        nt (b/peek f (+ fbuf 8))
+        nk (b/peek f (+ fbuf 16))
+        u4 (if (or (<= nt 0) (< nk 0)) (let [w (b/wr-text f R "refused: bad counts\n")] (vector-at [0] 1)) 0)
+        KI (b/kv-index f fbuf nk hb)
+        TI (b/t-index f fbuf (vector-at KI (* 4 nk)) nt hb)
+        tpos (vector-at TI (* 7 nt))
+        r (rem tpos 32)
+        dstart (if (= r 0) tpos (+ tpos (- 32 r)))
+        u5 (if (> dstart total) (let [w (b/wr-text f R "refused: data region starts past the end of the file\n")] (vector-at [0] 1)) 0)
+        dlen (- total dstart)
+        P (pr/qwen35 f R fbuf KI nk TI nt dlen)
+        W (b/msg f R dev "newBufferWithLength:options:" dlen 0 0)
+        u6 (if (= W 0) (let [w (b/wr-text f R "refused: no memory for the weights\n")] (vector-at [0] 1)) 0)
+        wdata (b/msg f R W "contents" 0 0 0)
+        prd (b/sym f "pread")
+        got2 (loop [o 0]
+               (if (>= o dlen) o
+                 (let [want (if (< (- dlen o) 8388608) (- dlen o) 8388608)
+                       gg (b/cc f prd fd (+ wdata o) want (+ dstart o) 0)]
+                   (if (= gg want) (recur (+ o want))
+                     (let [w (b/wr-text f R "refused: short read in the data region\n")] (vector-at [0] 1))))))
+        u7 (if (= got2 dlen) (b/stamp-same! f R fd shv) (vector-at [0] 1))
+        A (b/msg f R dev "newBufferWithLength:options:" (* 4 (arena-floats)) 0 0)
+        u8 (if (= A 0) (vector-at [0] 1) 0)
+        queue (b/msg f R dev "newCommandQueue" 0 0 0)
+        acc (b/cc f (vector-at R 3) 16 0 0 0 0)
+        a0 (b/poke f acc 0)
+        a1 (b/poke f (+ acc 8) 0)
+        errp (+ (b/scratch f) 184)
+        lib (m/library f R dev (k/source) errp)
+        PL (pipelines f R dev lib errp)
+        X (vector-i64 (b/sel f R "setComputePipelineState:") (b/sel f R "setBytes:length:atIndex:")
+                      (b/sel f R "dispatchThreadgroups:threadsPerThreadgroup:")
+                      (b/cc f (vector-at R 3) 160 0 0 0 0) queue W A (b/msg f R A "contents" 0 0 0)
+                      (b/sel f R "setBuffer:offset:atIndex:") acc now)
+        np (vector-count ids)
+        u9 (if (> (+ np steps) (tmax)) (let [w (b/wr-text f R "refused: prompt and steps exceed the KV cache\n")] (vector-at [0] 1)) 0)
+        t0 (b/cc f now 0 0 0 0 0)
+        pr0 (loop [i 0]
+              (if (= i np) 0
+                (let [cb (step-enc! f R X PL P (vector-at ids i) i 0 nl)
+                      w (m/wait! f R X cb)]
+                  (recur (+ i 1)))))
+        dbg (if (< nl (pr/q35-layers)) (dump f R X) 0)
+        t1 (b/cc f now 0 0 0 0 0)
+        out (vector-alloc steps)
+        o0 (vector-assoc! out 0 (m/arena-u32 f X (+ (oLOG) (- np 1))))
+        gen (loop [s 1]
+              (if (= s steps) 0
+                (let [pos (+ np (- s 1))
+                      cb (step-enc! f R X PL P 0 pos 1 nl)
+                      w (m/wait! f R X cb)
+                      a (vector-assoc! out s (m/arena-u32 f X (+ (oLOG) pos)))]
+                  (recur (+ s 1)))))
+        t2 (b/cc f now 0 0 0 0 0)
+        text (loop [s 0 accs "greedy"]
+               (if (= s steps) (string-concat accs "\n")
+                 (recur (+ s 1) (string-concat accs (string-concat " " (string-from-i64 (vector-at out s)))))))
+        w1 (b/wr-text f R text)
+        w2 (b/wr-text f R (string-concat "q35-ns prompt-tokens " (string-concat (string-from-i64 np)
+             (string-concat " prompt " (string-concat (string-from-i64 (m/ticks-ns f (- t1 t0)))
+             (string-concat " decode-steps " (string-concat (string-from-i64 (- steps 1))
+             (string-concat " decode " (string-concat (string-from-i64 (m/ticks-ns f (- t2 t1))) "\n")))))))))]
+    0))

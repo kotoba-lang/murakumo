@@ -1,0 +1,12 @@
+(ns murakumo.qwen35-metal
+  (:require [murakumo.engine.model.qwen35 :as q35])
+  (:export [main]))
+
+;; AWAI-2938: Qwen3.5-4B greedy decode on the Apple GPU through the engine library (engine/src, docs/engine-profiles.md),
+;; built by `bin/amu compile ... --source-path engine/src --runtime-profile amu-program-metal`. The model is @PATH@,
+;; checked against the pinned digest in @EXPECT@ before any other read; the prompt ids are @IDS@, then @STEPS@ greedy
+;; tokens. @LAYERS@ is 32; fewer runs only that many layers and prints `dump-x ...` (the residual's first values, as
+;; float bits) for the gate's numeric row. Prints `greedy ...` and `q35-ns ...` on stderr.
+(defn main [] :i64
+  (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))]
+    (q35/run f "@PATH@" "@EXPECT@" (vector-i64 @IDS@) @STEPS@ @LAYERS@)))

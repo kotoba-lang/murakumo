@@ -1,0 +1,61 @@
+(ns murakumo.engine.kernels.deltanet)
+
+;; Gated DeltaNet layer kernels (decode, one token): the causal depthwise conv1d with its 3-step state, the delta-rule
+;; state update and readout, and the gated RMSNorm. Layout as the qwen35 GGUF stores it (bench/results/
+;; 2026-11-15-qwen35-oracle): q | k | v channels, 16 key heads of 128, 32 value heads of 128 tiled onto the key heads
+;; (key head = value head mod 16).
+(defn source [] :string
+  "
+// conv: c channels, a conv weight off (F32 [c][4] in W), f x off, e out off, g state off (3 floats per channel,
+// oldest first); out = silu(w0 s0 + w1 s1 + w2 s2 + w3 x), then the state shifts in x
+kernel void conv(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                 uint c [[thread_position_in_grid]]) {
+  if (c >= p.c) return;
+  device const float *w = (device const float *)(W + p.a) + c * 4;
+  device float *s = A + p.g + c * 3;
+  float x = A[p.f + c];
+  float o = w[0] * s[0] + w[1] * s[1] + w[2] * s[2] + w[3] * x;
+  s[0] = s[1]; s[1] = s[2]; s[2] = x;
+  A[p.e + c] = o / (1.0f + precise::exp(-o));
+}
+
+// delta rule for one token: a ssm_a off (F32 [32] in W, = -exp(A_log)), b dt bias off (F32 [32] in W), c conv out
+// off (q 2048 | k 2048 | v 4096), d alpha off (32 floats, then beta 32), e state off (32 x 128 x 128, [hv][dv][dk]),
+// f y off (32 x 128). One simdgroup per (value head, dv row), 4 per 128-thread threadgroup; lane l holds dk 4l .. 4l+3.
+// q and k are RMS-normalised per head (eps 1e-6) and scaled by 1/128 and 1/sqrt(128).
+kernel void dnet(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                 uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                 uint ln [[thread_index_in_simdgroup]]) {
+  uint hv = tg / 32, dv = (tg % 32) * 4 + sg, hk = hv % 16;
+  float4 q = *(device const float4 *)(A + p.c + hk * 128 + ln * 4);
+  float4 k = *(device const float4 *)(A + p.c + 2048 + hk * 128 + ln * 4);
+  float qn = simd_sum(dot(q, q)), kn = simd_sum(dot(k, k));
+  q *= (1.0f / precise::sqrt(qn / 128.0f + 1e-6f)) * (1.0f / 128.0f);
+  k *= (1.0f / precise::sqrt(kn / 128.0f + 1e-6f)) * (1.0f / precise::sqrt(128.0f));
+  float v = A[p.c + 4096 + hv * 128 + dv];
+  float al = A[p.d + hv] + ((device const float *)(W + p.b))[hv];
+  float sp = al > 20.0f ? al : precise::log(1.0f + precise::exp(al));
+  float g = precise::exp(((device const float *)(W + p.a))[hv] * sp);
+  float beta = 1.0f / (1.0f + precise::exp(-A[p.d + 32 + hv]));
+  device float4 *S = (device float4 *)(A + p.e + (hv * 128 + dv) * 128 + ln * 4);
+  float4 s = *S * g;
+  float kvm = simd_sum(dot(s, k));
+  float delta = (v - kvm) * beta;
+  s += k * delta;
+  *S = s;
+  float y = simd_sum(dot(s, q));
+  if (ln == 0) A[p.f + hv * 128 + dv] = y;
+}
+
+// gated RMSNorm per value head: a norm weight off (F32 [128] in W), f y off (32 x 128, normalised in place), e z off,
+// h epsilon bits; y = rms(y) * w * silu(z). One simdgroup per head.
+kernel void gnorm(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                  uint hv [[threadgroup_position_in_grid]], uint ln [[thread_index_in_simdgroup]]) {
+  device float4 *y = (device float4 *)(A + p.f + hv * 128 + ln * 4);
+  float4 v = *y;
+  float r = 1.0f / precise::sqrt(simd_sum(dot(v, v)) / 128.0f + as_type<float>(p.h));
+  float4 w = ((device const float4 *)(W + p.a))[ln];
+  float4 z = *(device const float4 *)(A + p.e + hv * 128 + ln * 4);
+  *y = v * r * w * (z / (1.0f + exp(-z)));
+}
+")

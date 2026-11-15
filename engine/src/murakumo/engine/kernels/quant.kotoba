@@ -1,0 +1,131 @@
+(ns murakumo.engine.kernels.quant)
+
+;; Quantized matvec and embedding kernels, one template instantiated per GGUF dtype (Q8_0, Q4_K, Q5_K, Q6_K): the
+;; plan picks the instantiation from each tensor's dtype (docs/engine-profiles.md). The block layouts are GGUF's:
+;; Q8_0 fp16 d + 32 int8; Q4_K fp16 d, dmin, 12 bytes of 6-bit scales and mins, 128 bytes of nibbles; Q5_K the same
+;; plus 32 bytes of high bits; Q6_K 128 bytes of low nibbles, 64 bytes of high 2-bit pairs, 16 int8 scales, fp16 d.
+;; Every value is a sub-block of 32 values sharing one scale (Q6_K: two halves of 16), so the matvec lanes walk
+;; sub-blocks and dot each with 32 activations.
+
+(defn source [] :string
+  "
+inline void k4_scale_min(device const uchar *q, uint j, thread float &sc, thread float &m) {
+  if (j < 4) { sc = float(q[j] & 63); m = float(q[j + 4] & 63); }
+  else { sc = float((q[j + 4] & 15) | ((q[j - 4] >> 6) << 4)); m = float((q[j + 4] >> 4) | ((q[j] >> 6) << 4)); }
+}
+
+// dot of sub-block s (32 values) of a row with x[0 .. 31]
+template <uint T> inline float sbdot(device const uchar *row, uint s, device const float *x) {
+  if (T == 8) {
+    device const uchar *bl = row + s * 34;
+    device const char *q = (device const char *)(bl + 2);
+    float acc = 0.0f;
+    FU for (uint i = 0; i < 32; i += 4) acc += dot(float4(q[i], q[i + 1], q[i + 2], q[i + 3]), *(device const float4 *)(x + i));
+    return acc * float(*(device const half *)bl);
+  }
+  if (T == 12 || T == 13) {
+    uint j = s % 8;
+    device const uchar *bl = row + (s / 8) * (T == 12 ? 144 : 176);
+    float d = float(*(device const half *)bl), dm = float(*(device const half *)(bl + 2));
+    float sc, m;
+    k4_scale_min(bl + 4, j, sc, m);
+    device const uchar *qs = bl + (T == 12 ? 16 : 48) + (j / 2) * 32;
+    device const uchar *qh = bl + 16;
+    uint sh = (j % 2) * 4;
+    float acc = 0.0f, sx = 0.0f;
+    FU for (uint i = 0; i < 32; i += 4) {
+      float4 xv = *(device const float4 *)(x + i);
+      uchar4 b4 = *(device const uchar4 *)(qs + i);
+      float4 qv = float4((b4 >> uchar(sh)) & uchar(15));
+      if (T == 13) {
+        uchar4 h4 = *(device const uchar4 *)(qh + i);
+        qv += 16.0f * float4((h4 >> uchar(j)) & uchar(1));
+      }
+      acc += dot(qv, xv);
+      sx += (xv.x + xv.y) + (xv.z + xv.w);
+    }
+    return d * sc * acc - dm * m * sx;
+  }
+  // T == 14, Q6_K
+  uint j = s % 8, h = j / 4, k = j % 4;
+  device const uchar *bl = row + (s / 8) * 210;
+  device const uchar *ql = bl + 64 * h + (k % 2) * 32;
+  device const uchar *qh = bl + 128 + 32 * h;
+  device const char *sc = (device const char *)(bl + 192 + 8 * h);
+  uint nsh = (k / 2) * 4, hsh = 2 * k;
+  float a0 = 0.0f, a1 = 0.0f;
+  FU for (uint i = 0; i < 32; i += 4) {
+    float4 xv = *(device const float4 *)(x + i);
+    uchar4 l4 = uchar4(ql[i], ql[i + 1], ql[i + 2], ql[i + 3]);  // Q6_K blocks are 210 bytes: no 4-byte alignment
+    uchar4 h4 = uchar4(qh[i], qh[i + 1], qh[i + 2], qh[i + 3]);
+    float4 qv = float4(int4(((l4 >> uchar(nsh)) & uchar(15)) | (((h4 >> uchar(hsh)) & uchar(3)) << uchar(4))) - 32);
+    if (i < 16) a0 += dot(qv, xv); else a1 += dot(qv, xv);
+  }
+  return float(*(device const half *)(bl + 208)) * (float(sc[2 * k]) * a0 + float(sc[2 * k + 1]) * a1);
+}
+
+// one value i of a row
+template <uint T> inline float deq_el(device const uchar *row, uint i) {
+  if (T == 8) {
+    device const uchar *bl = row + (i / 32) * 34;
+    return float(*(device const half *)bl) * float(((device const char *)(bl + 2))[i % 32]);
+  }
+  uint j = (i % 256) / 32, l = i % 32;
+  if (T == 12 || T == 13) {
+    device const uchar *bl = row + (i / 256) * (T == 12 ? 144 : 176);
+    float d = float(*(device const half *)bl), dm = float(*(device const half *)(bl + 2));
+    float sc, m;
+    k4_scale_min(bl + 4, j, sc, m);
+    uint q = (bl[(T == 12 ? 16 : 48) + (j / 2) * 32 + l] >> ((j % 2) * 4)) & 15;
+    if (T == 13) q += 16 * ((bl[16 + l] >> j) & 1);
+    return d * sc * float(q) - dm * m;
+  }
+  uint h = j / 4, k = j % 4;
+  device const uchar *bl = row + (i / 256) * 210;
+  int q = int(((bl[64 * h + (k % 2) * 32 + l] >> ((k / 2) * 4)) & 15) | (((bl[128 + 32 * h + l] >> (2 * k)) & 3) << 4)) - 32;
+  return float(*(device const half *)(bl + 208)) * float(((device const char *)(bl + 192 + 8 * h))[l / 16 + 2 * k]) * float(q);
+}
+
+constant constexpr uint QB[15] = {0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 144, 176, 210};
+constant constexpr uint QE[15] = {0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 256, 256, 256};
+
+// y = W x: a weight off, b rows, c cols, e flags (2 add into y), f x off, g y off. One row per simdgroup, 8 rows
+// per 256-thread threadgroup; lanes walk the row's 32-value sub-blocks.
+template <uint T>
+kernel void mvq(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                uint ln [[thread_index_in_simdgroup]]) {
+  uint r = tg * 8 + sg;
+  if (r >= p.b) return;
+  device const uchar *row = W + p.a + ulong(r) * (p.c / QE[T]) * QB[T];
+  device const float *x = A + p.f;
+  float s = 0.0f;
+  for (uint sb = ln; sb < p.c / 32; sb += 32) s += sbdot<T>(row, sb, x + sb * 32);
+  s = simd_sum(s);
+  if (ln == 0) { if (p.e & 2u) A[p.g + r] += s; else A[p.g + r] = s; }
+}
+
+// embedding row of a token into g: a table off, b token, c row length, d 1 = the token is the uint word at e
+template <uint T>
+kernel void embq(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                 uint i [[thread_position_in_grid]]) {
+  if (i >= p.c) return;
+  uint tok = p.d == 1u ? ((device const uint *)A)[p.e] : p.b;
+  A[p.g + i] = deq_el<T>(W + p.a + ulong(tok) * (p.c / QE[T]) * QB[T], i);
+}
+
+#define MVQ_ARGS (device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]], uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]])
+#define EMB_ARGS (device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]], uint i [[thread_position_in_grid]])
+template [[host_name(\"mv_q8_0\")]] kernel void mvq<8> MVQ_ARGS;
+template [[host_name(\"mv_q4_k\")]] kernel void mvq<12> MVQ_ARGS;
+template [[host_name(\"mv_q5_k\")]] kernel void mvq<13> MVQ_ARGS;
+template [[host_name(\"mv_q6_k\")]] kernel void mvq<14> MVQ_ARGS;
+template [[host_name(\"emb_q8_0\")]] kernel void embq<8> EMB_ARGS;
+template [[host_name(\"emb_q4_k\")]] kernel void embq<12> EMB_ARGS;
+template [[host_name(\"emb_q5_k\")]] kernel void embq<13> EMB_ARGS;
+template [[host_name(\"emb_q6_k\")]] kernel void embq<14> EMB_ARGS;
+")
+
+;; kernel ids: the matvec and embedding instantiation for a GGUF dtype (the pipeline order of murakumo.engine.kernels)
+(defn mv-id [dt :i64] :i64 (cond (= dt 8) 0 (= dt 12) 1 (= dt 13) 2 (= dt 14) 3 :else (vector-at [0] 1)))
+(defn emb-id [dt :i64] :i64 (+ 4 (mv-id dt)))

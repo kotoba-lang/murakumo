@@ -1,0 +1,22 @@
+(ns murakumo.engine.kernels.head)
+
+;; argmax of the logits (first index on ties): c n, f logits off, g out word (uint), also logged at word h + e
+;; (e the position); one 1024-thread threadgroup.
+(defn source [] :string
+  "
+kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                   uint t [[thread_position_in_threadgroup]]) {
+  threadgroup float bv[1024];
+  threadgroup uint bi[1024];
+  float best = -INFINITY;
+  uint idx = 0;
+  for (uint i = t; i < p.c; i += 1024) { float v = A[p.f + i]; if (v > best) { best = v; idx = i; } }
+  bv[t] = best; bi[t] = idx;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint w = 512; w > 0; w >>= 1) {
+    if (t < w && (bv[t + w] > bv[t] || (bv[t + w] == bv[t] && bi[t + w] < bi[t]))) { bv[t] = bv[t + w]; bi[t] = bi[t + w]; }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (t == 0) { ((device uint *)A)[p.g] = bi[0]; ((device uint *)A)[p.h + p.e] = bi[0]; }
+}
+")
