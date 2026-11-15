@@ -161,7 +161,7 @@ kernel void mvq(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
   FU for (uint r = 0; r < MR; r++) s[r] = 0.0f;
   for (uint blk = sg; blk < p.c / 256; blk += 8) {
     float4 x0 = *(device const float4 *)(x + blk * 256 + ln * 8), x1 = *(device const float4 *)(x + blk * 256 + ln * 8 + 4);
-    FU for (uint r = 0; r < MR; r++) if (r < nr) s[r] += cdot<T>(row + r * rb, blk, ln, x0, x1);
+    FU for (uint r = 0; r < MR; r++) s[r] += cdot<T>(row + min(r, nr - 1) * rb, blk, ln, x0, x1);  // no branch: rows past the end repeat the last row and are not stored
   }
   FU for (uint r = 0; r < MR; r++) { float t = simd_sum(s[r]); if (ln == 0) red[sg * MR + r] = t; }
   threadgroup_barrier(mem_flags::mem_threadgroup);
