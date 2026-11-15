@@ -1,5 +1,5 @@
 #!/bin/sh
-# Gate engine-plan E1 (AWAI-2851) and E2 (AWAI-2917): Qwen2.5-0.5B Q8_0 greedy decode on the Apple GPU from a Kotoba program built by
+# Gate engine-plan E1 (AWAI-2851), E2 (AWAI-2917) and E3 (AWAI-2922): Qwen2.5-0.5B Q8_0 greedy decode on the Apple GPU from a Kotoba program built by
 # `bin/amu compile --runtime-profile amu-program-metal`. The model file must be the pinned GGUF
 # (bartowski/Qwen2.5-0.5B-Instruct-GGUF, Qwen2.5-0.5B-Instruct-Q8_0.gguf, sha256 below).
 #
@@ -10,6 +10,11 @@
 #                  numpy, a local oracle run once on the same file; the oracle itself is not run here)
 #   kernel-mutant  the RoPE rotation with one sign flipped changes the tokens
 #   chain-mutant   decode steps that embed the step's own parameter (0) instead of the previous argmax change the tokens
+#   prefill-check  a 512-token synthetic prompt through the batched prefill and through one token per step: the last
+#                  token's argmax is the same and the logits differ by at most 0.05 (the batched GEMM rounds the
+#                  dequantized weights to half; about 1e-2 was measured)
+#   prefill-mutant the flash attention's causal mask off by one fails that check
+# Every other row runs the prompt through the batched prefill (@PREFILL@ 1), the engine's default.
 #   weight-mutant  a copy of the file with the sign bit of one fp16 scale in token 314's embedding row flipped
 #                  (its own digest pinned) changes the tokens
 #   digest         a pinned digest that differs in one character refuses before any token
@@ -28,7 +33,7 @@ have=$(shasum -a 256 "$MODEL" | cut -c1-64)
 printf "%s" "$PIN" > "$WK/model.sha256"
 LONG="greedy 314 746 600 220 15 92 314 16 92 314 98428 600 92 341 262 738 5003 699 72 8 314 9338 286 738 5003 699 72 8 314 9338 310 738 5003 699 72 8 314 9338 394 738 5003 699 72 8 314 9338 503 738 5003 699 72 8 314 9338 664 738 5003 699 72 8 314 9338 999 738 5003 699 72 8 314 9338 1383 738 5003 699 72 8 314 9338 1920 738 5003 699 72 8 314 9338 2559 738 5003 699 72 8 314 9338 3344 738 5003 699 72 8 314 9338 4569 738 5003 699 72 8 314 9338 6374 738 5003 699 72 8 314 9338 8136 738 5003 699 72 8 314 9338 11950 738 5003"
 build() { # name model digest-file [from to]   (STEPS from the environment, default 4)
-  sed -e "s#@PATH@#$2#g;s#@EXPECT@#$3#g;s#@IDS@#760 6511 314 9338 369#g;s#@STEPS@#${STEPS:-4}#g" "$HERE/qwen2_metal.kotoba.in" > "$WK/$1.kotoba"
+  sed -e "s#@PATH@#$2#g;s#@EXPECT@#$3#g;s#@IDS@#760 6511 314 9338 369#g;s#@STEPS@#${STEPS:-4}#g;s#@PREFILL@#${PF:-1}#g;s#@GENIDS@#${GEN:-0}#g" "$HERE/qwen2_metal.kotoba.in" > "$WK/$1.kotoba"
   if [ -n "${4:-}" ]; then
     FROM=$4 TO=$5 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/$1.kotoba"
   fi
@@ -56,6 +61,21 @@ got=$(grep '^greedy' "$WK/cm.txt" || true)
 want8=$(echo "$LONG" | cut -d' ' -f1-9)
 if [ -n "$got" ] && [ "$got" != "$want8" ]; then echo "chain-mutant (decode ignores the previous argmax): $got (detected)"
 else echo "chain-mutant NOT detected (exit $rc): $got"; fail=1; fi
+
+check() { # name: prints "argmax-seq argmax-batch maxdiff" from a check-mode run
+  perl -ne 'if (/seq-argmax (\d+) batch-argmax (\d+) maxdiff-bits (\d+)/) { printf "%s %s %.6g\n", $1, $2, unpack("f", pack("L", $3)) }' "$WK/$1.txt"
+}
+STEPS=2; PF=2; GEN=512; build pc "$MODEL" "$WK/model.sha256"
+rc=0; runit pc
+set -- $(check pc)
+if [ "$rc" = 0 ] && [ "${1:-x}" = "${2:-y}" ] && perl -e "exit(!(${3:-99} <= 0.05))"; then echo "prefill-check: 512 tokens, argmax $1 both ways, max |logit difference| $3"
+else echo "prefill-check: FAILED (exit $rc): $*"; fail=1; fi
+build pm "$MODEL" "$WK/model.sha256" "bool ok = s0 + ln < p.c + mb + r;" "bool ok = s0 + ln <= p.c + mb + r;"
+rc=0; runit pm
+set -- $(check pm)
+if [ -n "${3:-}" ] && { [ "$1" != "$2" ] || perl -e "exit(!($3 > 0.05))"; }; then echo "prefill-mutant (causal mask off by one): argmax $1 vs $2, max difference $3 (detected)"
+else echo "prefill-mutant NOT detected (exit $rc): $*"; fail=1; fi
+PF=1; GEN=0
 
 STEPS=4
 build km "$MODEL" "$WK/model.sha256" "float lo = a * c - b * s, hi = a * s + b * c;" "float lo = a * c - b * s, hi = a * s - b * c;"
