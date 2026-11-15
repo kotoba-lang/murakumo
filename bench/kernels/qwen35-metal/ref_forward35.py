@@ -119,7 +119,7 @@ def silu(x):
     return x / (1.0 + np.exp(-x))
 
 
-def forward(M, ids, stats=False):
+def forward(M, ids, stats=False, nl=None):
     kv = M.kv
     L = kv["qwen35.block_count"]
     D = kv["qwen35.embedding_length"]
@@ -136,7 +136,7 @@ def forward(M, ids, stats=False):
     T = len(ids)
     x = np.stack([M.rows("token_embd.weight", t, t + 1)[0] for t in ids])
     pos = np.arange(T)
-    for l in range(L):
+    for l in range(L if nl is None else nl):
         p = f"blk.{l}."
         h = rms(x, M.get(p + "attn_norm.weight"), eps)
         if stats and l == 0:
@@ -205,6 +205,9 @@ def forward(M, ids, stats=False):
         f = (silu(h @ M.get(p + "ffn_gate.weight").T) * (h @ M.get(p + "ffn_up.weight").T)) @ M.get(p + "ffn_down.weight").T
         x = x + f
     hl = rms(x[-1:], M.get("output_norm.weight"), eps)[0]
+    if nl is not None:
+        print("x", " ".join("%.7g" % v for v in x[-1][:6]))
+        print("h", " ".join("%.7g" % v for v in hl[:6]))
     V = M.t["token_embd.weight"][1][1]
     best, bv = -1, -np.inf
     top = []
@@ -220,17 +223,19 @@ def forward(M, ids, stats=False):
 
 
 def main(argv):
-    path, steps, stats, rest = argv[0], 4, False, argv[1:]
+    path, steps, stats, layers, rest = argv[0], 4, False, None, argv[1:]
     while rest and rest[0].startswith("--"):
         if rest[0] == "--steps":
             steps = int(rest[1]); rest = rest[2:]
+        elif rest[0] == "--layers":
+            layers = int(rest[1]); rest = rest[2:]
         elif rest[0] == "--stats":
             stats = True; rest = rest[1:]
     ids = [int(x) for x in rest] or [760, 6511, 314, 9338, 369]
     M = Model(path)
     out = []
     for s in range(steps):
-        t, top = forward(M, ids + out, stats and s == 0)
+        t, top = forward(M, ids + out, stats and s == 0, layers)
         print("step", s, "top", [(i, round(float(v), 3)) for v, i in top], flush=True)
         out.append(t)
     print("greedy", " ".join(map(str, out)))

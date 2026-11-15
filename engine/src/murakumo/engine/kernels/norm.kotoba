@@ -1,0 +1,30 @@
+(ns murakumo.engine.kernels.norm)
+
+;; RMSNorm of one row and the SwiGLU product (decode).
+(defn source [] :string
+  "
+// RMSNorm of one row: a weight off (F32 in W), c n, f x off, g out off, h epsilon bits; one 1024-thread threadgroup
+kernel void rms1(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                 uint t [[thread_position_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]],
+                 uint ln [[thread_index_in_simdgroup]]) {
+  threadgroup float red[32];
+  float ss = 0.0f;
+  for (uint k = t; k < p.c; k += 1024) { float v = A[p.f + k]; ss += v * v; }
+  ss = simd_sum(ss);
+  if (ln == 0) red[sg] = ss;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float tot = 0.0f;
+  FU for (uint i = 0; i < 32; i++) tot += red[i];
+  float r = 1.0f / precise::sqrt(tot / float(p.c) + as_type<float>(p.h));
+  device const float *w = (device const float *)(W + p.a);
+  for (uint k = t; k < p.c; k += 1024) A[p.g + k] = A[p.f + k] * r * w[k];
+}
+
+// g[i] = silu(f[i]) * e[i] for i < c
+kernel void swiglu(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                   uint i [[thread_position_in_grid]]) {
+  if (i >= p.c) return;
+  float g = A[p.f + i];
+  A[p.g + i] = g / (1.0f + precise::exp(-g)) * A[p.e + i];
+}
+")
