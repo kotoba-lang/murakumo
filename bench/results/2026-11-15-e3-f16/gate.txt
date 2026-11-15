@@ -1,0 +1,13 @@
+exact: greedy 314 746 600 220 (e1-ns prompt-tokens 5 prompt 79959750 decode-steps 3 decode 10851083)
+long: 129 tokens equal the pinned continuation (e1-ns prompt-tokens 5 prompt 32174958 decode-steps 128 decode 418979916)
+chain-mutant (decode ignores the previous argmax): greedy 314 314 314 0 0 0 0 0 (detected)
+prefill-check: 512 tokens, argmax 198 both ways, max |logit difference| 0.0103216
+prefill-mutant (causal mask off by one): argmax 198 vs 93472, max difference 12.5784 (detected)
+kernel-mutant (RoPE sign): greedy 369 369 369 369 (detected)
+partial-mutant (one split-k partial dropped): greedy 279 1156 882 304 (detected)
+deq-mutant (f16 weight copy with neighbours swapped): greedy 1694 13 304 13 (detected)
+flipped byte 6247409: 0x0c -> 0x8c
+weight-mutant (one scale sign in token 314's row): greedy 314 400 72 284 (detected)
+digest: one character off refuses before any token (exit 133)
+wrong-model: refused (exit 133): refused: tensor shape, dtype or span blk.0.attn_norm.weight
+gate passed, build dir (temporary)
