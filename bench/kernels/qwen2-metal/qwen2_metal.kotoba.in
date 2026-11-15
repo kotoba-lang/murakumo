@@ -14,6 +14,12 @@
 ;; committed before the CPU waits for the previous one, so two are in flight and each token is still read back as soon
 ;; as its own buffer completes. The KV cache holds 256 positions. The kernels are MSL text in this program, written by
 ;; hand (engine-plan D2); E7 replaces them with kernels Amu emits.
+;; The prompt (E3, AWAI-2922) goes through the model by @PREFILL@: 1 (the default) all rows in one command buffer
+;; (Q8_0 GEMMs on simdgroup matrices, RMSNorm and SwiGLU passes, RoPE + KV store and flash-style causal attention for
+;; every row, the head on the last row only), 0 one token per command buffer, 2 both, then the last token's logits
+;; compared on the GPU (prints `prefill-check ...` with the max difference as float bits). @GENIDS@ nonzero replaces
+;; the prompt by that many synthetic ids (i * 7919 + 100) mod 151000; the batch holds at most 512 rows and the KV cache
+;; 1024 positions.
 ;; Prints `greedy t0 t1 ...` and `e1-ns ...` (diagnostic timing) on stderr.
 ;; The path is @PATH@, the pinned digest file @EXPECT@, the prompt ids @IDS@.
 
