@@ -31,6 +31,17 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- exact-oracle-int [value]
+  ;; The CLJS KIR interpreter returns integer values as JS BigInt. Normalize
+  ;; only exact, safely representable integers; never coerce strings or nil.
+  #?(:clj (when (and (integer? value) (<= -9007199254740991 value 9007199254740991)) value)
+     :cljs (when (or (number? value)
+                     (= "[object BigInt]" (.call (.-toString (.-prototype js/Object)) value)))
+             (let [n (js/Number value)]
+               (when (js/Number.isSafeInteger n) n)))))
+
+(defn- oi [export args] (exact-oracle-int (o export args)))
+
 (def unmeasured
   "What a probe returns when it could not read the device.
 
@@ -70,7 +81,10 @@
        "done"))
 
 (defn- parse-long* [s]
-  (try #?(:clj (Long/parseLong (str/trim s)) :cljs (js/parseInt (str/trim s) 10))
+  (try (let [text (str/trim s)]
+         (when (re-matches #"-?[0-9]+" text)
+           (let [n #?(:clj (Long/parseLong text) :cljs (js/parseInt text 10))]
+             (when (<= -9007199254740991 n 9007199254740991) n))))
        (catch #?(:clj Exception :cljs :default) _ nil)))
 
 (defn parse-probe
@@ -87,11 +101,12 @@
        (case (first cells)
          "vram-total" (assoc acc :vram-total (or (parse-long* (second cells)) unmeasured))
          "gtt-total"  (assoc acc :gtt-total (or (parse-long* (second cells)) unmeasured))
-         "claim" (if-let [b (parse-long* (nth cells 2 ""))]
-                   (update acc :claims conj {:pid (nth cells 1 "?")
-                                             :bytes b
-                                             :comm (nth cells 3 "")})
-                   (update acc :unreadable-claims inc))
+         "claim" (let [b (parse-long* (nth cells 2 ""))]
+                   (if (and (some? b) (not (neg? b)))
+                     (update acc :claims conj {:pid (nth cells 1 "?")
+                                               :bytes b
+                                               :comm (nth cells 3 "")})
+                     (update acc :unreadable-claims inc)))
          acc)))
    {:vram-total unmeasured :gtt-total unmeasured :claims [] :unreadable-claims 0}
    (remove str/blank? (str/split-lines (or out "")))))
@@ -99,13 +114,34 @@
 ;; ── budget (pure, via the oracle) ──────────────────────────────────────
 
 (defn aperture-bytes [{:keys [vram-total gtt-total]}]
-  (o "aperture-bytes" [(or vram-total unmeasured) (or gtt-total unmeasured)]))
+  ;; Both values and their sum must remain exact in the ClojureScript host.
+  ;; A rounded aperture can overstate capacity, so treat it as unmeasured.
+  (if (and (integer? vram-total) (integer? gtt-total)
+           (<= 0 vram-total 9007199254740991)
+           (<= 0 gtt-total 9007199254740991)
+           (<= vram-total (- 9007199254740991 gtt-total)))
+    (let [aperture (oi "aperture-bytes" [vram-total gtt-total])]
+      ;; The oracle is not trusted to invent capacity beyond the inputs.
+      (if (= aperture (+ vram-total gtt-total)) aperture unmeasured))
+    unmeasured))
 
-(defn headroom-default-milli [] (o "headroom-default-milli" []))
+(defn headroom-default-milli [] (oi "headroom-default-milli" []))
 
 (defn usable-bytes
   ([probe] (usable-bytes probe (headroom-default-milli)))
-  ([probe headroom-milli] (o "usable-bytes" [(aperture-bytes probe) headroom-milli])))
+  ([probe headroom-milli]
+   (let [aperture (aperture-bytes probe)]
+     ;; Do not rely on an unqualified oracle to propagate an unknown input.
+     (if (and (integer? aperture) (<= 0 aperture 9007199254740991)
+              (integer? headroom-milli) (<= 0 headroom-milli 1000))
+       ;; Split before multiplication so every intermediate stays exact in JS.
+       (let [whole (quot aperture 1000)
+             remainder (- aperture (* whole 1000))
+             expected (- aperture (+ (* whole headroom-milli)
+                                     (quot (* remainder headroom-milli) 1000)))
+             usable (oi "usable-bytes" [aperture headroom-milli])]
+         (if (and (integer? usable) (= usable expected)) usable unmeasured))
+       unmeasured))))
 
 (defn committed
   "Claims folded into the two classes by a caller-supplied registry.
@@ -116,11 +152,11 @@
   for either class. Its release must be verified before capacity is reused."
   [{:keys [claims]} registry]
   (reduce (fn [acc {:keys [pid comm bytes]}]
-            (let [k (or (get registry pid)
-                        (some (fn [[pat klass]]
-                                (when (and (string? pat) (str/includes? comm pat)) klass))
-                              registry)
-                        :opportunistic)]
+            (let [selected (or (get registry pid)
+                               (some (fn [[pat klass]]
+                                       (when (and (string? pat) (str/includes? comm pat)) klass))
+                                     registry))
+                  k (if (contains? classes selected) selected :opportunistic)]
               (update acc k + bytes)))
           {:resident 0 :opportunistic 0}
           claims))
@@ -133,13 +169,60 @@
   that made 262 core dumps unreadable."
   [probe registry klass request-bytes & [headroom-milli]]
   (let [usable (usable-bytes probe (or headroom-milli (headroom-default-milli)))
-        {res :resident opp :opportunistic} (committed probe registry)
+        claims (:claims probe)
+        valid-claims? (and (vector? claims)
+                           (every? (fn [claim]
+                                     (and (map? claim)
+                                          (let [{:keys [pid comm bytes]} claim]
+                                            (and (string? pid) (string? comm) (integer? bytes)
+                                                 (<= 0 bytes 9007199254740991))))) claims)
+                           (loop [remaining (seq claims) total 0]
+                             (if-let [claim (first remaining)]
+                               (let [bytes (:bytes claim)]
+                                 (and (<= bytes (- 9007199254740991 total))
+                                      (recur (next remaining) (+ total bytes))))
+                               true)))
+        {res :resident opp :opportunistic} (if valid-claims? (committed probe registry)
+                                              {:resident 0 :opportunistic 0})
         k (get classes klass -1)
-        code (o "admit-code" [k request-bytes usable res opp])]
+        ;; The shipped KIR can lag the native source. Refuse this consumer's
+        ;; known overcommit counterexample before trusting an admission or
+        ;; a grant. This check detects that specific stale oracle; it is not
+        ;; a general qualification or a substitute for regeneration.
+        oracle-current? (and (= 3 (oi "admit-code" [0 76 100 20 5]))
+                             (= 75 (oi "granted-bytes" [0 100 20 5])))
+        unreadable (:unreadable-claims probe)
+        observed? (and valid-claims? (integer? unreadable) (zero? unreadable))
+        measured? (and (integer? usable) (<= 0 usable 9007199254740991))
+        known-class? (contains? classes klass)
+        valid-request? (and (integer? request-bytes) (<= 1 request-bytes 9007199254740991))
+        eligible? (and oracle-current? observed? measured? known-class? valid-request?)
+        ;; A known counterexample alone does not qualify every oracle result.
+        ;; All holders still consume capacity until their release is observed.
+        remaining (if (and observed? measured?) (max 0 (- usable res opp)) 0)
+        candidate-code (if eligible? (oi "admit-code" [k request-bytes usable res opp]) nil)
+        candidate-grant (if eligible? (oi "granted-bytes" [k usable res opp]) nil)
+        consistent? (and (integer? candidate-code) (<= 0 candidate-code 7)
+                         (integer? candidate-grant) (<= 0 candidate-grant remaining)
+                         (or (not= candidate-code 0) (<= request-bytes candidate-grant)))
+        code (cond (not (and oracle-current? observed?)) 7
+                   (not measured?) 1
+                   (not known-class?) 5
+                   (not valid-request?) 6
+                   (not consistent?) 7
+                   :else candidate-code)
+        reason (cond (not oracle-current?) :oracle-unqualified
+                     (not observed?) :invalid-observation
+                     (not measured?) :unmeasured
+                     (not known-class?) :unknown-class
+                     (not valid-request?) (if (and (integer? request-bytes) (<= request-bytes 0))
+                                            :non-positive-request :invalid-request)
+                     (not consistent?) :oracle-inconsistent
+                     :else (keyword (o "code-name" [code])))]
     {:admitted? (zero? code)
      :code code
-     :reason (keyword (o "code-name" [code]))
-     :granted (o "granted-bytes" [k usable res opp])
+     :reason reason
+     :granted (if (and eligible? consistent?) candidate-grant 0)
      :usable usable
      :resident res
      :opportunistic opp}))
