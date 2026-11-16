@@ -6,7 +6,7 @@
             [murakumo.engine.kernels.head :as head]))
 
 ;; The kernel library: one MSL source of every kernel the plans use, and the pipeline order (kernel ids):
-;;   0..3 mv_q8_0 mv_q4_k mv_q5_k mv_q6_k  4..7 emb_q8_0 emb_q4_k emb_q5_k emb_q6_k  8 rms1  9 swiglu
+;;   0..3 mv_q8_0 mvk_q4_k mvk_q5_k mv_q6_k  4..7 emb_q8_0 emb_q4_k emb_q5_k emb_q6_k  8 rms1  9 swiglu
 ;;   10 conv  11 dnet  12 gnorm  13 qkr  14 attd  15 argmax
 ;; Every kernel takes (W bytes, A floats, P sixteen uints).
 (defn header [] :string

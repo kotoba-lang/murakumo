@@ -17,6 +17,8 @@
 #                    of this short prompt do not change, so this row is numeric)
 #   gate-mutant      the attention output without its sigmoid gate changes the tokens
 #   q6k-mutant       one scale index of the Q6_K matvec off by one changes the tokens
+#   q4k-mutant       the 16-byte Q4_K/Q5_K matvec with the scales of its low- and high-nibble sub-blocks swapped changes
+#                    the tokens
 #   digest           a pinned digest that differs in one character refuses before any token
 #   wrong-model      the synthetic S1 fixture (architecture qwen2) is refused by the qwen35 profile
 # Timing on stderr (`q35-ns ...`) is a diagnostic, not a benchmark. A Mac GPU host is required (not a CI step).
@@ -62,6 +64,7 @@ mutant tile-mutant "value heads by hv / 2" kernels/deltanet.kotoba "hk = hv % 16
 mutant conv-mutant "conv1d without its state" kernels/deltanet.kotoba "float o = w[0] * s[0] + w[1] * s[1] + w[2] * s[2] + w[3] * x;" "float o = w[3] * x;"
 mutant gate-mutant "attention output gate dropped" kernels/attn.kotoba "(o / z) * (1.0f / (1.0f + precise::exp(-gt)))" "(o / z)"
 mutant q6k-mutant "Q6_K scale index" kernels/quant.kotoba "[li / 16 + 2 * k]);" "[1 - li / 16 + 2 * k]);"
+mutant q4k-mutant "Q4_K/Q5_K sub-block pair scales swapped" kernels/quant.kotoba "dd.x * (s0 * lo + s1 * hi)" "dd.x * (s1 * lo + s0 * hi)"
 
 # residual after 4 layers (3 delta-net layers and the first gated-attention one), last prompt position, first 6 values,
 # against ref_forward35.py --layers 4 (numpy, recorded 2026-11-15): within 2e-4 of each

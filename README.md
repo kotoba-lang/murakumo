@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/header-dark.svg">
-  <img alt="murakumo, the Kotoba inference engine. MacBook Pro M1 Max 32 GB, macOS 26.4, 2026-11-16. Qwen2.5-0.5B-Instruct · decode, tokens/s: murakumo (Kotoba via Amu selfhost · Metal · Q8_0) 292.6, MLX (8-bit · -p 8) 252.4, llama.cpp (Metal · Q8_0 · same hour (233.2 on a calmer 11-13)) 168.9; Qwen2.5-0.5B-Instruct · prefill, 512-token prompt, tokens/s: llama.cpp (Metal · Q8_0) 8,860, murakumo (Kotoba via Amu selfhost · Metal · Q8_0 · level within about 1 %) 8,814, MLX (8-bit) 6,428; Qwen3.5-4B · decode, tokens/s: Kapitsa (4-bit · speculative (DFlash2 drafter), its own benchmark, 11-15) 106.3, MLX (4-bit · plain greedy) 67.9, murakumo (Q4_K_M · plain greedy · run between the others (45-51 alone)) 38.6, llama.cpp (Metal · Q4_K_M · plain greedy) 35.5." src="docs/assets/header-light.svg">
+  <img alt="murakumo, the Kotoba inference engine. MacBook Pro M1 Max 32 GB, macOS 26.4, 2026-11-16. Qwen2.5-0.5B-Instruct · decode, tokens/s: murakumo (Kotoba via Amu selfhost · Metal · Q8_0) 292.6, MLX (8-bit · -p 8) 252.4, llama.cpp (Metal · Q8_0 · same hour (233.2 on a calmer 11-13)) 168.9; Qwen2.5-0.5B-Instruct · prefill, 512-token prompt, tokens/s: llama.cpp (Metal · Q8_0) 8,860, murakumo (Kotoba via Amu selfhost · Metal · Q8_0 · level within about 1 %) 8,814, MLX (8-bit) 6,428; Qwen3.5-4B · decode, tokens/s: Kapitsa (4-bit · speculative (DFlash2 drafter), its own benchmark, 11-15) 106.3, MLX (4-bit · plain greedy) 55.5, murakumo (Q4_K_M · plain greedy · run between the others) 44.0, llama.cpp (Metal · Q4_K_M · plain greedy) 38.6." src="docs/assets/header-light.svg">
 </picture>
 
 # murakumo 叢雲
@@ -12,7 +12,7 @@ selfhost (`bin/amu`) and runs on the Mac's GPU through Metal. It aims for the fa
 inference on the machine it runs on, measured in the open. On an M1 Max today
 (loaded host, records below): Qwen2.5-0.5B decode 292.6 tok/s
 against MLX 252.4 and llama.cpp 168.9, prefill 8,814 against llama.cpp 8,860;
-Qwen3.5-4B decode 38.6 against llama.cpp 35.5, MLX 67.9 and Kapitsa's
+Qwen3.5-4B decode 44.0 against llama.cpp 38.6, MLX 55.5 and Kapitsa's
 speculative 106.3. None of this has passed the claim gate (AWAI-18) yet: it
 needs quiet-host rounds.
 
@@ -40,9 +40,9 @@ read their own 4-bit packs):
 | Engine | Decoding | Decode, tokens/s |
 | --- | --- | ---: |
 | Kapitsa 0.2.36 | speculative (DFlash2 drafter, 73 % of tokens drafted), its own benchmark | **106.3** |
-| MLX 4-bit (0.31.1) | plain greedy | 67.9 |
-| <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | plain greedy | 38.6 run between the others; 45–51 run alone |
-| llama.cpp Metal (b11669), same GGUF | plain greedy | 35.5 |
+| MLX 4-bit (0.31.1) | plain greedy | 55.5 |
+| <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | plain greedy | 44.0 run between the others; 41.6–45.8 run alone |
+| llama.cpp Metal (b11669), same GGUF | plain greedy | 38.6 |
 
 <sub>murakumo's greedy tokens equal a pinned oracle's on both models (llama.cpp's on Qwen3.5), and every
 build passes a gate with must-fail mutants and digest/wrong-model refusals.
@@ -53,7 +53,7 @@ the plain rows; murakumo's speculative decoding is step E5 of
 [the plan](docs/engine-plan.md). The kernels are hand-written MSL until E7.
 Records: [Qwen2.5 decode](bench/results/2026-11-15-e2-decode/README.md),
 [Qwen2.5 prefill](bench/results/2026-11-15-e3-f16/README.md),
-[Qwen3.5 decode](bench/results/2026-11-16-qwen35-decode/README.md),
+[Qwen3.5 decode](bench/results/2026-11-16-qwen35-decode-3/README.md),
 [Kapitsa, MLX and llama.cpp on Qwen3.5](bench/results/2026-11-15-e0-kapitsa/README.md),
 [earlier records](bench/README.md). The poster is drawn from
 [`bench/poster.json`](bench/poster.json) by `bench/poster.py`.
