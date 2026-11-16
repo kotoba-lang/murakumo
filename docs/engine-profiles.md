@@ -47,7 +47,7 @@ The plan maps each (tensor, phase) to a kernel variant. Today it is code in the 
 | --- | --- | --- |
 | matvec kernel (decode) | the tensor's dtype | `mv_q8_0`, `mv_q6_k` (one template, one instantiation per dtype); `mvk_q4_k`, `mvk_q5_k` (16-byte nibble loads covering a low- and a high-nibble sub-block). Each simdgroup owns 4 rows over the whole row; Q8_0 and Q6_K rows over 3,072 values are split between 2 simdgroups |
 | embedding row | the embedding's dtype | `emb_<dtype>` |
-| layer kernel set | the layer kind | gated attention (q\|gate, q/k norm, partial RoPE, sigmoid gate); GQA attention; Gated DeltaNet (conv1d, delta rule, gated norm) |
+| layer kernel set | the layer kind | gated attention (q\|gate, q/k norm, partial RoPE, sigmoid gate); GQA attention; Gated DeltaNet (conv1d, delta rule and gated norm fused in one threadgroup per value head) |
 | prefill GEMM (next) | dtype, shape and memory | f16 copy + tiled GEMM when it fits (E3, Qwen2.5: 64 x 128 tiles, split k for short n); in-place dequantization otherwise |
 | decoding method (E5) | what the model ships | plain; MTP head; external drafter (DFlash-style); chosen per model when a head or drafter is present |
 

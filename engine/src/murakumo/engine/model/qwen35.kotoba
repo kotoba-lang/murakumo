@@ -6,8 +6,8 @@
 
 ;; Qwen3.5 (qwen35) on the Metal route, decode one token per command buffer (AWAI-2938 slice 2/3): the step encoder
 ;; walks the profile's layers and picks each matvec's kernel from that tensor's dtype (docs/engine-profiles.md).
-;; Gated DeltaNet layer: RMSNorm; q|k|v, z, alpha, beta matvecs; conv1d + SiLU with its state; delta rule; gated
-;; RMSNorm; out matvec into the residual. Gated attention layer: RMSNorm; q|gate, k, v matvecs; q/k norm + RoPE + KV
+;; Gated DeltaNet layer: RMSNorm; q|k|v, z, alpha, beta matvecs; one fused kernel per value head (conv1d + SiLU with
+;; its state, delta rule, gated RMSNorm); out matvec into the residual. Gated attention layer: RMSNorm; q|gate, k, v matvecs; q/k norm + RoPE + KV
 ;; store; attention times sigmoid(gate); output matvec into the residual. Then RMSNorm, gate and up matvecs, SwiGLU,
 ;; down matvec into the residual. Final RMSNorm, the tied head over the embedding table, argmax.
 
@@ -31,7 +31,9 @@
 (defn oSSM [] :i64 898628)
 (defn oKC [] :i64 13481540)
 (defn oVC [] :i64 17675844)
-(defn arena-floats [] :i64 21870148)
+;; the second copy of the conv states (oCONV and oCONV2 swap roles every token)
+(defn oCONV2 [] :i64 21870148)
+(defn arena-floats [] :i64 22459972)
 ;; positions the KV cache and the position log hold
 (defn tmax [] :i64 512)
 
@@ -70,13 +72,11 @@
                      al (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 32 2560 (oH) (oAB) 0)
                      be (mv f R en X PL (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) 32 2560 (oH) (+ (oAB) 32) 0)
                      b2 (bar f R en)
-                     cv (d f R en X PL (k/k-conv) (vector-i64 (vector-at P (pr/ps l 18)) 0 8192 0 (oCO) (oQ) (+ (oCONV) (* ord 24576)) 0) 32 256)
-                     b3 (bar f R en)
-                     dn (d f R en X PL (k/k-dnet) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (oCO) (oAB)
-                                                              (+ (oSSM) (* ord 524288)) (oY) 0 0) 1024 128)
-                     b4 (bar f R en)
-                     gn (d f R en X PL (k/k-gnorm) (vector-i64 (vector-at P (pr/ps l 21)) 0 0 0 (oZ) (oY) 0 eps) 32 32)
-                     b5 (bar f R en)]
+                     cs (+ (* ord 24576) (if (= (rem pos 2) 0) (oCONV) (oCONV2)))
+                     cn (+ (* ord 24576) (if (= (rem pos 2) 0) (oCONV2) (oCONV)))
+                     dn (d f R en X PL (k/k-dnf) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (vector-at P (pr/ps l 18)) (oAB)
+                                                             (+ (oSSM) (* ord 524288)) (oY) cs cn (vector-at P (pr/ps l 21)) (oZ) eps (oQ)) 32 1024)
+                     b3 (bar f R en)]
                  (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1))
                (let [kc (+ (oKC) (* ord (* (tmax) 1024)))
                      vc (+ (oVC) (* ord (* (tmax) 1024)))
@@ -130,8 +130,7 @@
               (m/pipeline f R dev lib errp "emb_q8_0") (m/pipeline f R dev lib errp "emb_q4_k")
               (m/pipeline f R dev lib errp "emb_q5_k") (m/pipeline f R dev lib errp "emb_q6_k")
               (m/pipeline f R dev lib errp "rms1") (m/pipeline f R dev lib errp "swiglu")
-              (m/pipeline f R dev lib errp "conv") (m/pipeline f R dev lib errp "dnet")
-              (m/pipeline f R dev lib errp "gnorm") (m/pipeline f R dev lib errp "qkr")
+              (m/pipeline f R dev lib errp "dnf") (m/pipeline f R dev lib errp "qkr")
               (m/pipeline f R dev lib errp "attd") (m/pipeline f R dev lib errp "argmax")))
 
 ;; load the pinned file, build the profile, run the prompt ids one token at a time and steps greedy tokens;
