@@ -1,43 +1,62 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/header-dark.svg">
-  <img alt="murakumo, the Kotoba inference engine. Decode tokens per second on a MacBook Pro M1 Max, Qwen2.5-0.5B-Instruct, 2026-11-03: MLX 8-bit 249.4; llama.cpp Metal 218.4; llama.cpp CPU 1 thread 90.7; murakumo Kotoba decode guest 71.2 (2026-10-19 record, GLSL kernels, C loader since removed); llama.cpp CPU 8 threads 49.3; murakumo through Amu selfhost on this Mac 3.6 (one kernel's bound, not tokens)." src="docs/assets/header-light.svg">
+  <img alt="murakumo, the Kotoba inference engine. MacBook Pro M1 Max 32 GB, macOS 26.4, 2026-11-16. Qwen2.5-0.5B-Instruct · decode, tokens/s: murakumo (Kotoba via Amu selfhost · Metal · Q8_0) 292.6, MLX (8-bit · -p 8) 252.4, llama.cpp (Metal · Q8_0 · same hour (233.2 on a calmer 11-13)) 168.9; Qwen2.5-0.5B-Instruct · prefill, 512-token prompt, tokens/s: llama.cpp (Metal · Q8_0) 8,860, murakumo (Kotoba via Amu selfhost · Metal · Q8_0 · level within about 1 %) 8,814, MLX (8-bit) 6,428; Qwen3.5-4B · decode, tokens/s: Kapitsa (4-bit · speculative (DFlash2 drafter), its own benchmark, 11-15) 106.3, MLX (4-bit · plain greedy) 67.9, murakumo (Q4_K_M · plain greedy · run between the others (45-51 alone)) 38.6, llama.cpp (Metal · Q4_K_M · plain greedy) 35.5." src="docs/assets/header-light.svg">
 </picture>
 
 # murakumo 叢雲
 
 **The Kotoba inference engine.** murakumo runs models for Kotoba programs and
 agents, on one machine and across a network of nodes behind one
-OpenAI-compatible `/v1` API. Its engine is being written in Kotoba and
-compiled by Amu selfhost. The goal is the fastest decode on the machine it
-runs on, measured in the open. It is not there yet: the poster above is
-today's record, murakumo's bars included.
+OpenAI-compatible `/v1` API. Its engine is written in Kotoba, compiled by Amu
+selfhost (`bin/amu`) and runs on the Mac's GPU through Metal. It aims for the fastest
+inference on the machine it runs on, measured in the open. On an M1 Max today
+(loaded host, records below): Qwen2.5-0.5B decode 292.6 tok/s
+against MLX 252.4 and llama.cpp 168.9, prefill 8,814 against llama.cpp 8,860;
+Qwen3.5-4B decode 38.6 against llama.cpp 35.5, MLX 67.9 and Kapitsa's
+speculative 106.3. None of this has passed the claim gate (AWAI-18) yet: it
+needs quiet-host rounds.
 
-[Benchmarks](#benchmarks) · [Quick start](#quick-start) · [What murakumo is today](#what-murakumo-is-today) · [How it works](#how-it-works) · [Plan](docs/engine-plan.md) · [Roadmap](docs/inference-roadmap.md) · [How we measure](docs/benchmarks.md) · [Press kit](docs/assets/brand/README.md)
+[Benchmarks](#benchmarks) · [Quick start](#quick-start) · [What murakumo is today](#what-murakumo-is-today) · [How it works](#how-it-works) · [Plan](docs/engine-plan.md) · [Engine profiles](docs/engine-profiles.md) · [Roadmap](docs/inference-roadmap.md) · [How we measure](docs/benchmarks.md) · [Press kit](docs/assets/brand/README.md)
 
 ## Benchmarks
 
-Same Mac, same model, three interleaved rounds: a MacBook Pro M1 Max (32 GB,
-macOS 26.4) on 2026-11-03, Qwen2.5-0.5B-Instruct (Q8_0 GGUF; MLX reads its
-8-bit conversion). Prefill is a 512-token prompt, decode a 128-token answer
-(64 for one CPU thread), in tokens per second.
+One Mac, same hour, engines interleaved: a MacBook Pro M1 Max (32 GB, macOS
+26.4), 2026-11-15/16. The host was shared with other sessions (load averages
+from 6 to over 60), so every row is a loaded-host figure; cells are the
+median of three to five rounds, with the range in the linked record.
+Tokens per second.
 
-| Engine | Prefill | Decode |
+**Qwen2.5-0.5B-Instruct**, Q8_0 GGUF (MLX reads its 8-bit conversion):
+
+| Engine | Decode, 128 tokens | Prefill, 512-token prompt |
 | --- | ---: | ---: |
-| MLX, 8-bit | 7,191 | **249.4** |
-| llama.cpp Metal, Q8_0 | **8,842** | 218.4 |
-| llama.cpp CPU, 1 thread | 150 | 90.7 |
-| <mark>murakumo</mark>, Kotoba decode guest on the GPU (2026-10-19 record) | — | 71.2 |
-| llama.cpp CPU, 8 threads | 496 | 49.3 |
-| <mark>murakumo</mark>, Amu selfhost on this Mac | no token route yet | 3.6, one kernel's bound |
+| <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | **292.6** | 8,814 |
+| llama.cpp Metal (b11669) | 168.9 (233.2 on a calmer 2026-11-13) | **8,860** |
+| MLX 8-bit (0.31.1) | 252.4 | 6,428 |
 
-<sub>The 71.2 cell is the 2026-10-19 run of murakumo's decode guest: Kotoba
-compiled by `bin/amu`, driving GLSL-built kernels through MoltenVK and a C
-loader that Amu has since removed, so it is a dated record. The last row is one Q8_0 × Q8_0 matvec written in Kotoba
-and built by the Amu selfhost Mac CLI: 2.47 ms against 1.45 ms for the same
-algorithm in C, bit-identical results; 3.6 tok/s is the ceiling of a
-single-threaded engine made of that kernel, not a token rate. The host was
-shared with two VMs, which is why eight llama.cpp threads trail one.
-Record and raw files: [bench/results/2026-11-03-m1max](bench/results/2026-11-03-m1max/README.md).
+**Qwen3.5-4B** (gated DeltaNet + gated attention), Q4_K_M GGUF (MLX and Kapitsa
+read their own 4-bit packs):
+
+| Engine | Decoding | Decode, tokens/s |
+| --- | --- | ---: |
+| Kapitsa 0.2.36 | speculative (DFlash2 drafter, 73 % of tokens drafted), its own benchmark | **106.3** |
+| MLX 4-bit (0.31.1) | plain greedy | 67.9 |
+| <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | plain greedy | 38.6 run between the others; 45–51 run alone |
+| llama.cpp Metal (b11669), same GGUF | plain greedy | 35.5 |
+
+<sub>murakumo's greedy tokens equal a pinned oracle's on both models (llama.cpp's on Qwen3.5), and every
+build passes a gate with must-fail mutants and digest/wrong-model refusals.
+MLX and Kapitsa read different files, so their bytes per token differ: MLX's
+4-bit Qwen3.5 pack reads about 2.4 GB per token against this Q4_K_M file's
+2.74 GB. Kapitsa's figure is speculative decoding and is not comparable with
+the plain rows; murakumo's speculative decoding is step E5 of
+[the plan](docs/engine-plan.md). The kernels are hand-written MSL until E7.
+Records: [Qwen2.5 decode](bench/results/2026-11-15-e2-decode/README.md),
+[Qwen2.5 prefill](bench/results/2026-11-15-e3-f16/README.md),
+[Qwen3.5 decode](bench/results/2026-11-16-qwen35-decode/README.md),
+[Kapitsa, MLX and llama.cpp on Qwen3.5](bench/results/2026-11-15-e0-kapitsa/README.md),
+[earlier records](bench/README.md). The poster is drawn from
+[`bench/poster.json`](bench/poster.json) by `bench/poster.py`.
 Method: [docs/benchmarks.md](docs/benchmarks.md).</sub>
 
 ## Quick start
@@ -53,11 +72,17 @@ murakumo node doctor --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1
 murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1
 ```
 
-Measure the Kotoba kernel on your own Mac (needs an Amu checkout beside this
-one):
+Run the engine on your own Mac's GPU (needs an Amu checkout with `bin/amu` and
+the pinned GGUF; each script builds the Kotoba program and runs its gate:
+greedy tokens, must-fail mutants and refusals; `python3` writes the gate's
+test fixtures):
 
 ```sh
-python3 -I bench/kernels/q8_0-matvec/run.py --amu ../amu --out q8-matvec-mymac.json
+sh bench/kernels/qwen2-metal/run.sh ../amu Qwen2.5-0.5B-Instruct-Q8_0.gguf
+```
+
+```sh
+sh bench/kernels/qwen35-metal/run.sh ../amu Qwen3.5-4B-Q4_K_M.gguf
 ```
 
 ## What murakumo is today
@@ -66,32 +91,37 @@ python3 -I bench/kernels/q8_0-matvec/run.py --amu ../amu --out q8-matvec-mymac.j
   llama.cpp, vLLM, MLX, …). murakumo provides identity, enrollment, heartbeat,
   qualification, quorum job placement, distributed inference and fleet
   operations, all behind one `/v1` API. This is the part in production.
-- **Kotoba on the GPU.** The decode kernels (dequantizing dots, RMSNorm,
-  RoPE, attention, sampling) have Kotoba sources that Amu compiles through KIR
-  v2 to SPIR-V, pinned in [kotoba-lang/inference](https://github.com/kotoba-lang/inference).
-  The last run that generated tokens on this Mac (2026-10-19) was a Kotoba
-  decode guest driving GLSL-built kernels through a C loader that is gone.
-  Amu's own GPU route on macOS now runs one hand-written MSL kernel through
-  Metal (stage S7, first slice, kotoba-lang/amu#1822). It runs no model yet and
-  does not dispatch the kernels above.
-- **Amu selfhost on the Mac.** `bin/amu`, the signed Mach-O that Amu builds
-  of itself, compiles murakumo's Q8_0 kernel today at 1.7× the time of C. It
-  cannot yet read a model file or use SIMD or threads, and its f32 code is still
-  slow: stage S1 (kotoba-lang/amu#1813) keeps f32 locals in FP registers in leaf
-  functions but misses its target of 2× the time of C.
-  [The roadmap](docs/inference-roadmap.md) changes the Kotoba spec and the Amu
-  compiler, stage by stage, until it can (JUN-804).
+- **The engine on the Mac GPU.** A Kotoba program, compiled by `bin/amu
+  compile --runtime-profile amu-program-metal`, checks the model file's
+  SHA-256, reads the GGUF and runs the whole forward pass on Metal: embedding,
+  RMSNorm, RoPE, attention with a KV cache, SwiGLU, the head and argmax, with
+  decode steps chained on the GPU. Qwen2.5-0.5B (Q8_0, decode and batched
+  prefill) and Qwen3.5-4B (Q4_K_M with Q5_K/Q6_K/Q8_0 tensors; gated DeltaNet
+  and gated attention layers, decode) generate tokens equal to a pinned oracle.
+  Qwen3.5 picks its kernels from one library through a profile read from the
+  GGUF ([engine profiles](docs/engine-profiles.md)); the Qwen2.5 program
+  (`bench/kernels/qwen2-metal/`) moves onto it next. It is not yet served
+  through `/v1` (step E4) and has no speculative decoding (E5).
+- **Amu selfhost.** The engine's host code is Kotoba compiled by `bin/amu`, the
+  signed Mach-O that Amu builds of itself. The Metal kernels are still
+  hand-written MSL text inside that Kotoba program; Amu emitting them from
+  KIR v2 is step E7. [The plan](docs/engine-plan.md) lists every step, and
+  [the roadmap](docs/inference-roadmap.md) the Kotoba spec and Amu compiler
+  stages (JUN-804).
 
 Native agent development recovery: [signed Git checkpoints between nodes](docs/git-checkpoint.md)
 (JUN-156; two-host recovery drill, separate from automatic placement).
 
 ## How it works
 
-- **Kernels** are Kotoba. Amu compiles them for the CPU (scalar AArch64
-  now; NEON lanes are stage S3) and for GPUs (KIR v2 to SPIR-V; MSL emission
-  exists, but the macOS Metal route so far runs only a hand-written kernel).
-- **Engine**: the forward pass, KV cache and sampler that run those kernels
-  against a GGUF on one machine (Mac-native through Amu selfhost: stages S4–S7).
+- **Kernels**: one MSL library (`engine/src/murakumo/engine/kernels/`):
+  quantized matvecs per GGUF dtype, norms, attention, DeltaNet and argmax.
+  The Qwen2.5 program still carries its own, including the tiled f16 prefill
+  GEMMs, until it is ported. Hand-written today, emitted by Amu from
+  KIR v2 at step E7.
+- **Engine**: Kotoba (`engine/src/murakumo/engine/`) that verifies and indexes
+  the GGUF, builds the model's profile, and encodes each step's dispatches on
+  Metal; compiled by Amu selfhost.
 - **Node**: one machine's identity, heartbeat, qualification and job loop.
   Today it fronts an external model server; it will front the engine (S8).
 - **Network**: gateways and 2-of-3 quorum placement of a stable job ID on a
