@@ -19,13 +19,24 @@
 #   q6k-mutant       one scale index of the Q6_K matvec off by one changes the tokens
 #   q4k-mutant       the 16-byte Q4_K/Q5_K matvec with the scales of its low- and high-nibble sub-blocks swapped changes
 #                    the tokens
+#   even-prompt      the prompt and the first exact token (6 tokens, so the last prompt pass takes two) continue with
+#                    the next 15 exact tokens
 #   digest           a pinned digest that differs in one character refuses before any token
 #   wrong-model      the synthetic S1 fixture (architecture qwen2) is refused by the qwen35 profile
+# With the MTP head file (4th argument: mtp.safetensors of nace-ai/Qwen3.5-4B-MLX @ 9f7d327, sha256 below), the
+# drafted decode (qwen35_spec.kotoba.in) is checked against the plain one over 48 tokens:
+#   spec-exact       the 48 tokens equal the plain decode's (drafts are verified, so they never change the output)
+#   accept-mutant    every draft accepted without the verify check changes the tokens
+#   slot-mutant      a rejected draft advancing the recurrent state two slots instead of one changes the tokens
+#   mtp-mutant       the MTP head's hidden half of the fc input left stale: the tokens stay equal and fewer drafts
+#                    are accepted (the drafts only choose what is verified)
+#   mtp-digest       an MTP digest that differs in one character refuses before any token
 # Timing on stderr (`q35-ns ...`) is a diagnostic, not a benchmark. A Mac GPU host is required (not a CI step).
 #
-#   sh run.sh /path/to/amu-checkout /path/to/Qwen3.5-4B-Q4_K_M.gguf [python3]
+#   sh run.sh /path/to/amu-checkout /path/to/Qwen3.5-4B-Q4_K_M.gguf [python3] [/path/to/mtp.safetensors]
 set -eu
-AMU=${1:?amu checkout}; MODEL=${2:?model gguf}; PY=${3:-python3}
+AMU=${1:?amu checkout}; MODEL=${2:?model gguf}; PY=${3:-python3}; MTP=${4:-}
+MPIN=4f491dd27975520ec9c9bfa970ca215cc7f12a0328761d3656ab7b9f388e472a
 PIN=00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=$(cd "$HERE/../../../engine/src" && pwd -P)
@@ -42,7 +53,7 @@ build() {
   if [ -n "${5:-}" ]; then
     FROM=$6 TO=$7 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/src-$1/murakumo/engine/$5"
   fi
-  sed -e "s#@PATH@#$2#g;s#@EXPECT@#$3#g;s#@IDS@#760 6511 314 9338 369#g;s#@STEPS@#$4#g;s#@LAYERS@#${LAYERS:-32}#g" "$HERE/qwen35_metal.kotoba.in" > "$WK/$1.kotoba"
+  sed -e "s#@PATH@#$2#g;s#@EXPECT@#$3#g;s#@IDS@#${IDS:-760 6511 314 9338 369}#g;s#@STEPS@#$4#g;s#@LAYERS@#${LAYERS:-32}#g;s#@MTP@#$MTP#g;s#@MEXPECT@#${MEXP:-}#g" "$HERE/${IN:-qwen35_metal.kotoba.in}" > "$WK/$1.kotoba"
   "$AMU/bin/amu" compile "$WK/$1.kotoba" --source-path "$WK/src-$1" --runtime-profile amu-program-metal -o "$WK/$1" >/dev/null
 }
 runit() { { "$WK/$1" > /dev/null 2> "$WK/$1.txt"; rc=$?; } 2>/dev/null || true; }
@@ -59,6 +70,13 @@ rc=0; runit ok
 got=$(grep '^greedy' "$WK/ok.txt" || true)
 if [ "$rc" = 0 ] && [ "$got" = "$WANT" ]; then echo "exact: 16 tokens equal llama.cpp's ($(grep '^q35-ns' "$WK/ok.txt"))"
 else echo "exact: FAILED (exit $rc): $got $(head -3 "$WK/ok.txt")"; fail=1; fi
+
+# (an assignment before a function call stays set in sh, so each one is unset after its row)
+IDS="760 6511 314 9338 369 11751" build ev "$MODEL" "$WK/model.sha256" 15; unset IDS
+rc=0; runit ev
+got=$(grep '^greedy' "$WK/ev.txt" || true)
+if [ "$rc" = 0 ] && [ "$got" = "greedy ${WANT#greedy 11751 }" ]; then echo "even-prompt: the 15 tokens after the exact first one match"
+else echo "even-prompt: FAILED (exit $rc): $got"; fail=1; fi
 
 mutant tile-mutant "value heads by hv / 2" kernels/deltanet.kotoba "hk = hv % 16;" "hk = hv / 2;"
 mutant conv-mutant "conv1d without its state" kernels/deltanet.kotoba "float o = w[0] * s[0] + w[1] * s[1] + w[2] * s[2] + w[3] * x;" "float o = w[3] * x;"
@@ -97,5 +115,37 @@ build wr "$WK/fixture.gguf" "$WK/fixture.sha256" 2
 rc=0; runit wr
 if [ "$rc" != 0 ] && ! grep -q '^greedy' "$WK/wr.txt"; then echo "wrong-model: refused (exit $rc): $(grep refused "$WK/wr.txt" | head -1)"
 else echo "wrong-model: NOT refused (exit $rc)"; fail=1; fi
+
+if [ -n "$MTP" ]; then
+  mh=$(shasum -a 256 "$MTP" | cut -c1-64)
+  [ "$mh" = "$MPIN" ] || { echo "MTP digest $mh is not the pinned $MPIN"; exit 1; }
+  printf "%s" "$MPIN" > "$WK/mtp.sha256"
+  build p48 "$MODEL" "$WK/model.sha256" 48
+  rc=0; runit p48
+  W48=$(grep '^greedy' "$WK/p48.txt" || true)
+  spec() { # name [file from to]
+    MEXP="$WK/mtp.sha256" IN=qwen35_spec.kotoba.in build "$1" "$MODEL" "$WK/model.sha256" 48 "${2:-}" "${3:-}" "${4:-}"; unset MEXP IN
+    rc=0; runit "$1"
+    sgot=$(grep '^greedy' "$WK/$1.txt" || true); sacc=$(awk '/^q35-spec/{print $5 "/" $3}' "$WK/$1.txt")
+  }
+  spec s48
+  if [ "$rc" = 0 ] && [ -n "$W48" ] && [ "$sgot" = "$W48" ]; then echo "spec-exact: 48 tokens equal the plain decode's, $sacc drafts accepted ($(grep '^q35-ns' "$WK/s48.txt"))"
+  else echo "spec-exact: FAILED (exit $rc): $sgot"; fail=1; fi
+  a48=${sacc%/*}
+  spec am model/qwen35.kotoba "(if (= a0 dr)" "(if (= 1 1)"
+  if [ -n "$sgot" ] && [ "$sgot" != "$W48" ]; then echo "accept-mutant (verify check dropped): tokens change (detected)"
+  else echo "accept-mutant NOT detected (exit $rc): $sgot"; fail=1; fi
+  spec sm model/qwen35.kotoba "(rem (+ slot 1) 3)" "(rem (+ slot 2) 3)"
+  if [ -n "$sgot" ] && [ "$sgot" != "$W48" ]; then echo "slot-mutant (rejected draft advances two state slots): tokens change (detected)"
+  else echo "slot-mutant NOT detected (exit $rc): $sgot"; fail=1; fi
+  spec mm model/qwen35.kotoba "(+ mb (+ (oQ) 2560)) eps n)" "(+ mb (oX)) eps n)"
+  if [ "$rc" = 0 ] && [ "$sgot" = "$W48" ] && [ "${sacc%/*}" -lt "$a48" ]; then echo "mtp-mutant (fc hidden half stale): tokens equal, $sacc drafts accepted against $a48 (detected)"
+  else echo "mtp-mutant NOT detected (exit $rc): $sacc $sgot"; fail=1; fi
+  printf "%s%s" "$(printf "%s" "$MPIN" | cut -c1-63)" "$( [ "$(printf "%s" "$MPIN" | cut -c64)" = 0 ] && echo 1 || echo 0)" > "$WK/mbad.sha256"
+  MEXP="$WK/mbad.sha256" IN=qwen35_spec.kotoba.in build md "$MODEL" "$WK/model.sha256" 2; unset MEXP IN
+  rc=0; runit md
+  if [ "$rc" != 0 ] && ! grep -q '^greedy' "$WK/md.txt"; then echo "mtp-digest: one character off refuses before any token (exit $rc)"
+  else echo "mtp-digest: NOT refused (exit $rc)"; fail=1; fi
+fi
 
 [ "$fail" = 0 ] && echo "gate passed, build dir $WK" || { echo "GATE FAILED, build dir $WK"; exit 1; }

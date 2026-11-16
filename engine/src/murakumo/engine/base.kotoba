@@ -370,3 +370,34 @@
             (name-eq f (+ p (+ vs 8)) (peek f (+ p vs)) s))
           (let [w (wr-text f R (string-concat "refused: KV type " (string-concat key "\n")))] (vector-at [0] 1)))
         (recur (+ k 1))))))
+
+;; ---- safetensors (8-byte header length, JSON header, data): exact-text lookups in the header bytes ----
+;; the index in the hl bytes at p where the UTF-8 bytes of s start, or -1
+(defn find-bytes [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 hl :i64 s :string] :i64
+  (let [v (vector-i64-from-bytes (string-to-utf8 s)) n (vector-count v)]
+    (loop [i 0]
+      (if (> (+ i n) hl) -1
+        (if (= (loop [k 0] (if (= k n) 1 (if (= (byte-at f (+ p (+ i k))) (vector-at v k)) (recur (+ k 1)) 0))) 1) i
+          (recur (+ i 1)))))))
+
+;; [value, index after it] of the decimal digits at p + i (at most 18 digits, at least one)
+(defn parse-uint [f [:fn [[:i64 :i64 :i64] :i64]] p :i64 i :i64 hl :i64] :vector-i64
+  (loop [k i v 0]
+    (let [c (if (< k hl) (byte-at f (+ p k)) 0)]
+      (if (and (and (>= c 48) (<= c 57)) (< (- k i) 18)) (recur (+ k 1) (+ (* v 10) (- c 48)))
+        (if (= k i) (vector-i64 (vector-at [0] 1) 0) (vector-i64 v k))))))
+
+;; data offset of the BF16 tensor name of shape (the header's text, e.g. "2560,5120") and n values: refused unless the
+;; header holds "name":{"dtype":"BF16","shape":[shape],"data_offsets":[a,b]} exactly, b - a is 2 n and b <= dlen
+(defn st-find [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 hl :i64 name :string shape :string n :i64 dlen :i64] :i64
+  (let [key (string-concat "\"" (string-concat name (string-concat "\":{\"dtype\":\"BF16\",\"shape\":[" (string-concat shape "],\"data_offsets\":["))))
+        i (find-bytes f p hl key)
+        u0 (if (< i 0) (let [w (wr-text f R (string-concat "refused: no BF16 tensor " (string-concat name (string-concat " [" (string-concat shape "]\n")))))] (vector-at [0] 1)) 0)
+        a (parse-uint f p (+ i (vector-count (vector-i64-from-bytes (string-to-utf8 key)))) hl)
+        u1 (if (= (byte-at f (+ p (vector-at a 1))) 44) 0 (vector-at [0] 1))
+        b (parse-uint f p (+ (vector-at a 1) 1) hl)
+        u2 (if (= (byte-at f (+ p (vector-at b 1))) 93) 0 (vector-at [0] 1))
+        off (vector-at a 0)
+        bad (+ (if (= (- (vector-at b 0) off) (* 2 n)) 0 1) (if (> (vector-at b 0) dlen) 1 0))]
+    (if (= bad 0) off
+      (let [w (wr-text f R (string-concat "refused: tensor span " (string-concat name "\n")))] (vector-at [0] 1)))))

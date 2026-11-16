@@ -45,11 +45,11 @@ The plan maps each (tensor, phase) to a kernel variant. Today it is code in the 
 
 | Decision | Chosen from | Variants |
 | --- | --- | --- |
-| matvec kernel (decode) | the tensor's dtype | `mv_q8_0`, `mv_q6_k` (one template, one instantiation per dtype); `mvk_q4_k`, `mvk_q5_k` (16-byte nibble loads covering a low- and a high-nibble sub-block). Each simdgroup owns 4 rows over the whole row; Q8_0 and Q6_K rows over 3,072 values are split between 2 simdgroups |
+| matvec kernel (decode) | the tensor's dtype | `mv_q8_0`, `mv_q6_k` (one template, one instantiation per dtype); `mvk_q4_k`, `mvk_q5_k` (16-byte nibble loads covering a low- and a high-nibble sub-block). Each simdgroup owns 4 rows over the whole row; Q8_0 and Q6_K rows over 3,072 values are split between 2 simdgroups. Two tokens at once (the prompt, and the verify pass of drafted decoding) read the weights once: `mv2_q8_0`, `mv2_q6_k` keep both tokens' sums per lane; `mvk2_q4_k`, `mvk2_q5_k` use 8-byte loads so both tokens' activations fit in registers. `mv_bf16`/`mv2_bf16` read BF16 rows; `bfq8` converts BF16 rows to Q8_0 at load |
 | embedding row | the embedding's dtype | `emb_<dtype>` |
 | layer kernel set | the layer kind | gated attention (q\|gate, q/k norm, partial RoPE, sigmoid gate); GQA attention; Gated DeltaNet (conv1d, delta rule and gated norm fused in one threadgroup per value head) |
 | prefill GEMM (next) | dtype, shape and memory | f16 copy + tiled GEMM when it fits (E3, Qwen2.5: 64 x 128 tiles, split k for short n); in-place dequantization otherwise |
-| decoding method (E5) | what the model ships | plain; MTP head; external drafter (DFlash-style); chosen per model when a head or drafter is present |
+| decoding method (E5) | what the model ships | plain; MTP head (Qwen3.5-4B: one draft token per pass, verified by a two-token pass; the recurrent states keep three slots so a rejected draft's state is never written over the one before it); external drafter (DFlash-style, next); chosen per model when a head or drafter is present |
 
 A new model then needs only three things: a profile (KVs, layer kinds, tensor roles), any missing layer-kind kernels,
 and a gate. Every quant format and kernel already in the library is reused.

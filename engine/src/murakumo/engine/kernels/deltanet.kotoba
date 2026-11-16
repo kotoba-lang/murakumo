@@ -8,10 +8,11 @@
   "
 // one 1024-thread threadgroup per value head hv: a ssm_a off (F32 [32] in W, = -exp(A_log)), b dt bias off (F32 [32] in
 // W), c conv weight off (F32 [8192][4] in W), d alpha off (32 floats, then beta 32), e state off (32 x 128 x 128,
-// [hv][dv][dk]), f y off (32 x 128), g conv state read off, h conv state write off (3 floats per channel, oldest first;
-// the two copies swap every token, so the value heads hv and hv + 16 that read the same key head's q and k channels
-// never see the other's write), i gated-norm weight off (F32 [128] in W), j z off, k gated-norm epsilon bits, l q|k|v
-// projection off.
+// [hv][dv][dk], read), f y off (32 x 128), g conv state read off, h conv state write off (3 floats per channel, oldest first;
+// separate slots, so the value heads hv and hv + 16 that read the same key head's q and k channels never see the
+// other's write), i gated-norm weight off (F32 [128] in W), j z off, k gated-norm epsilon bits, l q|k|v
+// projection off, m state write off (the read and write states are separate slots, so a rejected draft token's
+// state is never written over the one before it).
 // 1. conv: threads 0..383 take the head's q, k (key head) and v (value head) channels: out = silu(w0 s0 + w1 s1 +
 //    w2 s2 + w3 x), the state shifts in x (q and k states are written by the value head below 16 only).
 // 2. q and k are RMS-normalised per head (eps 1e-6) and scaled by 1/128 and 1/sqrt(128).
@@ -50,12 +51,12 @@ kernel void dnf(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
   float beta = 1.0f / (1.0f + precise::exp(-A[p.d + 32 + hv]));
   FU for (uint r = 0; r < 4; r++) {
     uint dv = sg * 4 + r;
-    device float4 *S = (device float4 *)(A + p.e + (hv * 128 + dv) * 128 + ln * 4);
-    float4 s = *S * g;
+    uint so = (hv * 128 + dv) * 128 + ln * 4;
+    float4 s = *(device const float4 *)(A + p.e + so) * g;
     float kvm = simd_sum(dot(s, k));
     float delta = (((threadgroup float *)tv)[dv] - kvm) * beta;
     s += k * delta;
-    *S = s;
+    *(device float4 *)(A + p.m + so) = s;
     float y = simd_sum(dot(s, q));
     if (ln == 0) ((threadgroup float *)ty)[dv] = y;
   }

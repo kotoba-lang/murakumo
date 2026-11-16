@@ -13,6 +13,7 @@ versions and argv. Method: [docs/benchmarks.md](../docs/benchmarks.md).
 | [2026-11-15-e0-kapitsa](results/2026-11-15-e0-kapitsa/README.md) | same | Qwen3.5-4B 4-bit (Q4_K_M / MLX / Kapitsa packs) | 106.3 tok/s (Kapitsa, speculative); MLX 48, llama.cpp 32–36 plain | not in this round |
 | [2026-11-16-qwen35-decode](results/2026-11-16-qwen35-decode/README.md) | same | Qwen3.5-4B Q4_K_M / MLX 4-bit | 67.9 tok/s (MLX, plain) | 38.6 between the others, 45–51 alone; llama.cpp 35.5 |
 | [2026-11-16-qwen35-decode-3](results/2026-11-16-qwen35-decode-3/README.md) | same | Qwen3.5-4B Q4_K_M / MLX 4-bit | 55.5 tok/s (MLX, plain) | 44.0 between the others (17.6–18.0 ms/token in build comparisons); llama.cpp 38.6 |
+| [2026-11-16-qwen35-mtp](results/2026-11-16-qwen35-mtp/README.md) | same | Qwen3.5-4B Q4_K_M + MTP head | — (build comparison only) | MTP drafts: 15.2–15.3 ms/token against 17.1 plain (repetitive text, 81 % accepted); no faster on chat text (71 %) |
 
 | Tool | Does |
 | --- | --- |
