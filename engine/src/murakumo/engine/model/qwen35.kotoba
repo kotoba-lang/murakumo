@@ -45,8 +45,11 @@
   (m/disp f R en X PL kid (p16 pv) gx tx))
 
 ;; y (rows) = W x (cols) with the kernel for dtype dt; add 1 adds into y
+;; Threadgroups of 4 simdgroups, each simdgroup 4 rows over the whole row (no threadgroup reduction); Q8_0 and Q6_K
+;; rows longer than 12 steps of 256 values are split between 2 simdgroups (ks). Q4_K and Q5_K use mvk (16-byte loads).
 (defn- mv [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 woff :i64 dt :i64 rows :i64 cols :i64 xo :i64 yo :i64 add :i64] :i64
-  (d f R en X PL (k/k-mv dt) (vector-i64 woff rows cols 0 (if (= add 1) 2 0) xo yo 0) (quot (+ rows 3) 4) 256))
+  (let [ks (if (or (= dt 12) (= dt 13) (<= cols 3072)) 1 2) rpt (* 4 (quot 4 ks))]
+    (d f R en X PL (k/k-mv dt) (vector-i64 woff rows cols ks (if (= add 1) 2 0) xo yo 0) (quot (+ rows (- rpt 1)) rpt) 128)))
 
 ;; a barrier in a concurrent encoder
 (defn- bar [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64] :i64 (m/barrier! f R en))
@@ -122,8 +125,8 @@
 
 ;; the pipelines in kernel-id order (murakumo.engine.kernels)
 (defn pipelines [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 lib :i64 errp :i64] :vector-i64
-  (vector-i64 (m/pipeline f R dev lib errp "mv_q8_0") (m/pipeline f R dev lib errp "mv_q4_k")
-              (m/pipeline f R dev lib errp "mv_q5_k") (m/pipeline f R dev lib errp "mv_q6_k")
+  (vector-i64 (m/pipeline f R dev lib errp "mv_q8_0") (m/pipeline f R dev lib errp "mvk_q4_k")
+              (m/pipeline f R dev lib errp "mvk_q5_k") (m/pipeline f R dev lib errp "mv_q6_k")
               (m/pipeline f R dev lib errp "emb_q8_0") (m/pipeline f R dev lib errp "emb_q4_k")
               (m/pipeline f R dev lib errp "emb_q5_k") (m/pipeline f R dev lib errp "emb_q6_k")
               (m/pipeline f R dev lib errp "rms1") (m/pipeline f R dev lib errp "swiglu")
