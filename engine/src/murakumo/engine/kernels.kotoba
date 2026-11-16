@@ -7,7 +7,8 @@
 
 ;; The kernel library: one MSL source of every kernel the plans use, and the pipeline order (kernel ids):
 ;;   0..3 mv_q8_0 mvk_q4_k mvk_q5_k mv_q6_k  4..7 emb_q8_0 emb_q4_k emb_q5_k emb_q6_k  8 rms1  9 swiglu
-;;   10 dnf (fused Gated DeltaNet)  11 qkr  12 attd  13 argmax
+;;   10 dnf (fused Gated DeltaNet)  11 qkr  12 attd  13 argmax  14..17 mv2_q8_0 mvk2_q4_k mvk2_q5_k mv2_q6_k (two tokens)
+;;   18 mv_bf16  19 mv2_bf16  20 bfq8 (BF16 rows to Q8_0, at load)
 ;; Every kernel takes (W bytes, A floats, P sixteen uints).
 (defn header [] :string
   "#include <metal_stdlib>
@@ -28,3 +29,5 @@ struct P { uint a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, q; };
 (defn k-argmax [] :i64 13)
 (defn k-mv [dt :i64] :i64 (quant/mv-id dt))
 (defn k-emb [dt :i64] :i64 (quant/emb-id dt))
+(defn k-mv2 [dt :i64] :i64 (quant/mv2-id dt))
+(defn k-bfq8 [] :i64 20)

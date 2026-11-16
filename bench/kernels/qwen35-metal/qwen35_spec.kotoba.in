@@ -1,0 +1,12 @@
+(ns murakumo.qwen35-spec
+  (:require [murakumo.engine.model.qwen35 :as q35])
+  (:export [main]))
+
+;; AWAI-2938: Qwen3.5-4B greedy decode with drafts from its MTP head (one draft token per pass, verified by a two-token
+;; pass of the main model), built like qwen35_metal.kotoba.in. The model is @PATH@ and the MTP head @MTP@ (BF16
+;; safetensors), each checked against its pinned digest (@EXPECT@, @MEXPECT@) before any other read; the prompt ids
+;; are @IDS@, then @STEPS@ greedy tokens. Prints `greedy ...`, `q35-ns ...` and `q35-spec cycles ... accepted ...` on
+;; stderr.
+(defn main [] :i64
+  (let [f (__r6-as [:fn [[:i64 :i64 :i64] :i64]] (typed-cap-call :gpu/compute :string :string ""))]
+    (q35/run f "@PATH@" "@EXPECT@" (vector-i64 @IDS@) @STEPS@ 32 "@MTP@" "@MEXPECT@" 1)))

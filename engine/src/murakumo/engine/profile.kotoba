@@ -88,3 +88,73 @@
         e5 (vector-assoc! P (+ g 5) (q35-layers))
         e6 (vector-assoc! P (+ g 6) (q35-vocab))]
     P))
+
+;; The MTP head of Qwen3.5-4B (one gated full-attention layer and its MLP behind an fc of [embedding | hidden]), from
+;; a BF16 safetensors file whose norms already hold 1 + w (MLX's convention, as the GGUF's do). The profile is a
+;; vector of data offsets (bytes): 0 fc [2560 x 5120]  1 input_layernorm  2 down [2560 x 9216]  3 gate [9216 x 2560]
+;; 4 up  5 post_attention_layernorm  6 k_norm  7 k_proj [1024 x 2560]  8 o_proj [2560 x 4096]  9 q_norm
+;; 10 q_proj [8192 x 2560]  11 v_proj  12 norm  13 pre_fc_norm_embedding  14 pre_fc_norm_hidden. The norm slots
+;; (1 5 6 9 12 13 14) give where the loader writes their F32 copies (after the data, at dlen + 4 x the running count);
+;; their BF16 sources are at 16 + the slot. Every matrix must start on 16 bytes (the matvec loads 16 at a time).
+(defn q35-mtp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 hl :i64 dlen :i64] :vector-i64
+  (let [M (vector-alloc 48)
+        pre "mtp.layers.0."
+        m0 (vector-assoc! M 0 (b/st-find f R p hl "mtp.fc.weight" "2560,5120" 13107200 dlen))
+        m2 (vector-assoc! M 2 (b/st-find f R p hl (string-concat pre "mlp.down_proj.weight") "2560,9216" 23592960 dlen))
+        m3 (vector-assoc! M 3 (b/st-find f R p hl (string-concat pre "mlp.gate_proj.weight") "9216,2560" 23592960 dlen))
+        m4 (vector-assoc! M 4 (b/st-find f R p hl (string-concat pre "mlp.up_proj.weight") "9216,2560" 23592960 dlen))
+        m7 (vector-assoc! M 7 (b/st-find f R p hl (string-concat pre "self_attn.k_proj.weight") "1024,2560" 2621440 dlen))
+        m8 (vector-assoc! M 8 (b/st-find f R p hl (string-concat pre "self_attn.o_proj.weight") "2560,4096" 10485760 dlen))
+        m10 (vector-assoc! M 10 (b/st-find f R p hl (string-concat pre "self_attn.q_proj.weight") "8192,2560" 20971520 dlen))
+        m11 (vector-assoc! M 11 (b/st-find f R p hl (string-concat pre "self_attn.v_proj.weight") "1024,2560" 2621440 dlen))
+        al (loop [i 0 bad 0]
+             (if (= i 12) (if (= bad 0) 0 (let [w (b/wr-text f R "refused: an MTP matrix is not 16-byte aligned\n")] (vector-at [0] 1)))
+               (recur (+ i 1) (+ bad (if (and (> (vector-at (vector-i64 1 0 1 1 1 0 0 1 1 0 1 1) i) 0) (> (rem (vector-at M i) 16) 0)) 1 0)))))
+        n1 (vector-assoc! M 17 (b/st-find f R p hl (string-concat pre "input_layernorm.weight") "2560" 2560 dlen))
+        n5 (vector-assoc! M 21 (b/st-find f R p hl (string-concat pre "post_attention_layernorm.weight") "2560" 2560 dlen))
+        n6 (vector-assoc! M 22 (b/st-find f R p hl (string-concat pre "self_attn.k_norm.weight") "256" 256 dlen))
+        n9 (vector-assoc! M 25 (b/st-find f R p hl (string-concat pre "self_attn.q_norm.weight") "256" 256 dlen))
+        n12 (vector-assoc! M 28 (b/st-find f R p hl "mtp.norm.weight" "2560" 2560 dlen))
+        n13 (vector-assoc! M 29 (b/st-find f R p hl "mtp.pre_fc_norm_embedding.weight" "2560" 2560 dlen))
+        n14 (vector-assoc! M 30 (b/st-find f R p hl "mtp.pre_fc_norm_hidden.weight" "2560" 2560 dlen))
+        ;; F32 copies after the data: 1 at dlen, 5, 6, 9, 12, 13, 14 following
+        c1 (vector-assoc! M 1 dlen)
+        c5 (vector-assoc! M 5 (+ dlen 10240))
+        c6 (vector-assoc! M 6 (+ dlen 20480))
+        c9 (vector-assoc! M 9 (+ dlen 21504))
+        c12 (vector-assoc! M 12 (+ dlen 22528))
+        c13 (vector-assoc! M 13 (+ dlen 32768))
+        c14 (vector-assoc! M 14 (+ dlen 43008))
+        q8 (mtp-q8! M dlen)]
+    M))
+
+;; bytes after the MTP data for the F32 norm copies
+(defn mtp-extra [] :i64 53248)
+
+;; the MTP matrices (slot, values) the loader converts to Q8_0 after the norm copies; slot s's Q8_0 copy is at
+;; M (32 + s), and the copies take mtp-q8-bytes
+(defn mtp-mats [] :vector-i64 (vector-i64 0 13107200 2 23592960 3 23592960 4 23592960 7 2621440 8 10485760 10 20971520 11 2621440))
+(defn mtp-q8-bytes [] :i64 128122880)
+(defn mtp-q8! [M :vector-i64 dlen :i64] :i64
+  (loop [k 0 o (+ dlen (mtp-extra))]
+    (if (= k 8) 0
+      (let [s (vector-at (mtp-mats) (* 2 k))
+            u (vector-assoc! M (+ 32 s) o)]
+        (recur (+ k 1) (+ o (* (quot (vector-at (mtp-mats) (+ (* 2 k) 1)) 32) 34)))))))
+
+;; write the F32 copies of the MTP norms into the buffer contents wd (data at wd)
+(defn mtp-norms! [f [:fn [[:i64 :i64 :i64] :i64]] wd :i64 M :vector-i64] :i64
+  (loop [k 0]
+    (if (= k 7) 0
+      (let [s (vector-at (vector-i64 1 5 6 9 12 13 14) k)
+            n (if (or (= s 6) (= s 9)) 256 2560)
+            src (+ wd (vector-at M (+ 16 s)))
+            dst (+ wd (vector-at M s))
+            u (loop [i 0]
+                (if (= i (quot n 2)) 0
+                  (let [w (bit-and (b/peek f (+ src (* 4 i))) 4294967295)
+                        lo (i64-shift-left (bit-and w 65535) 16)
+                        hi (bit-and w 4294901760)
+                        z (b/poke f (+ dst (* 8 i)) (bit-or lo (i64-shift-left hi 32)))]
+                    (recur (+ i 1)))))]
+        (recur (+ k 1))))))

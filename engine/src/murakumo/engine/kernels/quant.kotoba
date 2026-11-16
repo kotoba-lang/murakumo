@@ -22,16 +22,24 @@ inline void k4_sm_words(uint u0, uint u1, uint u2, uint j, thread float &sc, thr
   m = float(j < 4 ? (b1 & 63u) : ((b2 >> 4) | ((b1 >> 6) << 4)));
 }
 
-// Q8_0 and Q6_K: dot of the 8 values 256 blk + 8 l .. + 7 of a row with x0, x1 (lane l of a simdgroup that walks one 256-value
-// span per step, so one load instruction of the simdgroup reads one contiguous stretch of the row)
-template <uint T> inline float cdot(device const uchar *row, uint blk, uint l, float4 x0, float4 x1) {
+// Q8_0, Q6_K and BF16: the 8 values 256 blk + 8 l .. + 7 of a row as q0, q1 and their scale (lane l of a simdgroup that walks
+// one 256-value span per step, so one load instruction of the simdgroup reads one contiguous stretch of the row); the
+// dot with x0, x1 is (dot(q0, x0) + dot(q1, x1)) * scale
+template <uint T> inline float cw(device const uchar *row, uint blk, uint l, thread float4 &q0, thread float4 &q1) {
   uint o = (l % 4) * 8;
+  if (T == 30) {
+    // BF16: the high half of an f32
+    uint4 u = *(device const uint4 *)(row + blk * 512 + l * 16);
+    q0 = float4(as_type<float>(u.x << 16), as_type<float>(u.x & 0xffff0000u), as_type<float>(u.y << 16), as_type<float>(u.y & 0xffff0000u));
+    q1 = float4(as_type<float>(u.z << 16), as_type<float>(u.z & 0xffff0000u), as_type<float>(u.w << 16), as_type<float>(u.w & 0xffff0000u));
+    return 1.0f;
+  }
   if (T == 8) {
     device const uchar *bl = row + (blk * 8 + l / 4) * 34;
     device const ushort *q = (device const ushort *)(bl + 2 + o);
     char2 c0 = as_type<char2>(q[0]), c1 = as_type<char2>(q[1]), c2 = as_type<char2>(q[2]), c3 = as_type<char2>(q[3]);
-    float t = dot(float4(c0.x, c0.y, c1.x, c1.y), x0) + dot(float4(c2.x, c2.y, c3.x, c3.y), x1);
-    return t * float(*(device const half *)bl);
+    q0 = float4(c0.x, c0.y, c1.x, c1.y); q1 = float4(c2.x, c2.y, c3.x, c3.y);
+    return float(*(device const half *)bl);
   }
   // Q6_K (210-byte blocks: 2-byte aligned): lane l covers half h = l / 16, values r = (l % 16) * 8 .. + 7 of it
   device const uchar *bl = row + blk * 210;
@@ -41,10 +49,10 @@ template <uint T> inline float cdot(device const uchar *row, uint blk, uint l, f
   uchar ns = uchar((k / 2) * 4), hs = uchar(2 * k);
   uchar4 l0 = as_type<uchar4>(uint(ql[0]) | (uint(ql[1]) << 16)), l1 = as_type<uchar4>(uint(ql[2]) | (uint(ql[3]) << 16));
   uchar4 h0 = as_type<uchar4>(uint(qh[0]) | (uint(qh[1]) << 16)), h1 = as_type<uchar4>(uint(qh[2]) | (uint(qh[3]) << 16));
-  float4 q0 = float4(int4(((l0 >> ns) & uchar(15)) | (((h0 >> hs) & uchar(3)) << uchar(4))) - 32);
-  float4 q1 = float4(int4(((l1 >> ns) & uchar(15)) | (((h1 >> hs) & uchar(3)) << uchar(4))) - 32);
+  q0 = float4(int4(((l0 >> ns) & uchar(15)) | (((h0 >> hs) & uchar(3)) << uchar(4))) - 32);
+  q1 = float4(int4(((l1 >> ns) & uchar(15)) | (((h1 >> hs) & uchar(3)) << uchar(4))) - 32);
   float sc = float(((device const char *)(bl + 192 + 8 * h))[li / 16 + 2 * k]);
-  return float(*(device const half *)(bl + 208)) * sc * (dot(q0, x0) + dot(q1, x1));
+  return float(*(device const half *)(bl + 208)) * sc;
 }
 
 // one value i of a row
@@ -69,52 +77,67 @@ template <uint T> inline float deq_el(device const uchar *row, uint i) {
   return float(*(device const half *)(bl + 208)) * float(((device const char *)(bl + 192 + 8 * h))[l / 16 + 2 * k]) * float(q);
 }
 
-constant constexpr uint QB[15] = {0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 144, 176, 210};
-constant constexpr uint QE[15] = {0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 256, 256, 256};
+// bytes and values per block by dtype (BF16, 30: one 2-byte value)
+constant constexpr uint QB[31] = {0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 144, 176, 210, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2};
+constant constexpr uint QE[31] = {0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 256, 256, 256, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
 
-// y = W x: a weight off, b rows, c cols, d simdgroups that share a row (k split), e flags (2 add into y), f x off, g y
-// off. A threadgroup's ns simdgroups form ns / d row groups of MR rows. The d simdgroups of a row group split the row
-// into 256-value steps (simdgroup k of the group takes steps k, k + d, ...), lane l taking values 8 l .. + 7 of a step
-// for all MR rows; with d > 1 the partial sums meet in threadgroup memory (a row length must be a multiple of 256).
+// Y = W X for N tokens at once (the weights are read once): a weight off, b rows, c cols, d simdgroups that share a
+// row (k split), e flags (2 add into y), f x off, g y off, h token stride (token j's x at f + j h, its y at g + j h).
+// A threadgroup's ns simdgroups form ns / d row groups of MR rows. The d simdgroups of a row group split the row into
+// 256-value steps (simdgroup k of the group takes steps k, k + d, ...), lane l taking values 8 l .. + 7 of a step for
+// all MR rows; with d > 1 the partial sums meet in threadgroup memory (a row length must be a multiple of 256).
 constant constexpr uint MR = 4;
-template <uint T>
+template <uint T, uint N>
 kernel void mvq(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
                 uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
                 uint ln [[thread_index_in_simdgroup]], uint ns [[simdgroups_per_threadgroup]]) {
-  threadgroup float red[8 * MR];
+  threadgroup float red[8 * MR * N];
   uint ks = p.d, kg = sg % ks, rg = sg / ks;
   uint r0 = (tg * (ns / ks) + rg) * MR;
   ulong rb = ulong(p.c / QE[T]) * QB[T];
   device const uchar *w = W + p.a;
   device const float *x = A + p.f;
-  float s[MR];
-  FU for (uint r = 0; r < MR; r++) s[r] = 0.0f;
+  float s[MR][N];
+  FU for (uint r = 0; r < MR; r++) FU for (uint j = 0; j < N; j++) s[r][j] = 0.0f;
   for (uint blk = kg; blk < p.c / 256; blk += ks) {
-    float4 x0 = *(device const float4 *)(x + blk * 256 + ln * 8), x1 = *(device const float4 *)(x + blk * 256 + ln * 8 + 4);
+    float4 x0[N], x1[N];
+    FU for (uint j = 0; j < N; j++) {
+      x0[j] = *(device const float4 *)(x + j * p.h + blk * 256 + ln * 8);
+      x1[j] = *(device const float4 *)(x + j * p.h + blk * 256 + ln * 8 + 4);
+    }
     // no branch: rows past the end repeat the last row and are not stored
-    FU for (uint r = 0; r < MR; r++) s[r] += cdot<T>(w + ulong(min(r0 + r, p.b - 1)) * rb, blk, ln, x0, x1);
+    FU for (uint r = 0; r < MR; r++) {
+      float4 q0, q1;
+      float sc = cw<T>(w + ulong(min(r0 + r, p.b - 1)) * rb, blk, ln, q0, q1);
+      FU for (uint j = 0; j < N; j++) s[r][j] += (dot(q0, x0[j]) + dot(q1, x1[j])) * sc;
+    }
   }
   if (ks == 1) {
-    FU for (uint r = 0; r < MR; r++) {
-      float t = simd_sum(s[r]);
-      if (ln == r && r0 + r < p.b) { if (p.e & 2u) A[p.g + r0 + r] += t; else A[p.g + r0 + r] = t; }
+    FU for (uint r = 0; r < MR; r++) FU for (uint j = 0; j < N; j++) {
+      float t = simd_sum(s[r][j]);
+      device float *y = A + p.g + j * p.h + r0 + r;
+      if (ln == r && r0 + r < p.b) { if (p.e & 2u) *y += t; else *y = t; }
     }
     return;
   }
-  FU for (uint r = 0; r < MR; r++) { float t = simd_sum(s[r]); if (ln == 0) red[sg * MR + r] = t; }
+  FU for (uint r = 0; r < MR; r++) FU for (uint j = 0; j < N; j++) { float t = simd_sum(s[r][j]); if (ln == 0) red[(sg * MR + r) * N + j] = t; }
   threadgroup_barrier(mem_flags::mem_threadgroup);
   if (kg == 0 && ln < MR && r0 + ln < p.b) {
-    float t = 0.0f;
-    for (uint i = 0; i < ks; i++) t += red[(sg + i) * MR + ln];
-    if (p.e & 2u) A[p.g + r0 + ln] += t; else A[p.g + r0 + ln] = t;
+    FU for (uint j = 0; j < N; j++) {
+      float t = 0.0f;
+      for (uint i = 0; i < ks; i++) t += red[((sg + i) * MR + ln) * N + j];
+      device float *y = A + p.g + j * p.h + r0 + ln;
+      if (p.e & 2u) *y += t; else *y = t;
+    }
   }
 }
 
 // Q4_K / Q5_K matvec with one 16-byte nibble load per lane per row: 8 lanes per 256-value block, lane li = l % 8 of a
 // block covering positions 16 (li % 2) .. + 15 of the sub-block pair 2 m, 2 m + 1 (m = li / 2), whose nibbles share
 // those 16 bytes (low nibble: sub-block 2 m, high: 2 m + 1); a simdgroup walks 4 blocks per step and owns MR rows
-// over the whole row (a: weight off, b rows, c cols, e flags, f x off, g y off; rows per threadgroup ns * MR).
-template <uint T>
+// over the whole row (a: weight off, b rows, c cols, e flags, f x off, g y off, h token stride; rows per threadgroup
+// ns * MR), for N tokens at once.
+template <uint T, uint N>
 kernel void mvk(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
                 uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
                 uint ln [[thread_index_in_simdgroup]], uint ns [[simdgroups_per_threadgroup]]) {
@@ -123,12 +146,16 @@ kernel void mvk(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
   ulong rb = ulong(nb) * BB;
   device const uchar *w = W + p.a;
   device const float *x = A + p.f;
-  float s[MR];
-  FU for (uint r = 0; r < MR; r++) s[r] = 0.0f;
+  float s[MR][N];
+  FU for (uint r = 0; r < MR; r++) FU for (uint j = 0; j < N; j++) s[r][j] = 0.0f;
   for (uint b = ln / 8; b < nb; b += 4) {
-    device const float4 *xa = (device const float4 *)(x + b * 256 + 64 * m + hf);
-    float4 a0 = xa[0], a1 = xa[1], a2 = xa[2], a3 = xa[3], c0 = xa[8], c1 = xa[9], c2 = xa[10], c3 = xa[11];
-    float sa = dot(a0 + a1 + a2 + a3, float4(1.0f)), sc_ = dot(c0 + c1 + c2 + c3, float4(1.0f));
+    float4 a0, a1, a2, a3, c0, c1, c2, c3;
+    float sa[N], sc_[N];
+    FU for (uint j = 0; j < N; j++) {
+      device const float4 *xa = (device const float4 *)(x + j * p.h + b * 256 + 64 * m + hf);
+      a0 = xa[0]; a1 = xa[1]; a2 = xa[2]; a3 = xa[3]; c0 = xa[8]; c1 = xa[9]; c2 = xa[10]; c3 = xa[11];
+      sa[j] = dot(a0 + a1 + a2 + a3, float4(1.0f)); sc_[j] = dot(c0 + c1 + c2 + c3, float4(1.0f));
+    }
     FU for (uint r = 0; r < MR; r++) {
       device const uchar *bl = w + ulong(min(r0 + r, p.b - 1)) * rb + b * BB;
       device const uint *bw = (device const uint *)bl;
@@ -149,14 +176,75 @@ kernel void mvk(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
         h0 += 16.0f * float4((e0 >> v) & uchar(1)); h1 += 16.0f * float4((e1 >> v) & uchar(1));
         h2 += 16.0f * float4((e2 >> v) & uchar(1)); h3 += 16.0f * float4((e3 >> v) & uchar(1));
       }
-      float lo = dot(l0, a0) + dot(l1, a1) + dot(l2, a2) + dot(l3, a3);
-      float hi = dot(h0, c0) + dot(h1, c1) + dot(h2, c2) + dot(h3, c3);
-      s[r] += dd.x * (s0 * lo + s1 * hi) - dd.y * (m0 * sa + m1 * sc_);
+      FU for (uint j = 0; j < N; j++) {
+        if (N > 1) {
+          device const float4 *xa = (device const float4 *)(x + j * p.h + b * 256 + 64 * m + hf);
+          a0 = xa[0]; a1 = xa[1]; a2 = xa[2]; a3 = xa[3]; c0 = xa[8]; c1 = xa[9]; c2 = xa[10]; c3 = xa[11];
+        }
+        float lo = dot(l0, a0) + dot(l1, a1) + dot(l2, a2) + dot(l3, a3);
+        float hi = dot(h0, c0) + dot(h1, c1) + dot(h2, c2) + dot(h3, c3);
+        s[r][j] += dd.x * (s0 * lo + s1 * hi) - dd.y * (m0 * sa[j] + m1 * sc_[j]);
+      }
     }
   }
-  FU for (uint r = 0; r < MR; r++) {
-    float t = simd_sum(s[r]);
-    if (ln == r && r0 + r < p.b) { if (p.e & 2u) A[p.g + r0 + r] += t; else A[p.g + r0 + r] = t; }
+  FU for (uint r = 0; r < MR; r++) FU for (uint j = 0; j < N; j++) {
+    float t = simd_sum(s[r][j]);
+    device float *y = A + p.g + j * p.h + r0 + r;
+    if (ln == r && r0 + r < p.b) { if (p.e & 2u) *y += t; else *y = t; }
+  }
+}
+
+// Q4_K / Q5_K matvec for N > 1 tokens: 16 lanes per 256-value block, lane li = l % 16 loading 8 bytes at 8 (li % 4) of
+// the sub-block pair 2 m, 2 m + 1 (m = li / 4), so a lane holds 16 activations per token instead of 32 and N tokens
+// fit in registers; a simdgroup walks 2 blocks per step (the parameters as mvk).
+template <uint T, uint N>
+kernel void mvn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+                uint ln [[thread_index_in_simdgroup]], uint ns [[simdgroups_per_threadgroup]]) {
+  constexpr uint BB = T == 12 ? 144 : 176;
+  uint r0 = (tg * ns + sg) * MR, nb = p.c / 256, li = ln % 16, m = li / 4, q = (li % 4) * 8;
+  ulong rb = ulong(nb) * BB;
+  device const uchar *w = W + p.a;
+  device const float *x = A + p.f;
+  float s[MR][N];
+  FU for (uint r = 0; r < MR; r++) FU for (uint j = 0; j < N; j++) s[r][j] = 0.0f;
+  for (uint b = ln / 16; b < nb; b += 2) {
+    float4 a0[N], a1[N], c0[N], c1[N];
+    float sa[N], sc_[N];
+    FU for (uint j = 0; j < N; j++) {
+      device const float4 *xa = (device const float4 *)(x + j * p.h + b * 256 + 64 * m + q);
+      a0[j] = xa[0]; a1[j] = xa[1]; c0[j] = xa[8]; c1[j] = xa[9];
+      sa[j] = dot(a0[j] + a1[j], float4(1.0f)); sc_[j] = dot(c0[j] + c1[j], float4(1.0f));
+    }
+    FU for (uint r = 0; r < MR; r++) {
+      device const uchar *bl = w + ulong(min(r0 + r, p.b - 1)) * rb + b * BB;
+      device const uint *bw = (device const uint *)bl;
+      float2 dd = float2(as_type<half2>(bw[0]));
+      float s0, m0, s1, m1;
+      k4_sm_words(bw[1], bw[2], bw[3], 2 * m, s0, m0);
+      k4_sm_words(bw[1], bw[2], bw[3], 2 * m + 1, s1, m1);
+      uint2 qq = *(device const uint2 *)(bl + (T == 12 ? 16 : 48) + 32 * m + q);
+      uchar4 b0 = as_type<uchar4>(qq.x), b1 = as_type<uchar4>(qq.y);
+      float4 l0 = float4(b0 & uchar(15)), l1 = float4(b1 & uchar(15));
+      float4 h0 = float4(b0 >> uchar(4)), h1 = float4(b1 >> uchar(4));
+      if (T == 13) {
+        uint2 hh = *(device const uint2 *)(bl + 16 + q);
+        uchar4 e0 = as_type<uchar4>(hh.x), e1 = as_type<uchar4>(hh.y);
+        uchar u = uchar(2 * m), v = uchar(2 * m + 1);
+        l0 += 16.0f * float4((e0 >> u) & uchar(1)); l1 += 16.0f * float4((e1 >> u) & uchar(1));
+        h0 += 16.0f * float4((e0 >> v) & uchar(1)); h1 += 16.0f * float4((e1 >> v) & uchar(1));
+      }
+      FU for (uint j = 0; j < N; j++) {
+        float lo = dot(l0, a0[j]) + dot(l1, a1[j]);
+        float hi = dot(h0, c0[j]) + dot(h1, c1[j]);
+        s[r][j] += dd.x * (s0 * lo + s1 * hi) - dd.y * (m0 * sa[j] + m1 * sc_[j]);
+      }
+    }
+  }
+  FU for (uint r = 0; r < MR; r++) FU for (uint j = 0; j < N; j++) {
+    float t = simd_sum(s[r][j]);
+    device float *y = A + p.g + j * p.h + r0 + r;
+    if (ln == r && r0 + r < p.b) { if (p.e & 2u) *y += t; else *y = t; }
   }
 }
 
@@ -169,12 +257,33 @@ kernel void embq(device const uchar *W [[buffer(0)]], device float *A [[buffer(1
   A[p.g + i] = deq_el<T>(W + p.a + ulong(tok) * (p.c / QE[T]) * QB[T], i);
 }
 
+// BF16 rows to Q8_0, one thread per 32-value block (llama.cpp's rounding: d = amax / 127, q = round(x / d), d stored
+// as fp16): a source off, b destination off (bytes in the bound weights), c blocks
+kernel void bfq8(device uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                 uint i [[thread_position_in_grid]]) {
+  if (i >= p.c) return;
+  device const ushort *s = (device const ushort *)(W + p.a) + ulong(i) * 32;
+  float v[32];
+  float am = 0.0f;
+  FU for (uint k = 0; k < 32; k++) { v[k] = as_type<float>(uint(s[k]) << 16); am = max(am, fabs(v[k])); }
+  float d = am / 127.0f, id = d > 0.0f ? 1.0f / d : 0.0f;
+  device uchar *o = W + p.b + ulong(i) * 34;
+  *(device half *)o = half(d);
+  FU for (uint k = 0; k < 32; k++) ((device char *)(o + 2))[k] = char(rint(v[k] * id));
+}
+
 #define MVQ_ARGS (device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]], uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]], uint ns [[simdgroups_per_threadgroup]])
 #define EMB_ARGS (device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]], uint i [[thread_position_in_grid]])
-template [[host_name(\"mv_q8_0\")]] kernel void mvq<8> MVQ_ARGS;
-template [[host_name(\"mv_q6_k\")]] kernel void mvq<14> MVQ_ARGS;
-template [[host_name(\"mvk_q4_k\")]] kernel void mvk<12> MVQ_ARGS;
-template [[host_name(\"mvk_q5_k\")]] kernel void mvk<13> MVQ_ARGS;
+template [[host_name(\"mv_q8_0\")]] kernel void mvq<8, 1> MVQ_ARGS;
+template [[host_name(\"mv_q6_k\")]] kernel void mvq<14, 1> MVQ_ARGS;
+template [[host_name(\"mvk_q4_k\")]] kernel void mvk<12, 1> MVQ_ARGS;
+template [[host_name(\"mvk_q5_k\")]] kernel void mvk<13, 1> MVQ_ARGS;
+template [[host_name(\"mv2_q8_0\")]] kernel void mvq<8, 2> MVQ_ARGS;
+template [[host_name(\"mv2_q6_k\")]] kernel void mvq<14, 2> MVQ_ARGS;
+template [[host_name(\"mvk2_q4_k\")]] kernel void mvn<12, 2> MVQ_ARGS;
+template [[host_name(\"mvk2_q5_k\")]] kernel void mvn<13, 2> MVQ_ARGS;
+template [[host_name(\"mv_bf16\")]] kernel void mvq<30, 1> MVQ_ARGS;
+template [[host_name(\"mv2_bf16\")]] kernel void mvq<30, 2> MVQ_ARGS;
 template [[host_name(\"emb_q8_0\")]] kernel void embq<8> EMB_ARGS;
 template [[host_name(\"emb_q4_k\")]] kernel void embq<12> EMB_ARGS;
 template [[host_name(\"emb_q5_k\")]] kernel void embq<13> EMB_ARGS;
@@ -182,5 +291,7 @@ template [[host_name(\"emb_q6_k\")]] kernel void embq<14> EMB_ARGS;
 ")
 
 ;; kernel ids: the matvec and embedding instantiation for a GGUF dtype (the pipeline order of murakumo.engine.kernels)
-(defn mv-id [dt :i64] :i64 (cond (= dt 8) 0 (= dt 12) 1 (= dt 13) 2 (= dt 14) 3 :else (vector-at [0] 1)))
+(defn mv-id [dt :i64] :i64 (cond (= dt 8) 0 (= dt 12) 1 (= dt 13) 2 (= dt 14) 3 (= dt 30) 18 :else (vector-at [0] 1)))
 (defn emb-id [dt :i64] :i64 (+ 4 (mv-id dt)))
+;; the two-token matvec (kernel ids 14..17); BF16 (dtype 30) rows: 18 one token, 19 two
+(defn mv2-id [dt :i64] :i64 (if (= dt 30) 19 (+ 14 (mv-id dt))))

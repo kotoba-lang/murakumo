@@ -11,7 +11,8 @@
 ;; store; attention times sigmoid(gate); output matvec into the residual. Then RMSNorm, gate and up matvecs, SwiGLU,
 ;; down matvec into the residual. Final RMSNorm, the tied head over the embedding table, argmax.
 
-;; arena A offsets (floats; every one a multiple of 4)
+;; arena A offsets (floats; every one a multiple of 4). oX .. oLG are token 0's activations; token j of a multi-token
+;; pass has its own copy at + j (ts).
 (defn oX [] :i64 0)
 (defn oH [] :i64 2560)
 (defn oQ [] :i64 5120)
@@ -25,15 +26,26 @@
 (defn oFU [] :i64 41024)
 (defn oG2 [] :i64 50240)
 (defn oLG [] :i64 59456)
-(defn oTOK [] :i64 307776)
-(defn oLOG [] :i64 307780)
-(defn oCONV [] :i64 308804)
-(defn oSSM [] :i64 898628)
-(defn oKC [] :i64 13481540)
-(defn oVC [] :i64 17675844)
-;; the second copy of the conv states (oCONV and oCONV2 swap roles every token)
-(defn oCONV2 [] :i64 21870148)
-(defn arena-floats [] :i64 22459972)
+;; one token's activations
+(defn ts [] :i64 307776)
+;; tokens a pass takes at most
+(defn nb [] :i64 2)
+;; argmax words (token j's at + j), then the position log
+(defn oTOK [] :i64 615552)
+(defn oLOG [] :i64 615556)
+(defn oKC [] :i64 616580)
+(defn oVC [] :i64 4810884)
+;; the recurrent states in three slots: a pass of n tokens reads slot c and writes c + 1 .. c + n (mod 3), so the
+;; state after every token of the pass survives it (the caller keeps the slot of the last accepted token)
+(defn oCONV [s :i64] :i64 (+ 9005188 (* s 589824)))
+(defn oSSM [s :i64] :i64 (+ 10774660 (* s 12582912)))
+;; the MTP head's activations (row j at + j (ts), the layout of a token's) and its KV cache ([pos][1024])
+(defn oM [] :i64 48523396)
+(defn oMK [] :i64 49138948)
+(defn oMV [] :i64 49663236)
+(defn arena-floats [] :i64 50187524)
+;; the argmax word of the MTP head's draft (oTOK + 3)
+(defn wD [] :i64 3)
 ;; positions the KV cache and the position log hold
 (defn tmax [] :i64 512)
 
@@ -46,79 +58,170 @@
 (defn- d [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 kid :i64 pv :vector-i64 gx :i64 tx :i64] :i64
   (m/disp f R en X PL kid (p16 pv) gx tx))
 
-;; y (rows) = W x (cols) with the kernel for dtype dt; add 1 adds into y
+;; Y (rows) = W X (cols) for the n tokens of the pass with the kernel for dtype dt; add 1 adds into Y
 ;; Threadgroups of 4 simdgroups, each simdgroup 4 rows over the whole row (no threadgroup reduction); Q8_0 and Q6_K
 ;; rows longer than 12 steps of 256 values are split between 2 simdgroups (ks). Q4_K and Q5_K use mvk (16-byte loads).
-(defn- mv [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 woff :i64 dt :i64 rows :i64 cols :i64 xo :i64 yo :i64 add :i64] :i64
+;; Two tokens read the weights once (the mv2 kernels).
+(defn- mv [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 woff :i64 dt :i64 rows :i64 cols :i64 xo :i64 yo :i64 add :i64 n :i64] :i64
   (let [ks (if (or (= dt 12) (= dt 13) (<= cols 3072)) 1 2) rpt (* 4 (quot 4 ks))]
-    (d f R en X PL (k/k-mv dt) (vector-i64 woff rows cols ks (if (= add 1) 2 0) xo yo 0) (quot (+ rows (- rpt 1)) rpt) 128)))
+    (d f R en X PL (if (= n 1) (k/k-mv dt) (k/k-mv2 dt)) (vector-i64 woff rows cols ks (if (= add 1) 2 0) xo yo (ts)) (quot (+ rows (- rpt 1)) rpt) 128)))
 
 ;; a barrier in a concurrent encoder
 (defn- bar [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64] :i64 (m/barrier! f R en))
 
-(defn- rms [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 w :i64 xo :i64 yo :i64 eps :i64] :i64
-  (d f R en X PL (k/k-rms1) (vector-i64 w 0 2560 0 0 xo yo eps) 1 1024))
+;; RMSNorm of each token's row
+(defn- rms [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 w :i64 xo :i64 yo :i64 eps :i64 n :i64] :i64
+  (loop [j 0] (if (= j n) 0
+    (let [u (d f R en X PL (k/k-rms1) (vector-i64 w 0 2560 0 0 (+ xo (* j (ts))) (+ yo (* j (ts))) eps) 1 1024)] (recur (+ j 1))))))
 
-(defn- layer! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 l :i64 pos :i64] :i64
+(defn- layer! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 l :i64 pos :i64 n :i64 slot :i64] :i64
   (let [g (pr/gbase)
         eps (vector-at P (+ g 3))
         base (vector-at P (+ g 4))
         ord (vector-at P (pr/ps l 3))
-        r1 (rms f R en X PL (vector-at P (pr/ps l 0)) (oX) (oH) eps)
+        r1 (rms f R en X PL (vector-at P (pr/ps l 0)) (oX) (oH) eps n)
         b1 (bar f R en)
         body (if (= (vector-at P (pr/ps l 2)) 0)
-               (let [q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0)
-                     z (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 4096 2560 (oH) (oZ) 0)
-                     al (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 32 2560 (oH) (oAB) 0)
-                     be (mv f R en X PL (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) 32 2560 (oH) (+ (oAB) 32) 0)
+               (let [q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0 n)
+                     z (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 4096 2560 (oH) (oZ) 0 n)
+                     al (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 32 2560 (oH) (oAB) 0 n)
+                     be (mv f R en X PL (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) 32 2560 (oH) (+ (oAB) 32) 0 n)
                      b2 (bar f R en)
-                     cs (+ (* ord 24576) (if (= (rem pos 2) 0) (oCONV) (oCONV2)))
-                     cn (+ (* ord 24576) (if (= (rem pos 2) 0) (oCONV2) (oCONV)))
-                     dn (d f R en X PL (k/k-dnf) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (vector-at P (pr/ps l 18)) (oAB)
-                                                             (+ (oSSM) (* ord 524288)) (oY) cs cn (vector-at P (pr/ps l 21)) (oZ) eps (oQ)) 32 1024)
+                     ;; token j reads state slot slot + j and writes slot + j + 1, after token j - 1's write
+                     dn (loop [j 0]
+                          (if (= j n) 0
+                            (let [sr (rem (+ slot j) 3) sw (rem (+ slot (+ j 1)) 3) o (* j (ts))
+                                  bj (if (> j 0) (bar f R en) 0)
+                                  u (d f R en X PL (k/k-dnf) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (vector-at P (pr/ps l 18)) (+ (oAB) o)
+                                                                       (+ (oSSM sr) (* ord 524288)) (+ (oY) o) (+ (oCONV sr) (* ord 24576)) (+ (oCONV sw) (* ord 24576))
+                                                                       (vector-at P (pr/ps l 21)) (+ (oZ) o) eps (+ (oQ) o) (+ (oSSM sw) (* ord 524288))) 32 1024)]
+                              (recur (+ j 1)))))
                      b3 (bar f R en)]
-                 (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1))
+                 (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1 n))
                (let [kc (+ (oKC) (* ord (* (tmax) 1024)))
                      vc (+ (oVC) (* ord (* (tmax) 1024)))
-                     q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0)
-                     kk (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 1024 2560 (oH) (oK) 0)
-                     vv (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 1024 2560 (oH) (oV) 0)
+                     q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0 n)
+                     kk (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 1024 2560 (oH) (oK) 0 n)
+                     vv (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 1024 2560 (oH) (oV) 0 n)
                      b2 (bar f R en)
-                     qk (d f R en X PL (k/k-qkr) (vector-i64 (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) pos (oQ) (oK) (oV) kc vc base eps) 20 32)
+                     qk (loop [j 0] (if (= j n) 0
+                          (let [o (* j (ts))
+                                u (d f R en X PL (k/k-qkr) (vector-i64 (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) (+ pos j) (+ (oQ) o) (+ (oK) o) (+ (oV) o) kc vc base eps) 20 32)]
+                            (recur (+ j 1)))))
                      b3 (bar f R en)
-                     at (d f R en X PL (k/k-attd) (vector-i64 0 0 (+ pos 1) (oQ) 0 (oY) kc vc) 16 256)
+                     at (loop [j 0] (if (= j n) 0
+                          (let [o (* j (ts))
+                                u (d f R en X PL (k/k-attd) (vector-i64 0 0 (+ pos (+ j 1)) (+ (oQ) o) 0 (+ (oY) o) kc vc) 16 256)]
+                            (recur (+ j 1)))))
                      b4 (bar f R en)]
-                 (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1)))
+                 (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1 n)))
         b6 (bar f R en)
-        r2 (rms f R en X PL (vector-at P (pr/ps l 1)) (oX) (oH) eps)
+        r2 (rms f R en X PL (vector-at P (pr/ps l 1)) (oX) (oH) eps n)
         b7 (bar f R en)
-        fg (mv f R en X PL (vector-at P (pr/ps l 4)) (vector-at P (pr/ps l 5)) 9216 2560 (oH) (oFG) 0)
-        fu (mv f R en X PL (vector-at P (pr/ps l 6)) (vector-at P (pr/ps l 7)) 9216 2560 (oH) (oFU) 0)
+        fg (mv f R en X PL (vector-at P (pr/ps l 4)) (vector-at P (pr/ps l 5)) 9216 2560 (oH) (oFG) 0 n)
+        fu (mv f R en X PL (vector-at P (pr/ps l 6)) (vector-at P (pr/ps l 7)) 9216 2560 (oH) (oFU) 0 n)
         b8 (bar f R en)
-        sw (d f R en X PL (k/k-swiglu) (vector-i64 0 0 9216 0 (oFU) (oFG) (oG2) 0) 36 256)
+        sw (loop [j 0] (if (= j n) 0
+             (let [o (* j (ts)) u (d f R en X PL (k/k-swiglu) (vector-i64 0 0 9216 0 (+ (oFU) o) (+ (oFG) o) (+ (oG2) o) 0) 36 256)] (recur (+ j 1)))))
         b9 (bar f R en)
-        dn2 (mv f R en X PL (vector-at P (pr/ps l 8)) (vector-at P (pr/ps l 9)) 2560 9216 (oG2) (oX) 1)]
+        dn2 (mv f R en X PL (vector-at P (pr/ps l 8)) (vector-at P (pr/ps l 9)) 2560 9216 (oG2) (oX) 1 n)]
     (bar f R en)))
 
-;; one token through the model in one command buffer (committed); tok, or the arena's token word when from-gpu is 1
-(defn step-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 tok :i64 pos :i64 from-gpu :i64 nl :i64] :i64
+;; n tokens (at positions pos ..) through the model into the open encoder en: token j is toks j, or when that is
+;; negative the arena's argmax word oTOK + (-1 - it); the recurrent states are read from slot and written to slot + 1
+;; .. slot + n. Token j's argmax lands in word oTOK + j and in the position log at pos + j; its final-norm hidden stays
+;; in oH + j (ts).
+(defn step-body! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64] :i64
+  (let [g (pr/gbase)
+        e0 (loop [j 0] (if (= j n) 0
+             (let [tk (vector-at toks j)
+                   u (d f R en X PL (k/k-emb (vector-at P (+ g 1))) (vector-i64 (vector-at P g) (if (< tk 0) 0 tk) 2560 (if (< tk 0) 1 0) (+ (oTOK) (- -1 tk)) 0 (+ (oX) (* j (ts))) 0) 10 256)]
+               (recur (+ j 1)))))
+        eb (bar f R en)
+        ly (loop [l 0] (if (= l nl) 0 (let [u (layer! f R en X PL P l pos n slot)] (recur (+ l 1)))))
+        fr (rms f R en X PL (vector-at P (+ g 2)) (oX) (oH) (vector-at P (+ g 3)) n)
+        fb (bar f R en)
+        hd (mv f R en X PL (vector-at P g) (vector-at P (+ g 1)) (pr/q35-vocab) 2560 (oH) (oLG) 0 n)
+        hb (bar f R en)
+        am (loop [j 0] (if (= j n) 0
+             (let [u (d f R en X PL (k/k-argmax) (vector-i64 0 0 (pr/q35-vocab) 0 (+ pos j) (+ (oLG) (* j (ts))) (+ (oTOK) j) (oLOG)) 1 1024)]
+               (recur (+ j 1)))))]
+    (bar f R en)))
+
+;; step-body! in its own command buffer (committed)
+(defn step-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64] :i64
   (let [t0 (b/cc f (vector-at X 10) 0 0 0 0 0)
         ce (m/open-enc-c f R X)
-        en (vector-at ce 1)
-        g (pr/gbase)
-        e0 (d f R en X PL (k/k-emb (vector-at P (+ g 1))) (vector-i64 (vector-at P g) tok 2560 from-gpu (oTOK) 0 (oX) 0) 10 256)
-        eb (bar f R en)
-        ly (loop [l 0] (if (= l nl) 0 (let [u (layer! f R en X PL P l pos)] (recur (+ l 1)))))
-        fr (rms f R en X PL (vector-at P (+ g 2)) (oX) (oH) (vector-at P (+ g 3)))
-        fb (bar f R en)
-        hd (mv f R en X PL (vector-at P g) (vector-at P (+ g 1)) (pr/q35-vocab) 2560 (oH) (oLG) 0)
-        hb (bar f R en)
-        am (d f R en X PL (k/k-argmax) (vector-i64 0 0 (pr/q35-vocab) 0 pos (oLG) (oTOK) (oLOG)) 1 1024)]
+        u (step-body! f R (vector-at ce 1) X PL P toks n pos slot nl)]
     (m/commit! f R X ce t0)))
 
+;; bind buffer w at index 0 (the weights the following dispatches read)
+(defn- bindw! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 w :i64] :i64
+  (b/cc f (vector-at R 0) en (vector-at X 8) w 0 0))
+
+;; The MTP head (pr/q35-mtp profile M, weights W2, its matrices as the Q8_0 copies) over n rows at positions pos ..:
+;; row j joins the final-norm hidden the main pass left in oH + j (ts) with the embedding of toks j (the token after
+;; position pos + j; a negative one is the arena word oTOK + (-1 - it)):
+;; x = fc([rms(e) | rms(h)]); x += attention(rms(x)) (its own KV cache); x += MLP(rms(x)). With head 1 the last row
+;; goes through the final norm, the tied head and argmax into word oTOK + wD: the draft for position pos + n + 1.
+(defn mtp-body! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 M :vector-i64 W2 :i64 toks :vector-i64 n :i64 pos :i64 head :i64] :i64
+  (let [g (pr/gbase)
+        eps (vector-at P (+ g 3))
+        base (vector-at P (+ g 4))
+        mb (oM)
+        e0 (loop [j 0] (if (= j n) 0
+             (let [tk (vector-at toks j)
+                   u (d f R en X PL (k/k-emb (vector-at P (+ g 1))) (vector-i64 (vector-at P g) (if (< tk 0) 0 tk) 2560 (if (< tk 0) 1 0) (+ (oTOK) (- -1 tk)) 0 (+ mb (+ (oX) (* j (ts)))) 0) 10 256)]
+               (recur (+ j 1)))))
+        b0 (bar f R en)
+        w2 (bindw! f R en X W2)
+        r0 (rms f R en X PL (vector-at M 13) (+ mb (oX)) (+ mb (oQ)) eps n)
+        r1 (rms f R en X PL (vector-at M 14) (oH) (+ mb (+ (oQ) 2560)) eps n)
+        b1 (bar f R en)
+        fc (mv f R en X PL (vector-at M 32) 8 2560 5120 (+ mb (oQ)) (+ mb (oX)) 0 n)
+        b2 (bar f R en)
+        r2 (rms f R en X PL (vector-at M 1) (+ mb (oX)) (+ mb (oH)) eps n)
+        b3 (bar f R en)
+        q (mv f R en X PL (vector-at M 42) 8 8192 2560 (+ mb (oH)) (+ mb (oQ)) 0 n)
+        kk (mv f R en X PL (vector-at M 39) 8 1024 2560 (+ mb (oH)) (+ mb (oK)) 0 n)
+        vv (mv f R en X PL (vector-at M 43) 8 1024 2560 (+ mb (oH)) (+ mb (oV)) 0 n)
+        b4 (bar f R en)
+        qk (loop [j 0] (if (= j n) 0
+             (let [o (+ mb (* j (ts)))
+                   u (d f R en X PL (k/k-qkr) (vector-i64 (vector-at M 9) (vector-at M 6) (+ pos j) (+ (oQ) o) (+ (oK) o) (+ (oV) o) (oMK) (oMV) base eps) 20 32)]
+               (recur (+ j 1)))))
+        b5 (bar f R en)
+        at (loop [j 0] (if (= j n) 0
+             (let [o (+ mb (* j (ts)))
+                   u (d f R en X PL (k/k-attd) (vector-i64 0 0 (+ pos (+ j 1)) (+ (oQ) o) 0 (+ (oY) o) (oMK) (oMV)) 16 256)]
+               (recur (+ j 1)))))
+        b6 (bar f R en)
+        op (mv f R en X PL (vector-at M 40) 8 2560 4096 (+ mb (oY)) (+ mb (oX)) 1 n)
+        b7 (bar f R en)
+        r3 (rms f R en X PL (vector-at M 5) (+ mb (oX)) (+ mb (oH)) eps n)
+        b8 (bar f R en)
+        fg (mv f R en X PL (vector-at M 35) 8 9216 2560 (+ mb (oH)) (+ mb (oFG)) 0 n)
+        fu (mv f R en X PL (vector-at M 36) 8 9216 2560 (+ mb (oH)) (+ mb (oFU)) 0 n)
+        b9 (bar f R en)
+        sw (loop [j 0] (if (= j n) 0
+             (let [o (+ mb (* j (ts))) u (d f R en X PL (k/k-swiglu) (vector-i64 0 0 9216 0 (+ (oFU) o) (+ (oFG) o) (+ (oG2) o) 0) 36 256)] (recur (+ j 1)))))
+        b10 (bar f R en)
+        dn (mv f R en X PL (vector-at M 34) 8 2560 9216 (+ mb (oG2)) (+ mb (oX)) 1 n)
+        b11 (bar f R en)
+        hd (if (= head 0) 0
+             (let [lb (+ mb (* (- n 1) (ts)))
+                   r4 (rms f R en X PL (vector-at M 12) (+ lb (oX)) (+ lb (oH)) eps 1)
+                   b12 (bar f R en)
+                   w1 (bindw! f R en X (vector-at X 5))
+                   h (mv f R en X PL (vector-at P g) (vector-at P (+ g 1)) (pr/q35-vocab) 2560 (+ lb (oH)) (+ lb (oLG)) 0 1)
+                   b13 (bar f R en)]
+               (d f R en X PL (k/k-argmax) (vector-i64 0 0 (pr/q35-vocab) 0 0 (+ lb (oLG)) (+ (oTOK) (wD)) (+ (oTOK) (wD))) 1 1024)))
+        w3 (bindw! f R en X (vector-at X 5))]
+    (bar f R en)))
+
 ;; debug: the first 6 floats of the residual (oX) and of oH as float bits
-(defn- dump [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64] :i64
-  (let [ac (vector-at X 7)
+(defn- dump [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 blk :i64] :i64
+  (let [ac (+ (vector-at X 7) (* 4 (* blk (ts))))
         s (loop [i 0 acc "dump-x"] (if (= i 6) acc (recur (+ i 1) (string-concat acc (string-concat " " (string-from-i64 (bit-and (b/peek f (+ ac (* 4 i))) 4294967295)))))))
         t (loop [i 0 acc " h"] (if (= i 6) acc (recur (+ i 1) (string-concat acc (string-concat " " (string-from-i64 (bit-and (b/peek f (+ ac (* 4 (+ (oH) i)))) 4294967295)))))))]
     (b/wr-text f R (string-concat s (string-concat t "\n")))))
@@ -131,11 +234,159 @@
               (m/pipeline f R dev lib errp "emb_q5_k") (m/pipeline f R dev lib errp "emb_q6_k")
               (m/pipeline f R dev lib errp "rms1") (m/pipeline f R dev lib errp "swiglu")
               (m/pipeline f R dev lib errp "dnf") (m/pipeline f R dev lib errp "qkr")
-              (m/pipeline f R dev lib errp "attd") (m/pipeline f R dev lib errp "argmax")))
+              (m/pipeline f R dev lib errp "attd") (m/pipeline f R dev lib errp "argmax")
+              (m/pipeline f R dev lib errp "mv2_q8_0") (m/pipeline f R dev lib errp "mvk2_q4_k")
+              (m/pipeline f R dev lib errp "mvk2_q5_k") (m/pipeline f R dev lib errp "mv2_q6_k")
+              (m/pipeline f R dev lib errp "mv_bf16") (m/pipeline f R dev lib errp "mv2_bf16")
+              (m/pipeline f R dev lib errp "bfq8")))
 
-;; load the pinned file, build the profile, run the prompt ids one token at a time and steps greedy tokens;
-;; prints `greedy ...` and `q35-ns ...` on stderr
-(defn run [f [:fn [[:i64 :i64 :i64] :i64]] path :string expect :string ids :vector-i64 steps :i64 nl :i64] :i64
+;; the MTP head file (safetensors, pinned by digest like the model): the profile pr/q35-mtp with the weight buffer at
+;; index 31
+(defn- load-mtp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 dev :i64 X :vector-i64 PL :vector-i64 path :string expect :string] :vector-i64
+  (let [fd (b/cc f (b/sym f "open") (b/cstr f (vector-at R 3) path) 0 0 0 0)
+        u0 (if (< fd 0) (let [w (b/wr-text f R "refused: cannot open the MTP head\n")] (vector-at [0] 1)) 0)
+        shv (b/sha-verify! f R fd expect)
+        total (b/cc f (b/sym f "lseek") fd 0 2 0 0)
+        lb (b/cc f (vector-at R 3) 16 0 0 0 0)
+        g0 (b/cc f (b/sym f "pread") fd lb 8 0 0)
+        hl (b/peek f lb)
+        u1 (if (or (or (< g0 8) (> g0 8)) (or (< hl 2) (or (> hl 1048576) (> (+ hl 8) total)))) (let [w (b/wr-text f R "refused: bad MTP header length\n")] (vector-at [0] 1)) 0)
+        hbuf (b/cc f (vector-at R 3) hl 0 0 0 0)
+        g1 (b/cc f (b/sym f "pread") fd hbuf hl 8 0)
+        u2 (if (= g1 hl) 0 (let [w (b/wr-text f R "refused: short read\n")] (vector-at [0] 1)))
+        dstart (+ 8 hl)
+        dlen (- total dstart)
+        u3 (if (= (rem dlen 16) 0) 0 (let [w (b/wr-text f R "refused: MTP data length\n")] (vector-at [0] 1)))
+        M (pr/q35-mtp f R hbuf hl dlen)
+        W2 (b/msg f R dev "newBufferWithLength:options:" (+ dlen (+ (pr/mtp-extra) (pr/mtp-q8-bytes))) 0 0)
+        u4 (if (= W2 0) (let [w (b/wr-text f R "refused: no memory for the MTP head\n")] (vector-at [0] 1)) 0)
+        wd (b/msg f R W2 "contents" 0 0 0)
+        prd (b/sym f "pread")
+        got (loop [o 0]
+              (if (>= o dlen) o
+                (let [want (if (< (- dlen o) 8388608) (- dlen o) 8388608)
+                      gg (b/cc f prd fd (+ wd o) want (+ dstart o) 0)]
+                  (if (= gg want) (recur (+ o want))
+                    (let [w (b/wr-text f R "refused: short read in the MTP data\n")] (vector-at [0] 1))))))
+        u5 (if (= got dlen) (b/stamp-same! f R fd shv) (vector-at [0] 1))
+        nm (pr/mtp-norms! f wd M)
+        z (vector-assoc! M 31 W2)
+        ;; the matrices to Q8_0 (half the bytes the MTP head reads per pass), once, on the GPU
+        ce (m/open-enc-c f R X)
+        en (vector-at ce 1)
+        w2 (bindw! f R en X W2)
+        cv (loop [k 0]
+             (if (= k 8) 0
+               (let [s (vector-at (pr/mtp-mats) (* 2 k))
+                     nb32 (quot (vector-at (pr/mtp-mats) (+ (* 2 k) 1)) 32)
+                     u (d f R en X PL (k/k-bfq8) (vector-i64 (vector-at M s) (vector-at M (+ 32 s)) nb32 0) (quot (+ nb32 255) 256) 256)]
+                 (recur (+ k 1)))))
+        cw (m/wait! f R X (m/commit! f R X ce (b/cc f (vector-at X 10) 0 0 0 0 0)))]
+    M))
+
+;; plain greedy decode: the prompt two tokens per pass, then one token per buffer (pipelined); returns [t0 t1 t2]
+(defn- plain-gen [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 ids :vector-i64 steps :i64 nl :i64 out :vector-i64 now :i64] :vector-i64
+  (let [np (vector-count ids)
+        t0 (b/cc f now 0 0 0 0 0)
+        ;; prompt: two tokens per pass (the weights are read once for both); every token is accepted, so the state
+        ;; slot is the position mod 3
+        pr0 (loop [i 0 last 1]
+              (if (>= i np) last
+                (let [n (if (>= (- np i) (nb)) (nb) (- np i))
+                      tv (if (= n 1) (vector-i64 (vector-at ids i)) (vector-i64 (vector-at ids i) (vector-at ids (+ i 1))))
+                      cb (step-enc! f R X PL P tv n i (rem i 3) nl)
+                      w (m/wait! f R X cb)]
+                  (recur (+ i n) n))))
+        dbg (if (< nl (pr/q35-layers)) (dump f R X (- pr0 1)) 0)
+        t1 (b/cc f now 0 0 0 0 0)
+        o0 (vector-assoc! out 0 (m/arena-u32 f X (+ (oLOG) (- np 1))))
+        ;; decode: step s's buffer (whose embedding reads the token the previous argmax left in the arena) is committed
+        ;; before the CPU waits for step s - 1's, so the GPU never idles between tokens; each token is read back as
+        ;; soon as its own buffer completes
+        gen (loop [s 1 prev 0]
+              (if (= s steps)
+                (if (= prev 0) 0
+                  (let [w (m/wait! f R X prev)
+                        a (vector-assoc! out (- s 1) (m/arena-u32 f X (+ (oLOG) (+ np (- s 2)))))] 0))
+                ;; the first step reads the last prompt token's argmax (word pr0 - 1), later ones word 0
+                (let [cb (step-enc! f R X PL P (vector-i64 (if (= s 1) (- 0 pr0) -1)) 1 (+ np (- s 1)) (rem (+ np (- s 1)) 3) nl)
+                      a (if (= prev 0) 0
+                          (let [w (m/wait! f R X prev)
+                                v (vector-assoc! out (- s 1) (m/arena-u32 f X (+ (oLOG) (+ np (- s 2)))))] 0))]
+                  (recur (+ s 1) cb))))
+        t2 (b/cc f now 0 0 0 0 0)]
+    (vector-i64 t0 t1 t2 0 0)))
+
+;; one draft-and-verify cycle, encoded but not committed: the MTP head over acc rows at positions p .. with the next
+;; tokens nx (drafting into word oTOK + wD), then the two-token pass [tp, draft] at p + acc from state slot; returns
+;; the command buffer
+(defn- cycle-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 M :vector-i64 W2 :i64 nx :vector-i64 acc :i64 p :i64 tp :i64 slot :i64 nl :i64] :i64
+  (let [t0 (b/cc f (vector-at X 10) 0 0 0 0 0)
+        ce (m/open-enc-c f R X)
+        en (vector-at ce 1)
+        mt (mtp-body! f R en X PL P M W2 nx acc p 1)
+        sb (step-body! f R en X PL P (vector-i64 tp (- -1 (wD))) 2 (+ p acc) slot nl)
+        z (b/msg f R en "endEncoding" 0 0 0)
+        t1 (b/cc f (vector-at X 10) 0 0 0 0 0)
+        ac (vector-at X 9)
+        k (b/poke f ac (+ (b/peek f ac) (- t1 t0)))]
+    (vector-at ce 0)))
+
+;; greedy decode with MTP drafts (lossless: every token emitted is the main model's argmax). Each command buffer first
+;; runs the MTP head over the rows the previous pass accepted (their final-norm hidden still in the main blocks), which
+;; drafts the next token into word oTOK + wD, then verifies [last token, draft] in one two-token pass. The draft is
+;; accepted when the first verify argmax equals it: then both argmaxes are emitted and the state advances two slots,
+;; else only the first and one slot (the next cycle's two possible buffers are encoded while this one runs). The prompt goes two tokens per pass with the MTP head over the previous pass's
+;; rows (no draft). Returns [t0 t1 t2 cycles accepted].
+(defn- spec-gen [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 M :vector-i64 ids :vector-i64 steps :i64 nl :i64 out :vector-i64 now :i64] :vector-i64
+  (let [np (vector-count ids)
+        W2 (vector-at M 31)
+        t0 (b/cc f now 0 0 0 0 0)
+        pr (loop [i 0 pn 0]
+             (if (>= i np) pn
+               (let [n (if (>= (- np i) (nb)) (nb) (- np i))
+                     tv (if (= n 1) (vector-i64 (vector-at ids i)) (vector-i64 (vector-at ids i) (vector-at ids (+ i 1))))
+                     nx (if (< pn 2) (vector-i64 (vector-at ids i)) (vector-i64 (vector-at ids (- i 1)) (vector-at ids i)))
+                     te (b/cc f (vector-at X 10) 0 0 0 0 0)
+                     ce (m/open-enc-c f R X)
+                     en (vector-at ce 1)
+                     mt (if (> pn 0) (mtp-body! f R en X PL P M W2 nx pn (- i pn) 0) 0)
+                     sb (step-body! f R en X PL P tv n i (rem i 3) nl)
+                     cb (m/commit! f R X ce te)
+                     w (m/wait! f R X cb)]
+                 (recur (+ i n) n))))
+        a (m/arena-u32 f X (+ (oLOG) (- np 1)))
+        o0 (vector-assoc! out 0 a)
+        t1 (b/cc f now 0 0 0 0 0)
+        ;; cycle k's buffer runs while both of cycle k + 1's are encoded (accept: MTP rows [word 0, word 1], last token
+        ;; word 1, two slots on; reject: row [word 0], last token word 0, one slot on), so the GPU only waits for the
+        ;; CPU to read three words and commit the one that applies
+        c0 (cycle-enc! f R X PL P M W2 (if (= pr 1) (vector-i64 a) (vector-i64 (vector-at ids (- np 1)) a)) pr (- np pr) a (rem np 3) nl)
+        k0 (b/msg f R c0 "commit" 0 0 0)
+        g (loop [cnt 1 cur c0 q np slot (rem np 3) cyc 0 nacc 0]
+            (if (>= cnt steps) (let [w (m/wait! f R X cur)] (vector-i64 cyc nacc))
+              (let [ca (cycle-enc! f R X PL P M W2 (vector-i64 -1 -2) 2 q -2 (rem (+ slot 2) 3) nl)
+                    cr (cycle-enc! f R X PL P M W2 (vector-i64 -1) 1 q -1 (rem (+ slot 1) 3) nl)
+                    w (m/wait! f R X cur)
+                    dr (m/arena-u32 f X (+ (oTOK) (wD)))
+                    a0 (m/arena-u32 f X (oTOK))
+                    a1 (m/arena-u32 f X (+ (oTOK) 1))
+                    ok (if (= a0 dr) 1 0)
+                    e1 (vector-assoc! out cnt a0)
+                    e2 (if (and (= ok 1) (< (+ cnt 1) steps)) (let [z (vector-assoc! out (+ cnt 1) a1)] 0) 0)
+                    nc (+ cnt (+ 1 ok))
+                    nxt (if (= ok 1) ca cr)
+                    ;; the buffer that does not apply is released uncommitted (a queue holds at most 64 live buffers)
+                    rl (b/msg f R (if (= ok 1) cr ca) "release" 0 0 0)
+                    k1 (if (< nc steps) (b/msg f R nxt "commit" 0 0 0) (b/msg f R nxt "release" 0 0 0))]
+                (recur nc (if (< nc steps) nxt cur) (+ q (+ 1 ok)) (rem (+ slot (+ 1 ok)) 3) (+ cyc 1) (+ nacc ok)))))
+        t2 (b/cc f now 0 0 0 0 0)]
+    (vector-i64 t0 t1 t2 (vector-at g 0) (vector-at g 1))))
+
+;; load the pinned file, build the profile, run the prompt ids and steps greedy tokens (with spec 1, drafted by the
+;; MTP head file mpath pinned by mexpect); prints `greedy ...` and `q35-ns ...` on stderr (with spec 1 also
+;; `q35-spec cycles ... accepted ...`)
+(defn run [f [:fn [[:i64 :i64 :i64] :i64]] path :string expect :string ids :vector-i64 steps :i64 nl :i64 mpath :string mexpect :string spec :i64] :i64
   (let [dlopen (b/sym f "dlopen")
         h1 (b/open-framework f dlopen "/System/Library/Frameworks/Foundation.framework/Foundation")
         h2 (b/open-framework f dlopen "/System/Library/Frameworks/Metal.framework/Metal")
@@ -191,30 +442,13 @@
                       (b/sel f R "setBuffer:offset:atIndex:") acc now)
         np (vector-count ids)
         u9 (if (> (+ np steps) (tmax)) (let [w (b/wr-text f R "refused: prompt and steps exceed the KV cache\n")] (vector-at [0] 1)) 0)
-        t0 (b/cc f now 0 0 0 0 0)
-        pr0 (loop [i 0]
-              (if (= i np) 0
-                (let [cb (step-enc! f R X PL P (vector-at ids i) i 0 nl)
-                      w (m/wait! f R X cb)]
-                  (recur (+ i 1)))))
-        dbg (if (< nl (pr/q35-layers)) (dump f R X) 0)
-        t1 (b/cc f now 0 0 0 0 0)
+        u10 (if (and (= spec 1) (> (+ np (+ steps 2)) (tmax))) (let [w (b/wr-text f R "refused: prompt and steps exceed the KV cache\n")] (vector-at [0] 1)) 0)
+        M (if (= spec 1) (load-mtp f R dev X PL mpath mexpect) (vector-i64 0))
         out (vector-alloc steps)
-        o0 (vector-assoc! out 0 (m/arena-u32 f X (+ (oLOG) (- np 1))))
-        ;; decode: step s's buffer (whose embedding reads the token the previous argmax left in the arena) is committed
-        ;; before the CPU waits for step s - 1's, so the GPU never idles between tokens; each token is read back as
-        ;; soon as its own buffer completes
-        gen (loop [s 1 prev 0]
-              (if (= s steps)
-                (if (= prev 0) 0
-                  (let [w (m/wait! f R X prev)
-                        a (vector-assoc! out (- s 1) (m/arena-u32 f X (+ (oLOG) (+ np (- s 2)))))] 0))
-                (let [cb (step-enc! f R X PL P 0 (+ np (- s 1)) 1 nl)
-                      a (if (= prev 0) 0
-                          (let [w (m/wait! f R X prev)
-                                v (vector-assoc! out (- s 1) (m/arena-u32 f X (+ (oLOG) (+ np (- s 2)))))] 0))]
-                  (recur (+ s 1) cb))))
-        t2 (b/cc f now 0 0 0 0 0)
+        res (if (= spec 1) (spec-gen f R X PL P M ids steps nl out now) (plain-gen f R X PL P ids steps nl out now))
+        t0 (vector-at res 0)
+        t1 (vector-at res 1)
+        t2 (vector-at res 2)
         text (loop [s 0 accs "greedy"]
                (if (= s steps) (string-concat accs "\n")
                  (recur (+ s 1) (string-concat accs (string-concat " " (string-from-i64 (vector-at out s)))))))
@@ -224,5 +458,7 @@
              (string-concat " decode-steps " (string-concat (string-from-i64 (- steps 1))
              (string-concat " decode " (string-concat (string-from-i64 (m/ticks-ns f (- t2 t1))) "\n")))))))))
         w3 (b/wr-text f R (string-concat "q35-split encode " (string-concat (string-from-i64 (m/ticks-ns f (b/peek f acc)))
-             (string-concat " gpu-wait " (string-concat (string-from-i64 (m/ticks-ns f (b/peek f (+ acc 8)))) "\n")))))]
+             (string-concat " gpu-wait " (string-concat (string-from-i64 (m/ticks-ns f (b/peek f (+ acc 8)))) "\n")))))
+        w4 (if (= spec 1) (b/wr-text f R (string-concat "q35-spec cycles " (string-concat (string-from-i64 (vector-at res 3))
+             (string-concat " accepted " (string-concat (string-from-i64 (vector-at res 4)) "\n"))))) 0)]
     0))
