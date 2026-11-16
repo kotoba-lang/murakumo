@@ -1,0 +1,149 @@
+{
+  "schema": "ced-moe-replicated-trial/v2",
+  "status": "complete",
+  "mode": "reference",
+  "preset": "1b",
+  "rank": 0,
+  "world_size": 1,
+  "host": "naphtalinoMac-mini.local",
+  "device": {
+    "device_name": "Apple M4",
+    "max_recommended_working_set_size": 12713115648,
+    "memory_size": 17179869184,
+    "architecture": "applegpu_g16g",
+    "max_buffer_length": 9534832640,
+    "resource_limit": 499000
+  },
+  "global_microbatches": 8,
+  "local_batch": 1,
+  "sequence": 64,
+  "steps": 2,
+  "accumulation_steps": 4,
+  "sync_frequency": "update",
+  "gradient_accumulation_dtype": "bfloat16",
+  "objective_semantics": "mean of 2*accumulation_steps rank-local objectives, including local balancing",
+  "global_training_tokens": 1024,
+  "local_tokens": 1024,
+  "training_phase_seconds": 30.214878208003938,
+  "training_global_tokens_per_second": 33.8905883700945,
+  "process_seconds_including_init_and_verification": 38.68549737497233,
+  "lineage": {
+    "mode": "explicit-replica-initialization-not-resume",
+    "source_step": 64,
+    "source_state_sha256": "1d4e5c2b6a4c41aa59c1ce97bcf97d4c62c0f6905aeac63acf8719992aef8588"
+  },
+  "source_sha256": {
+    "model.hy": "10468ce593cbeea819de4f10ce14a175a6f29834b4de7e537e0591941422f9f1",
+    "train.hy": "538d80d3c3aff10f0f6175f60f09675b02d33fa3e31810cf919377f9e62978ec",
+    "nvme_master.hy": "5485bcf64ff1dfd005cefb32350ebb881e90abff960f7c07b242e46b9366384c",
+    "stream_checkpoint.hy": "526377a578423edcd0747879b58ec4a497b9bd7799f22560a2590b90ac5f9d56",
+    "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+    "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+    "process_memory.hy": "5f49f0f0f73d091c196431d7add8bfc76def7ab744326b6ff8b7b193001500f4",
+    "distributed_trial.hy": "4d7f1c703dcc8d92d22eac79429d0b9e427b1ecd4cf51d6e05a18d5f99a521ad",
+    "ddp_ops.hy": "2cd0aeeacb584184cdf9141554a19a8a48fbaef7f9dc79d580be88c9b7228661",
+    "accumulation_ops.hy": "1b9df87d69a7d9738a4a8ac9ccd0d51122aa334bd15e39068aca931f0983a790"
+  },
+  "data_manifest_sha256": "abbeeeac4e69931808c7a93774f346710a22dfd5d3977136ed49b7198264f82a",
+  "input_hashes": [
+    "c4db9c1923fed3e2df73981c710d5a2644c6742116af27b6a72de741dcd78cf2",
+    "6729060a38f5dfe7436ef5efcefb8dffcbb4fb6d716fbd0199bb8c3aabc4c7d9",
+    "ff5f88119e94e875cd07bedb0357d59034bb386e5bc4258b13cadd7dbaab8109",
+    "ec30721050fe41a3a8e8c9e67894ede9d9c51090c098cc39bd16a3d5d6f52269",
+    "68ac167f68da489503c236401a13166805b8afb59c056d133920c0a798cd571e",
+    "ff45ce21fb7113aa44b940ce238fb80618a3d9905c99cdd703a31827489130db",
+    "353c22455ce1dd3a0575de3173ad4f75523691d855156b292650f3486d61bcd1",
+    "fc73299786f2e1f59cb39b9eb0ea7d344d3fbf2003e7dfdc5bc603388f18c2cf"
+  ],
+  "trace": [
+    {
+      "trial_step": 1,
+      "global_tokens": 512,
+      "mean_local_objective": 11.04632580280304,
+      "gradient_norm": 10.729389190673828,
+      "compute_seconds": 11.25464987498708,
+      "gradient_communication_seconds": 0.0,
+      "optimizer_and_finish_sync_seconds": 3.9512574590044096,
+      "step_seconds": 15.205907459021546,
+      "collectives": null,
+      "process_memory": {
+        "resident_bytes": 199196672,
+        "phys_footprint_bytes": 2425324456,
+        "lifetime_peak_phys_footprint_bytes": 7297206456,
+        "disk_read_bytes": 6416396288,
+        "disk_write_bytes": 8351047680
+      },
+      "mlx_peak_bytes": 7094495738
+    },
+    {
+      "trial_step": 2,
+      "global_tokens": 1024,
+      "mean_local_objective": 10.959879994392395,
+      "gradient_norm": 11.080129623413086,
+      "compute_seconds": 10.870963958033826,
+      "gradient_communication_seconds": 0.0,
+      "optimizer_and_finish_sync_seconds": 4.137795916991308,
+      "step_seconds": 15.008759999996983,
+      "collectives": null,
+      "process_memory": {
+        "resident_bytes": 199229440,
+        "phys_footprint_bytes": 2343453632,
+        "lifetime_peak_phys_footprint_bytes": 7297206456,
+        "disk_read_bytes": 10356416512,
+        "disk_write_bytes": 12526571520
+      },
+      "mlx_peak_bytes": 7094495738
+    }
+  ],
+  "initial_validation_ce": 10.48990774154663,
+  "final_validation_ce": 10.473275661468506,
+  "logical_gradient_bytes": 0,
+  "ring_tx_estimated_bytes": 0.0,
+  "wire_bytes": null,
+  "interface": "en0",
+  "interface_delta": {
+    "rx": 1793839,
+    "tx": 815686
+  },
+  "network_counter_scope": "whole interface; background/control traffic included",
+  "process_io": {
+    "read": 14178140160,
+    "write": 14613987328
+  },
+  "logical_master_io": {
+    "read_bytes": 8349587456,
+    "write_bytes": 8349587456,
+    "restore_file_bytes": 4174813516
+  },
+  "memory_enforcer": {
+    "backend": "xnu-memorystatus-fatal-footprint",
+    "pid": 91842,
+    "uid": 501,
+    "active_limit_mib": 9216,
+    "inactive_limit_mib": 9216,
+    "active_fatal": true,
+    "inactive_fatal": true,
+    "readback_verified": true,
+    "requested_bytes": 10737418240,
+    "kernel_limit_bytes": 9663676416,
+    "safety_reserve_bytes": 1073741824,
+    "qualification_source_sha256": {
+      "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+      "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+      "check_kernel_limit.hy": "4b0726ca40aed85b2876baa9dc9801cce20f9f48b3b029020b69a8618cc9abdb"
+    },
+    "qualification_sha256": "0269a41390df500bab4ba824bb3ef0633559435fc2b23766dcca9bfee08bd8a8"
+  },
+  "process_memory": {
+    "resident_bytes": 2197127168,
+    "phys_footprint_bytes": 2157758888,
+    "lifetime_peak_phys_footprint_bytes": 7297206456,
+    "disk_read_bytes": 14178140160,
+    "disk_write_bytes": 14613987328
+  },
+  "mlx_peak_bytes": 7094495738,
+  "weight_sha256": "bd43c4aa386edd4ce812c019398c70508ab0bea93c92faa5161379631c5dbb50",
+  "master_sha256": "6196db3948feb11690aa5c2c1c82c0985e54aa75bcb704dbb4201d3d3d63216a",
+  "replica_hashes": null,
+  "scope": "replicated DDP; no model-state pooling or global checkpoint"
+}

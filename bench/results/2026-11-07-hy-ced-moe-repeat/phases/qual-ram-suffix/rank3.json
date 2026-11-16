@@ -1,0 +1,993 @@
+{
+  "schema": "ced-moe-repeat-placement/v1",
+  "status": "complete",
+  "rank": 3,
+  "world_size": 10,
+  "host": "simeonnoMac-mini.local",
+  "config": {
+    "name": "tiny",
+    "width": 64,
+    "layers": 12,
+    "experts": 8,
+    "ff": 32,
+    "heads": 4,
+    "head_dim": 4,
+    "vocab": 32768,
+    "top_k": 2,
+    "index_dim": 32,
+    "index_top_k": 16,
+    "window": 4,
+    "encoder_compression": 2,
+    "expert_token_chunk": 4,
+    "index_loss_weight": 0.01,
+    "balance_loss_weight": 0.01,
+    "activation_checkpoint": true
+  },
+  "options": {
+    "world_size": 10,
+    "layout": "head-only-rank0-nine-contiguous-layer-owners/v1",
+    "sequence": 16,
+    "batch": 1,
+    "seed": 937,
+    "optimizer": "adamw",
+    "lr": 0.0001,
+    "weight_decay": 0.01,
+    "clip": 1.0,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "eps": 1e-08,
+    "bias_correction": true,
+    "warmup_steps": 4,
+    "schedule": "linear-warmup-then-constant",
+    "eval_batches": 2,
+    "eval_every": 2,
+    "eval_seed": 936,
+    "diagnostic_eval": false,
+    "diagnostic_seed": 1936,
+    "diagnostic_batches": 32,
+    "confirmation": false,
+    "confirmation_batches": 16,
+    "confirmation_seed": 2027,
+    "dtype": "float32",
+    "state_placement": "ram",
+    "state_offload": "owner-local-ram-float32",
+    "requested_gib": 2
+  },
+  "parameters": 2807616,
+  "partition": [
+    {
+      "keys": [
+        "embedding",
+        "final_norm"
+      ],
+      "optimizer_state_bytes": 25166592,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 2097216,
+      "rank": 0,
+      "weight_bytes": 8388864
+    },
+    {
+      "keys": [
+        "blocks.0.attn_norm",
+        "blocks.0.ffn_norm",
+        "blocks.0.q",
+        "blocks.0.local_kv",
+        "blocks.0.o",
+        "blocks.0.router",
+        "blocks.0.expert_gate",
+        "blocks.0.expert_up",
+        "blocks.0.expert_down",
+        "blocks.0.shared_gate",
+        "blocks.0.shared_up",
+        "blocks.0.shared_down",
+        "blocks.1.attn_norm",
+        "blocks.1.ffn_norm",
+        "blocks.1.q",
+        "blocks.1.local_kv",
+        "blocks.1.o",
+        "blocks.1.router",
+        "blocks.1.expert_gate",
+        "blocks.1.expert_up",
+        "blocks.1.expert_down",
+        "blocks.1.shared_gate",
+        "blocks.1.shared_up",
+        "blocks.1.shared_down"
+      ],
+      "optimizer_state_bytes": 1403904,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 116992,
+      "rank": 1,
+      "weight_bytes": 467968
+    },
+    {
+      "keys": [
+        "blocks.2.attn_norm",
+        "blocks.2.ffn_norm",
+        "blocks.2.q",
+        "blocks.2.local_kv",
+        "blocks.2.o",
+        "blocks.2.router",
+        "blocks.2.expert_gate",
+        "blocks.2.expert_up",
+        "blocks.2.expert_down",
+        "blocks.2.shared_gate",
+        "blocks.2.shared_up",
+        "blocks.2.shared_down",
+        "blocks.2.main_kv",
+        "blocks.2.compress_z",
+        "blocks.2.index_k",
+        "blocks.2.index_q"
+      ],
+      "optimizer_state_bytes": 740352,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 61696,
+      "rank": 2,
+      "weight_bytes": 246784
+    },
+    {
+      "keys": [
+        "blocks.3.attn_norm",
+        "blocks.3.ffn_norm",
+        "blocks.3.q",
+        "blocks.3.local_kv",
+        "blocks.3.o",
+        "blocks.3.router",
+        "blocks.3.expert_gate",
+        "blocks.3.expert_up",
+        "blocks.3.expert_down",
+        "blocks.3.shared_gate",
+        "blocks.3.shared_up",
+        "blocks.3.shared_down"
+      ],
+      "optimizer_state_bytes": 701952,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 58496,
+      "rank": 3,
+      "weight_bytes": 233984
+    },
+    {
+      "keys": [
+        "blocks.4.attn_norm",
+        "blocks.4.ffn_norm",
+        "blocks.4.q",
+        "blocks.4.local_kv",
+        "blocks.4.o",
+        "blocks.4.router",
+        "blocks.4.expert_gate",
+        "blocks.4.expert_up",
+        "blocks.4.expert_down",
+        "blocks.4.shared_gate",
+        "blocks.4.shared_up",
+        "blocks.4.shared_down",
+        "blocks.5.attn_norm",
+        "blocks.5.ffn_norm",
+        "blocks.5.q",
+        "blocks.5.local_kv",
+        "blocks.5.o",
+        "blocks.5.router",
+        "blocks.5.expert_gate",
+        "blocks.5.expert_up",
+        "blocks.5.expert_down",
+        "blocks.5.shared_gate",
+        "blocks.5.shared_up",
+        "blocks.5.shared_down"
+      ],
+      "optimizer_state_bytes": 1403904,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 116992,
+      "rank": 4,
+      "weight_bytes": 467968
+    },
+    {
+      "keys": [
+        "blocks.6.attn_norm",
+        "blocks.6.ffn_norm",
+        "blocks.6.q",
+        "blocks.6.local_kv",
+        "blocks.6.o",
+        "blocks.6.router",
+        "blocks.6.expert_gate",
+        "blocks.6.expert_up",
+        "blocks.6.expert_down",
+        "blocks.6.shared_gate",
+        "blocks.6.shared_up",
+        "blocks.6.shared_down",
+        "blocks.6.main_kv",
+        "blocks.6.compress_z",
+        "blocks.6.index_k",
+        "blocks.6.index_q"
+      ],
+      "optimizer_state_bytes": 740352,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 61696,
+      "rank": 5,
+      "weight_bytes": 246784
+    },
+    {
+      "keys": [
+        "blocks.7.attn_norm",
+        "blocks.7.ffn_norm",
+        "blocks.7.q",
+        "blocks.7.local_kv",
+        "blocks.7.o",
+        "blocks.7.router",
+        "blocks.7.expert_gate",
+        "blocks.7.expert_up",
+        "blocks.7.expert_down",
+        "blocks.7.shared_gate",
+        "blocks.7.shared_up",
+        "blocks.7.shared_down"
+      ],
+      "optimizer_state_bytes": 701952,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 58496,
+      "rank": 6,
+      "weight_bytes": 233984
+    },
+    {
+      "keys": [
+        "blocks.8.attn_norm",
+        "blocks.8.ffn_norm",
+        "blocks.8.q",
+        "blocks.8.local_kv",
+        "blocks.8.o",
+        "blocks.8.router",
+        "blocks.8.expert_gate",
+        "blocks.8.expert_up",
+        "blocks.8.expert_down",
+        "blocks.8.shared_gate",
+        "blocks.8.shared_up",
+        "blocks.8.shared_down",
+        "blocks.9.attn_norm",
+        "blocks.9.ffn_norm",
+        "blocks.9.q",
+        "blocks.9.local_kv",
+        "blocks.9.o",
+        "blocks.9.router",
+        "blocks.9.expert_gate",
+        "blocks.9.expert_up",
+        "blocks.9.expert_down",
+        "blocks.9.shared_gate",
+        "blocks.9.shared_up",
+        "blocks.9.shared_down"
+      ],
+      "optimizer_state_bytes": 1403904,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 116992,
+      "rank": 7,
+      "weight_bytes": 467968
+    },
+    {
+      "keys": [
+        "blocks.10.attn_norm",
+        "blocks.10.ffn_norm",
+        "blocks.10.q",
+        "blocks.10.local_kv",
+        "blocks.10.o",
+        "blocks.10.router",
+        "blocks.10.expert_gate",
+        "blocks.10.expert_up",
+        "blocks.10.expert_down",
+        "blocks.10.shared_gate",
+        "blocks.10.shared_up",
+        "blocks.10.shared_down",
+        "blocks.10.index_q"
+      ],
+      "optimizer_state_bytes": 726528,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 60544,
+      "rank": 8,
+      "weight_bytes": 242176
+    },
+    {
+      "keys": [
+        "blocks.11.attn_norm",
+        "blocks.11.ffn_norm",
+        "blocks.11.q",
+        "blocks.11.local_kv",
+        "blocks.11.o",
+        "blocks.11.router",
+        "blocks.11.expert_gate",
+        "blocks.11.expert_up",
+        "blocks.11.expert_down",
+        "blocks.11.shared_gate",
+        "blocks.11.shared_up",
+        "blocks.11.shared_down"
+      ],
+      "optimizer_state_bytes": 701952,
+      "optimizer_state_kinds": [
+        "master",
+        "m",
+        "v"
+      ],
+      "parameters": 58496,
+      "rank": 9,
+      "weight_bytes": 233984
+    }
+  ],
+  "start_step": 2,
+  "end_step": 4,
+  "global_training_tokens_counted_once": 32,
+  "training_phase_seconds": 3.3884642079938203,
+  "training_global_tokens_per_second": 9.443806407784361,
+  "process_seconds_including_init_evaluation_checkpoint": 4.489687209017575,
+  "initial_validation_ce": 10.408082962036133,
+  "final_validation_ce": 10.413271427154541,
+  "validation_tokens": 32,
+  "evaluations": [
+    {
+      "step": 2,
+      "metrics": {
+        "ce": 10.408082962036133,
+        "per_batch_ce": [
+          10.401542663574219,
+          10.414623260498047
+        ],
+        "seed": 936,
+        "tokens": 32
+      }
+    },
+    {
+      "step": 4,
+      "metrics": {
+        "ce": 10.413271427154541,
+        "per_batch_ce": [
+          10.414470672607422,
+          10.41207218170166
+        ],
+        "seed": 936,
+        "tokens": 32
+      }
+    }
+  ],
+  "confirmation_initial": null,
+  "confirmation_final": null,
+  "diagnostic_validation": null,
+  "trace": [
+    {
+      "step": 3,
+      "cumulative_global_tokens": 48,
+      "objective": 10.687836647033691,
+      "ce_and_aux": {
+        "balance_loss": 18.015289306640625,
+        "ce": 10.442788124084473,
+        "index_loss": 6.489533424377441,
+        "loss": 10.687836647033691
+      },
+      "learning_rate": 7.500000000000001e-05,
+      "global_gradient_norm": 7.816357934164765,
+      "first_update_gradient_sha256": {
+        "blocks.3.attn_norm": "42cc5a14ee1fe83203d39e0bef7ada654fc984f5f563b35a6307f965db688400",
+        "blocks.3.ffn_norm": "e73475c71e389bde1ad0c6370908547695ba29c9311807f075797252696456d2",
+        "blocks.3.q": "ca448d352ed92763e8740f186bb67e4b71716f07be3ac09b710ffe53b2044209",
+        "blocks.3.local_kv": "eeed1d61a5fe2cd2227d47a2c4f55285ad6132e1cfc0e394049f84936d7a15fb",
+        "blocks.3.o": "60f920266d10635f6d98cfa0165bdf4ccb826e724cee5185e98ad1c031f89fb8",
+        "blocks.3.router": "2121af60a6089ea44269edb04f4e77f9e0466e7b68e5ae43b560508f47041d05",
+        "blocks.3.expert_gate": "371c130ae9c9ceea88d92d874edfa09cac8b155ddaf0605cb12d10079e17e533",
+        "blocks.3.expert_up": "d5f790a0b3fc47aa610786a57486f7e4233d0fd8205074df97ad5579d4c3b85b",
+        "blocks.3.expert_down": "3f2dd3fcf328249f615895464e5bb182394eb70b766ae08d75202e0897caba25",
+        "blocks.3.shared_gate": "db5b7e8787ed1dfc3894c6bba4a0141c8c8883f835aba66204c992b6deb88009",
+        "blocks.3.shared_up": "e6a5e0a2bc831b06aedaf3519421446d26867c30cd8bc36c1571000d4b2b163d",
+        "blocks.3.shared_down": "bbc4d6d5155d35f8b3321770d534bb236d126acf3c0fde949c43b55fefbe56f8"
+      },
+      "local_compute_seconds": 0.005257500102743506,
+      "optimizer_and_finish_wait_seconds": 0.016200165962800384,
+      "step_seconds": 0.8826337909558788,
+      "memory": {
+        "resident_bytes": 127959040,
+        "phys_footprint_bytes": 137364176,
+        "lifetime_peak_phys_footprint_bytes": 138937040,
+        "disk_read_bytes": 0,
+        "disk_write_bytes": 0
+      },
+      "mlx_peak_bytes": 2892628
+    },
+    {
+      "step": 4,
+      "cumulative_global_tokens": 64,
+      "objective": 10.576520919799805,
+      "ce_and_aux": {
+        "balance_loss": 14.418142318725586,
+        "ce": 10.355518341064453,
+        "index_loss": 7.682106018066406,
+        "loss": 10.576520919799805
+      },
+      "learning_rate": 0.0001,
+      "global_gradient_norm": 30.86748607802948,
+      "first_update_gradient_sha256": null,
+      "local_compute_seconds": 0.003768415073864162,
+      "optimizer_and_finish_wait_seconds": 0.021109082968905568,
+      "step_seconds": 1.34138079197146,
+      "memory": {
+        "resident_bytes": 127942656,
+        "phys_footprint_bytes": 137626320,
+        "lifetime_peak_phys_footprint_bytes": 139002576,
+        "disk_read_bytes": 0,
+        "disk_write_bytes": 0
+      },
+      "mlx_peak_bytes": 2892628
+    }
+  ],
+  "input_sha256": [
+    "bd990f8a9fd3042a4b92ea3e579eac9e3acce1e51318b93ca93beb7bb0164d9b",
+    "4d8dbdd4b0f15bc15e94449011a3f8c89514219e35887a789f577e165ec4d6e2"
+  ],
+  "restored": {
+    "seconds": 0.027332999976351857,
+    "manifest_sha256": "2ab4706493780f6a694d4a325333a93ede32acf00de862f80d1d2307d2987eb0"
+  },
+  "checkpoint": {
+    "step": 4,
+    "seconds": 0.03634808294009417,
+    "global_manifest_sha256": "daecfc85eb3d678fd7ffcc744b9aee55c4d474985d52caee1b193819ae2f8ac7",
+    "certificate_sha256": "a9fb6a9223f6c2e9815aa199089f3d1a920bf43f63fd4f4a812319270aa685ea",
+    "shards": [
+      {
+        "file_bytes": 33556208,
+        "keys": [
+          "embedding",
+          "final_norm"
+        ],
+        "parameters": 2097216,
+        "rank": 0,
+        "state_sha256": "ae1a82f03227e74e6fd793f5efa76708f7af9474053ce9eaeaf5b7ad03ea9162"
+      },
+      {
+        "file_bytes": 1880792,
+        "keys": [
+          "blocks.0.attn_norm",
+          "blocks.0.ffn_norm",
+          "blocks.0.q",
+          "blocks.0.local_kv",
+          "blocks.0.o",
+          "blocks.0.router",
+          "blocks.0.expert_gate",
+          "blocks.0.expert_up",
+          "blocks.0.expert_down",
+          "blocks.0.shared_gate",
+          "blocks.0.shared_up",
+          "blocks.0.shared_down",
+          "blocks.1.attn_norm",
+          "blocks.1.ffn_norm",
+          "blocks.1.q",
+          "blocks.1.local_kv",
+          "blocks.1.o",
+          "blocks.1.router",
+          "blocks.1.expert_gate",
+          "blocks.1.expert_up",
+          "blocks.1.expert_down",
+          "blocks.1.shared_gate",
+          "blocks.1.shared_up",
+          "blocks.1.shared_down"
+        ],
+        "parameters": 116992,
+        "rank": 1,
+        "state_sha256": "445f120a69f7b53fbe7a801092ec61488d9d2c2222b7e7cc69b222dc54a0c134"
+      },
+      {
+        "file_bytes": 993068,
+        "keys": [
+          "blocks.2.attn_norm",
+          "blocks.2.ffn_norm",
+          "blocks.2.q",
+          "blocks.2.local_kv",
+          "blocks.2.o",
+          "blocks.2.router",
+          "blocks.2.expert_gate",
+          "blocks.2.expert_up",
+          "blocks.2.expert_down",
+          "blocks.2.shared_gate",
+          "blocks.2.shared_up",
+          "blocks.2.shared_down",
+          "blocks.2.main_kv",
+          "blocks.2.compress_z",
+          "blocks.2.index_k",
+          "blocks.2.index_q"
+        ],
+        "parameters": 61696,
+        "rank": 2,
+        "state_sha256": "060c4fe7432200daa63b013c5466a9e0f41b61f8dcae37e4b5ecceed19c974bf"
+      },
+      {
+        "file_bytes": 940396,
+        "keys": [
+          "blocks.3.attn_norm",
+          "blocks.3.ffn_norm",
+          "blocks.3.q",
+          "blocks.3.local_kv",
+          "blocks.3.o",
+          "blocks.3.router",
+          "blocks.3.expert_gate",
+          "blocks.3.expert_up",
+          "blocks.3.expert_down",
+          "blocks.3.shared_gate",
+          "blocks.3.shared_up",
+          "blocks.3.shared_down"
+        ],
+        "parameters": 58496,
+        "rank": 3,
+        "state_sha256": "97e9161389b90d387306990d24cdc06256d5ffc46a9224d14edaea3aaad03f2b"
+      },
+      {
+        "file_bytes": 1880792,
+        "keys": [
+          "blocks.4.attn_norm",
+          "blocks.4.ffn_norm",
+          "blocks.4.q",
+          "blocks.4.local_kv",
+          "blocks.4.o",
+          "blocks.4.router",
+          "blocks.4.expert_gate",
+          "blocks.4.expert_up",
+          "blocks.4.expert_down",
+          "blocks.4.shared_gate",
+          "blocks.4.shared_up",
+          "blocks.4.shared_down",
+          "blocks.5.attn_norm",
+          "blocks.5.ffn_norm",
+          "blocks.5.q",
+          "blocks.5.local_kv",
+          "blocks.5.o",
+          "blocks.5.router",
+          "blocks.5.expert_gate",
+          "blocks.5.expert_up",
+          "blocks.5.expert_down",
+          "blocks.5.shared_gate",
+          "blocks.5.shared_up",
+          "blocks.5.shared_down"
+        ],
+        "parameters": 116992,
+        "rank": 4,
+        "state_sha256": "21b8d5958e14f7264e239b94e35d01d1fa62fb0c07499fc9792c1c0a8e7185ae"
+      },
+      {
+        "file_bytes": 993068,
+        "keys": [
+          "blocks.6.attn_norm",
+          "blocks.6.ffn_norm",
+          "blocks.6.q",
+          "blocks.6.local_kv",
+          "blocks.6.o",
+          "blocks.6.router",
+          "blocks.6.expert_gate",
+          "blocks.6.expert_up",
+          "blocks.6.expert_down",
+          "blocks.6.shared_gate",
+          "blocks.6.shared_up",
+          "blocks.6.shared_down",
+          "blocks.6.main_kv",
+          "blocks.6.compress_z",
+          "blocks.6.index_k",
+          "blocks.6.index_q"
+        ],
+        "parameters": 61696,
+        "rank": 5,
+        "state_sha256": "74d0e3c1d705283e3ed4997cd1ce41bf382b2e17c4af5cba0cd5575276580109"
+      },
+      {
+        "file_bytes": 940396,
+        "keys": [
+          "blocks.7.attn_norm",
+          "blocks.7.ffn_norm",
+          "blocks.7.q",
+          "blocks.7.local_kv",
+          "blocks.7.o",
+          "blocks.7.router",
+          "blocks.7.expert_gate",
+          "blocks.7.expert_up",
+          "blocks.7.expert_down",
+          "blocks.7.shared_gate",
+          "blocks.7.shared_up",
+          "blocks.7.shared_down"
+        ],
+        "parameters": 58496,
+        "rank": 6,
+        "state_sha256": "cba46f40179f3eca0455b376a4a9bb58b235946eed5e95a70dce4d372dce1189"
+      },
+      {
+        "file_bytes": 1880792,
+        "keys": [
+          "blocks.8.attn_norm",
+          "blocks.8.ffn_norm",
+          "blocks.8.q",
+          "blocks.8.local_kv",
+          "blocks.8.o",
+          "blocks.8.router",
+          "blocks.8.expert_gate",
+          "blocks.8.expert_up",
+          "blocks.8.expert_down",
+          "blocks.8.shared_gate",
+          "blocks.8.shared_up",
+          "blocks.8.shared_down",
+          "blocks.9.attn_norm",
+          "blocks.9.ffn_norm",
+          "blocks.9.q",
+          "blocks.9.local_kv",
+          "blocks.9.o",
+          "blocks.9.router",
+          "blocks.9.expert_gate",
+          "blocks.9.expert_up",
+          "blocks.9.expert_down",
+          "blocks.9.shared_gate",
+          "blocks.9.shared_up",
+          "blocks.9.shared_down"
+        ],
+        "parameters": 116992,
+        "rank": 7,
+        "state_sha256": "4f309327e8d2f5ecb0356e986205cb8a3479496fdff45aec179d9b86a06b4d69"
+      },
+      {
+        "file_bytes": 973536,
+        "keys": [
+          "blocks.10.attn_norm",
+          "blocks.10.ffn_norm",
+          "blocks.10.q",
+          "blocks.10.local_kv",
+          "blocks.10.o",
+          "blocks.10.router",
+          "blocks.10.expert_gate",
+          "blocks.10.expert_up",
+          "blocks.10.expert_down",
+          "blocks.10.shared_gate",
+          "blocks.10.shared_up",
+          "blocks.10.shared_down",
+          "blocks.10.index_q"
+        ],
+        "parameters": 60544,
+        "rank": 8,
+        "state_sha256": "d0f94707a6a7148bbd7053340ddcb52a38ef31d38707bf1f06e101413808f45c"
+      },
+      {
+        "file_bytes": 940396,
+        "keys": [
+          "blocks.11.attn_norm",
+          "blocks.11.ffn_norm",
+          "blocks.11.q",
+          "blocks.11.local_kv",
+          "blocks.11.o",
+          "blocks.11.router",
+          "blocks.11.expert_gate",
+          "blocks.11.expert_up",
+          "blocks.11.expert_down",
+          "blocks.11.shared_gate",
+          "blocks.11.shared_up",
+          "blocks.11.shared_down"
+        ],
+        "parameters": 58496,
+        "rank": 9,
+        "state_sha256": "9507a2bc75b35d88120f8477f1689f23c08780b6dd251f63b647e12b1c7a8afa"
+      }
+    ],
+    "local_file_bytes": 940396
+  },
+  "mesh": {
+    "metadata": {
+      "calls": 6,
+      "seconds": 0.06459962506778538,
+      "collective_input_bytes_per_rank": 49152,
+      "ring_tx_estimated_bytes_per_rank": 442368.0,
+      "useful_owner_payload_bytes": 0
+    },
+    "barrier_wait": {
+      "calls": 97,
+      "seconds": 0.7327908317092806,
+      "collective_input_bytes_per_rank": 388,
+      "ring_tx_estimated_bytes_per_rank": 698.4000000000005,
+      "useful_owner_payload_bytes": 0
+    },
+    "embedding_forward_metadata": {
+      "calls": 6,
+      "seconds": 0.01925412518903613,
+      "collective_input_bytes_per_rank": 49152,
+      "ring_tx_estimated_bytes_per_rank": 442368.0,
+      "useful_owner_payload_bytes": 0
+    },
+    "embedding_forward": {
+      "calls": 18,
+      "seconds": 0.0778015018440783,
+      "collective_input_bytes_per_rank": 24624,
+      "ring_tx_estimated_bytes_per_rank": 44323.200000000004,
+      "useful_owner_payload_bytes": 24624
+    },
+    "stage_forward_metadata": {
+      "calls": 60,
+      "seconds": 0.21417433524038643,
+      "collective_input_bytes_per_rank": 491520,
+      "ring_tx_estimated_bytes_per_rank": 4423680.0,
+      "useful_owner_payload_bytes": 0
+    },
+    "stage_forward": {
+      "calls": 450,
+      "seconds": 1.948359202244319,
+      "collective_input_bytes_per_rank": 511392,
+      "ring_tx_estimated_bytes_per_rank": 920505.6000000001,
+      "useful_owner_payload_bytes": 511392
+    },
+    "loss_metadata": {
+      "calls": 6,
+      "seconds": 0.0189742079237476,
+      "collective_input_bytes_per_rank": 49152,
+      "ring_tx_estimated_bytes_per_rank": 442368.0,
+      "useful_owner_payload_bytes": 0
+    },
+    "loss": {
+      "calls": 24,
+      "seconds": 0.12047296029049903,
+      "collective_input_bytes_per_rank": 96,
+      "ring_tx_estimated_bytes_per_rank": 172.79999999999995,
+      "useful_owner_payload_bytes": 96
+    },
+    "head_backward_metadata": {
+      "calls": 2,
+      "seconds": 0.006603916990570724,
+      "collective_input_bytes_per_rank": 16384,
+      "ring_tx_estimated_bytes_per_rank": 147456.0,
+      "useful_owner_payload_bytes": 0
+    },
+    "head_backward": {
+      "calls": 14,
+      "seconds": 0.05609862320125103,
+      "collective_input_bytes_per_rank": 21520,
+      "ring_tx_estimated_bytes_per_rank": 38736.0,
+      "useful_owner_payload_bytes": 21520
+    },
+    "stage_backward_metadata": {
+      "calls": 20,
+      "seconds": 0.06865671102423221,
+      "collective_input_bytes_per_rank": 163840,
+      "ring_tx_estimated_bytes_per_rank": 1474560.0,
+      "useful_owner_payload_bytes": 0
+    },
+    "stage_backward": {
+      "calls": 110,
+      "seconds": 0.8898782094474882,
+      "collective_input_bytes_per_rank": 143008,
+      "ring_tx_estimated_bytes_per_rank": 257414.3999999999,
+      "useful_owner_payload_bytes": 143008
+    },
+    "global_norm": {
+      "calls": 2,
+      "seconds": 0.018828042084351182,
+      "collective_input_bytes_per_rank": 8,
+      "ring_tx_estimated_bytes_per_rank": 14.4,
+      "useful_owner_payload_bytes": 0
+    }
+  },
+  "source_sha256": {
+    "model.hy": "10468ce593cbeea819de4f10ce14a175a6f29834b4de7e537e0591941422f9f1",
+    "train.hy": "538d80d3c3aff10f0f6175f60f09675b02d33fa3e31810cf919377f9e62978ec",
+    "nvme_master.hy": "5485bcf64ff1dfd005cefb32350ebb881e90abff960f7c07b242e46b9366384c",
+    "stream_checkpoint.hy": "526377a578423edcd0747879b58ec4a497b9bd7799f22560a2590b90ac5f9d56",
+    "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+    "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+    "process_memory.hy": "5f49f0f0f73d091c196431d7add8bfc76def7ab744326b6ff8b7b193001500f4",
+    "fleet_model.hy": "c088f92703baea563200c569d6e4871f8ca1f767e63a402a0800a1c19c856fd9",
+    "fleet_mesh.hy": "0a2d807d29224bb412d66a997ad4928fe31b15c2ccf7751ab7308446077c6f6f",
+    "fleet_pipeline.hy": "a47e991751ff6f089cc9c696a822468bd381a4948f24efa0577c5b93069b963e",
+    "optimizer_shards.hy": "acadb2aee3003ea7b4f093341d7a9606c7d19dfb1ffedf658cbe6141a8962a72",
+    "fleet_optimizer.hy": "dac6b38ba7ead351cd3e71362a46b1e01df39712c191d15eff22d2139d569296",
+    "repeat_checkpoint.hy": "d615e78fa7837f3df71743c747bd14db02dcd590639ec8904aa7941d9eda8b8c",
+    "repeat_train.hy": "90ae134c4c04865c1b2b17d7266cf91e7da0d162d062a3042c346ca4a085abe8"
+  },
+  "data_manifest_sha256": "abbeeeac4e69931808c7a93774f346710a22dfd5d3977136ed49b7198264f82a",
+  "initial_state_sha256": {
+    "weights": {
+      "blocks.3.attn_norm": "e817d8a97ca5f298db32bf0a77fc98567c509fe08f29c51ed5c2fdc666fd6bc8",
+      "blocks.3.ffn_norm": "275dd53bb065008f7dc6609b37f4944840538f8252bee1a55b5948ceecc1c5b0",
+      "blocks.3.q": "6782a83cdcec3fd8a3a491dc136d8a1e062d46ee5da51e00f3cec1815d4f4779",
+      "blocks.3.local_kv": "5e7ae4a37b956f44a544513385fc2d385455f8d28417dce5d804559de71ad84b",
+      "blocks.3.o": "2258a9e6d5d0b08e9b2c14cc567d5b37e34085efaeb6f590bbbe5fddcfca40fc",
+      "blocks.3.router": "156f11441f7a80deeeba4e6bbde6c8831cb28dceba594e8e93447770314d4f37",
+      "blocks.3.expert_gate": "14b2fbb5b845980096d111a4720642615a73969917e33210655db555a94358a2",
+      "blocks.3.expert_up": "21cd9b4b03b351919b710bd176a12fba7b50e9850ea80f550acbbd40b9fb70f7",
+      "blocks.3.expert_down": "96ddf4fed65afe9c049e4e8eaee919fc5267f1ffce4dd39692cd3cd54e451943",
+      "blocks.3.shared_gate": "6a2334a644ee953ef0208b2482b2f3144dbcf289e01a04b34c788b5d9a083bbe",
+      "blocks.3.shared_up": "a5dedcd880eb0a15173218e8f006d1ef9029b1016e273f1eeb2c7e49e0c79a25",
+      "blocks.3.shared_down": "f256070ed98030c4b835e6e49d3d71286895316a9fbb5158064acfa376d25267"
+    },
+    "master": {
+      "blocks.3.attn_norm": "e817d8a97ca5f298db32bf0a77fc98567c509fe08f29c51ed5c2fdc666fd6bc8",
+      "blocks.3.ffn_norm": "275dd53bb065008f7dc6609b37f4944840538f8252bee1a55b5948ceecc1c5b0",
+      "blocks.3.q": "6782a83cdcec3fd8a3a491dc136d8a1e062d46ee5da51e00f3cec1815d4f4779",
+      "blocks.3.local_kv": "5e7ae4a37b956f44a544513385fc2d385455f8d28417dce5d804559de71ad84b",
+      "blocks.3.o": "2258a9e6d5d0b08e9b2c14cc567d5b37e34085efaeb6f590bbbe5fddcfca40fc",
+      "blocks.3.router": "156f11441f7a80deeeba4e6bbde6c8831cb28dceba594e8e93447770314d4f37",
+      "blocks.3.expert_gate": "14b2fbb5b845980096d111a4720642615a73969917e33210655db555a94358a2",
+      "blocks.3.expert_up": "21cd9b4b03b351919b710bd176a12fba7b50e9850ea80f550acbbd40b9fb70f7",
+      "blocks.3.expert_down": "96ddf4fed65afe9c049e4e8eaee919fc5267f1ffce4dd39692cd3cd54e451943",
+      "blocks.3.shared_gate": "6a2334a644ee953ef0208b2482b2f3144dbcf289e01a04b34c788b5d9a083bbe",
+      "blocks.3.shared_up": "a5dedcd880eb0a15173218e8f006d1ef9029b1016e273f1eeb2c7e49e0c79a25",
+      "blocks.3.shared_down": "f256070ed98030c4b835e6e49d3d71286895316a9fbb5158064acfa376d25267"
+    },
+    "m": {
+      "blocks.3.attn_norm": "68029b11ffc378216dfa5e44fba6250fb202b79e05691adbb79c46a1abd6827e",
+      "blocks.3.ffn_norm": "bf80b3d8168e9f0f70b50f7ded20665f718db6c7b221615bf5acba259a06cec7",
+      "blocks.3.q": "cef2af9f0762693b8695cb244325c80aca18644042dabb15cf0d8510dbb5487f",
+      "blocks.3.local_kv": "a1b31b6756943a042a962cc223a5f137d3add51a4a821f5c0747fa77c6d6e6b1",
+      "blocks.3.o": "1d729351028ec55e1ac782d1543be751670a5c8f068e0fe5fd3e5b63501e473b",
+      "blocks.3.router": "c5b5a2907fc7f1ac56ee4b14aefc2970d72ff7f4197f2c10eb8f15df37e961b2",
+      "blocks.3.expert_gate": "8da56eac39e50de411dfceded2047754c1b8d8480ccdd3599dc9517fb623ddfa",
+      "blocks.3.expert_up": "e306833ed5627f1d3e7ac0abe86708dd8914c7aa9997577ce372b3ad4889348c",
+      "blocks.3.expert_down": "05220f3d100a6de5c97b9e3a0ae8bf833ff14272370dab2ed5c2f67b5236d3d3",
+      "blocks.3.shared_gate": "b27bce5421e2a6e47c0aadb7135ff3acb61071e1ea9b5a5c10b199cebcc459e7",
+      "blocks.3.shared_up": "57391dbd02c3909061787b296fd68643a39bcf84611ec992af0e46c8b2bd39da",
+      "blocks.3.shared_down": "23043729a35842686b8889a0aacf2bcf8cf4adca2c6d9b099dbc7d11e3ed4bdb"
+    },
+    "v": {
+      "blocks.3.attn_norm": "13e6efd9cc886dce9ab21a6f53c6a9a3749884b2ea3c1347ef8e9ccbd98b7dd2",
+      "blocks.3.ffn_norm": "516cbd41b45db6b348b9c92dee3258dc7654623d14a4323ea69a0842056443a1",
+      "blocks.3.q": "63d417b721f2fd9ca2f6115a41a9c612790148ea825813ede05b8688e42fdbc5",
+      "blocks.3.local_kv": "3f18e15dd46ac7e2a7c3f5a271cb86ddbc9dabf2318bb7daa7f89eca33302e27",
+      "blocks.3.o": "bd751ffe660162b7d9c4f3b8d64be65cd4fb65ce18277919c46a405ad51f7e11",
+      "blocks.3.router": "6a0532919a1a538f707f118054f41837b1850a1654377b87864d8e9fc47eedd0",
+      "blocks.3.expert_gate": "ce5c165b41c0f1e9483df614ae767e970dff9bbe1ea3a739aeed874ba5ff5b09",
+      "blocks.3.expert_up": "4f3ffb1913ba1c51c33ba893feb314113da39982deff78ee1baec96b2f14e805",
+      "blocks.3.expert_down": "04d1fba46f342a85d644d49c9eed6f93a7e8221648b23a4f7506af489df902d3",
+      "blocks.3.shared_gate": "6502e28a77179a911b8ef21769a8dc9a486e4935055814dadacf82639b7ccec6",
+      "blocks.3.shared_up": "080768aee8452c5c977f04d7812ca348d7d0a8450cbc7a1e10ca7b4768bde618",
+      "blocks.3.shared_down": "34d666f97b3ab4ce975cfbef22cea4768dc35934c376a23e6ef7353080c95826"
+    }
+  },
+  "final_state_sha256": {
+    "weights": {
+      "blocks.3.attn_norm": "eed14a6ddcb27ef1422a911e06bca385aa99408563d764dab266e7a49d4e7d17",
+      "blocks.3.ffn_norm": "d451143173b69ededb9170dee30f4a0ccaa4be2c11a99c2762c089cc8b82edb1",
+      "blocks.3.q": "8d36b84a730994d077192e758cbd58bdfc22003dd7d0da2e85ac45d6376009a3",
+      "blocks.3.local_kv": "e0ccf5a6a7dee8a655fb9e6e8ed27441501b077684785d23af337510c9dc9985",
+      "blocks.3.o": "a96cddaf493b5aa2db10fbcaf4719d80958c6c913ff98de137e2fae4aea0e4c9",
+      "blocks.3.router": "529ad687c86c26df521522f8a4d3909865ca9e8b435e492120dc5c14e5bf031f",
+      "blocks.3.expert_gate": "3741120c3ab95661329211614368bbaf392fa2d7fdc6ebcc374fc291aefc398e",
+      "blocks.3.expert_up": "fc1ec95e66145071483636cf880efef7d8a0db9a51d5459a80cf963a8cbfb2ff",
+      "blocks.3.expert_down": "eb5e5f5a3ffc8070352b3c8a38d72e73735dace971474e70a0ea905338cf20d3",
+      "blocks.3.shared_gate": "aa644fa54bf66e80de36d91b0ed419093d90e9b4c9f7e6cb604b6353ac0423ae",
+      "blocks.3.shared_up": "09884b33e724b81a49e9a334f6199c907b1a73eb51ebcce802ab49d5be4db3e2",
+      "blocks.3.shared_down": "77beef2ae6b825b89f32a1fe6421f6e03e5e43957d70bceea2b68ce13f9d0bef"
+    },
+    "master": {
+      "blocks.3.attn_norm": "eed14a6ddcb27ef1422a911e06bca385aa99408563d764dab266e7a49d4e7d17",
+      "blocks.3.ffn_norm": "d451143173b69ededb9170dee30f4a0ccaa4be2c11a99c2762c089cc8b82edb1",
+      "blocks.3.q": "8d36b84a730994d077192e758cbd58bdfc22003dd7d0da2e85ac45d6376009a3",
+      "blocks.3.local_kv": "e0ccf5a6a7dee8a655fb9e6e8ed27441501b077684785d23af337510c9dc9985",
+      "blocks.3.o": "a96cddaf493b5aa2db10fbcaf4719d80958c6c913ff98de137e2fae4aea0e4c9",
+      "blocks.3.router": "529ad687c86c26df521522f8a4d3909865ca9e8b435e492120dc5c14e5bf031f",
+      "blocks.3.expert_gate": "3741120c3ab95661329211614368bbaf392fa2d7fdc6ebcc374fc291aefc398e",
+      "blocks.3.expert_up": "fc1ec95e66145071483636cf880efef7d8a0db9a51d5459a80cf963a8cbfb2ff",
+      "blocks.3.expert_down": "eb5e5f5a3ffc8070352b3c8a38d72e73735dace971474e70a0ea905338cf20d3",
+      "blocks.3.shared_gate": "aa644fa54bf66e80de36d91b0ed419093d90e9b4c9f7e6cb604b6353ac0423ae",
+      "blocks.3.shared_up": "09884b33e724b81a49e9a334f6199c907b1a73eb51ebcce802ab49d5be4db3e2",
+      "blocks.3.shared_down": "77beef2ae6b825b89f32a1fe6421f6e03e5e43957d70bceea2b68ce13f9d0bef"
+    },
+    "m": {
+      "blocks.3.attn_norm": "646630a31c4ebbb93b0051bc14e4c3e891e199de0d4a2c99c4924608af15ff38",
+      "blocks.3.ffn_norm": "2b747ff92b19b55c5e1c5d491eb07d3f2480b15bd57e255b16d63f65c965b891",
+      "blocks.3.q": "24796a564f899d830dda0fe4a3532cb960e7874ee262ea5658d4caee8dcc417f",
+      "blocks.3.local_kv": "b653519f0c237c5fa9e30e04bf42ad390b92f5c66f6dc23d5aafe385de92fc7c",
+      "blocks.3.o": "570ed618e718f419a6c9f7cea45daac9365854c3cf01ddf085cb2b730de6262c",
+      "blocks.3.router": "675f6e0f2e9dd83b95c8496b4cee26b13b82903b98e83d4c395f72ee503dc7d7",
+      "blocks.3.expert_gate": "af99793a3bc0749388c60785427e7902f1780e536a589354a991ec4e6461b89d",
+      "blocks.3.expert_up": "0616b0e178dc814db57be80e7d01b950c548be7f3d1f59be051a700f24006ae3",
+      "blocks.3.expert_down": "1b5f0a33f33d1e8a185b4f8b035882cd99abfe8cbcb4e3847edda8d381ae25e0",
+      "blocks.3.shared_gate": "c2c6cbe31083a5bb366d20c04366d7019202d02905d2acc97c1630205ec6cbec",
+      "blocks.3.shared_up": "39456e532e6951cb305ca905daa921dd532004d9147d83a6d69fc0dd1a49351e",
+      "blocks.3.shared_down": "58cb9859e7c9204874fc17d644b6d4baf1756206ac9addc244856af83c5a141c"
+    },
+    "v": {
+      "blocks.3.attn_norm": "89c081617474bcd42f5688eaba4ac173e5629beec874837c604a48ce6075f153",
+      "blocks.3.ffn_norm": "818d76227b8aa19823247f299b3421c529e670543c491846916b7fe5ca10247a",
+      "blocks.3.q": "6b4d80d10fc73250caa01d129d3e088ff7051a08ff9c28a69e3d7eed89b5b154",
+      "blocks.3.local_kv": "1aeb3d58527fb9f5f97bccf114e25f0ccf73574720305546dd50ece384234fab",
+      "blocks.3.o": "24d9eca39a0da25860b5a060a8d266b7699721e9299a92a770de70dc47176c24",
+      "blocks.3.router": "a95bb856055f02f89d1050e4cc5809ef31bd0f996aff3c70bd2865fb6bf5d550",
+      "blocks.3.expert_gate": "4d447da089d84cd474ed91b7cf960c375e04e2befda4cfae8dd807e2b5d12301",
+      "blocks.3.expert_up": "7a445c141ca8da18e0e51ba43850ec4c1c88791a06a6e73faec96d0a19847f4a",
+      "blocks.3.expert_down": "3a03b12a9b51fa55dfffd3f54c62314a891ccd6b553fb08ae6f3cb136d7b5011",
+      "blocks.3.shared_gate": "559f557870a03638382f40877e50dc3e11276f7985e29e4b995e2dd763ada8c3",
+      "blocks.3.shared_up": "cac7f670103d0a02caa494a185ac5d654bf326d5e24e5827f1508675d9b6bbce",
+      "blocks.3.shared_down": "96e480aa937723d94ffd2fb99cdff96e9ae1cff429aa31795cae0ec098174fd4"
+    }
+  },
+  "fingerprint_scope": "allweights/master/m/v, littleendianFP32logicalvaluebytes; BF16weights losslesslypromoted, not checkpointfilehash; hashreads counted separately",
+  "fingerprint_state_reads": {
+    "initial": {
+      "master": 233984,
+      "m": 233984,
+      "v": 233984
+    },
+    "final": {
+      "master": 233984,
+      "m": 233984,
+      "v": 233984
+    }
+  },
+  "logical_optimizer_io": {
+    "read_bytes": {
+      "master": 935936,
+      "m": 935936,
+      "v": 935936
+    },
+    "write_bytes": {
+      "master": 467968,
+      "m": 467968,
+      "v": 467968
+    },
+    "restore_file_bytes": {
+      "master": 235099,
+      "m": 235099,
+      "v": 235099
+    }
+  },
+  "process_memory": {
+    "resident_bytes": 128614400,
+    "phys_footprint_bytes": 136938192,
+    "lifetime_peak_phys_footprint_bytes": 139002576,
+    "disk_read_bytes": 0,
+    "disk_write_bytes": 1155072
+  },
+  "mlx_peak_bytes": 2892628,
+  "process_io": {
+    "read_bytes": 0,
+    "write_bytes": 1155072
+  },
+  "interface_delta": {
+    "rx": 10501690,
+    "tx": 10447675
+  },
+  "wire_bytes": null,
+  "network_scope": "whole en0; background/control included",
+  "memory_enforcer": {
+    "backend": "xnu-memorystatus-fatal-footprint",
+    "pid": 29460,
+    "uid": 501,
+    "active_limit_mib": 1024,
+    "inactive_limit_mib": 1024,
+    "active_fatal": true,
+    "inactive_fatal": true,
+    "readback_verified": true,
+    "requested_bytes": 2147483648,
+    "kernel_limit_bytes": 1073741824,
+    "safety_reserve_bytes": 1073741824,
+    "qualification_source_sha256": {
+      "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+      "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+      "check_kernel_limit.hy": "4b0726ca40aed85b2876baa9dc9801cce20f9f48b3b029020b69a8618cc9abdb"
+    },
+    "qualification_sha256": "e5d58159fcd0afc540cdd8f9232d5e1db6fcc6564ecf8796007bdd2be44cc92e"
+  },
+  "scope": "serial owner-state optimizer study; no pipeline overlap, EP or layout-changing resume"
+}

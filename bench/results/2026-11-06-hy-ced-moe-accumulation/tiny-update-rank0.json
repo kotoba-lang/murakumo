@@ -1,0 +1,166 @@
+{
+  "schema": "ced-moe-replicated-trial/v2",
+  "status": "complete",
+  "mode": "ddp",
+  "preset": "tiny",
+  "rank": 0,
+  "world_size": 2,
+  "host": "naphtalinoMac-mini.local",
+  "device": {
+    "device_name": "Apple M4",
+    "max_recommended_working_set_size": 12713115648,
+    "memory_size": 17179869184,
+    "architecture": "applegpu_g16g",
+    "max_buffer_length": 9534832640,
+    "resource_limit": 499000
+  },
+  "global_microbatches": 8,
+  "local_batch": 1,
+  "sequence": 16,
+  "steps": 2,
+  "accumulation_steps": 4,
+  "sync_frequency": "update",
+  "gradient_accumulation_dtype": "float32",
+  "objective_semantics": "mean of 2*accumulation_steps rank-local objectives, including local balancing",
+  "global_training_tokens": 256,
+  "local_tokens": 128,
+  "training_phase_seconds": 0.8240270419628359,
+  "training_global_tokens_per_second": 310.6694161276636,
+  "process_seconds_including_init_and_verification": 1.1284854589612223,
+  "lineage": null,
+  "source_sha256": {
+    "model.hy": "10468ce593cbeea819de4f10ce14a175a6f29834b4de7e537e0591941422f9f1",
+    "train.hy": "538d80d3c3aff10f0f6175f60f09675b02d33fa3e31810cf919377f9e62978ec",
+    "nvme_master.hy": "5485bcf64ff1dfd005cefb32350ebb881e90abff960f7c07b242e46b9366384c",
+    "stream_checkpoint.hy": "526377a578423edcd0747879b58ec4a497b9bd7799f22560a2590b90ac5f9d56",
+    "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+    "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+    "process_memory.hy": "5f49f0f0f73d091c196431d7add8bfc76def7ab744326b6ff8b7b193001500f4",
+    "distributed_trial.hy": "4d7f1c703dcc8d92d22eac79429d0b9e427b1ecd4cf51d6e05a18d5f99a521ad",
+    "ddp_ops.hy": "2cd0aeeacb584184cdf9141554a19a8a48fbaef7f9dc79d580be88c9b7228661",
+    "accumulation_ops.hy": "1b9df87d69a7d9738a4a8ac9ccd0d51122aa334bd15e39068aca931f0983a790"
+  },
+  "data_manifest_sha256": "abbeeeac4e69931808c7a93774f346710a22dfd5d3977136ed49b7198264f82a",
+  "input_hashes": [
+    "405f51557d88acf94e7ebb802fde306fcd8bf14dad225665471dcec5fe4d8cbc",
+    "d723f391cfd5a82087bbb390f986cbb96ce86aab583c5ae16d083ac9b5a71e63",
+    "a439cccc84f8f549eb7f252b83cef39946242ff6ac353c679ec4eebf363fede0",
+    "4e9ee987202d9d119613e2323dbc58841c2b122c9fac928a1ef84c10b73374eb",
+    "be9c946213a598eff40fa4cb38dde7d66fd3828b67c1d6736abc83fde56cb0ac",
+    "1bef37f8ebaf82e545c1aff41c9a07e2203d5d1f9e1dcf3e3ac4cca637d2700a",
+    "13ba3dac9310e8a4f69956b5e63aa2bcd8d2a75af728ce90006eaf1fafc848a2",
+    "8209ef2b74c904b0f9f3beba13f61749975cdc39e963bd079b1997c5534d5c32"
+  ],
+  "trace": [
+    {
+      "trial_step": 1,
+      "global_tokens": 128,
+      "mean_local_objective": 10.640707015991211,
+      "gradient_norm": 5.357065200805664,
+      "compute_seconds": 0.21504591696429998,
+      "gradient_communication_seconds": 0.13708066701656207,
+      "optimizer_and_finish_sync_seconds": 0.06479470798512921,
+      "step_seconds": 0.4169213749701157,
+      "collectives": {
+        "logical_gradient_bytes": 11230464,
+        "collectives": 1,
+        "gradient_synchronizations": 1,
+        "ring_tx_estimated_bytes": 11230464.0,
+        "bucket_limit_bytes": 67108864
+      },
+      "process_memory": {
+        "resident_bytes": 162562048,
+        "phys_footprint_bytes": 171426560,
+        "lifetime_peak_phys_footprint_bytes": 204849920,
+        "disk_read_bytes": 12288,
+        "disk_write_bytes": 34848768
+      },
+      "mlx_peak_bytes": 56024620
+    },
+    {
+      "trial_step": 2,
+      "global_tokens": 256,
+      "mean_local_objective": 10.656732559204102,
+      "gradient_norm": 4.680152893066406,
+      "compute_seconds": 0.20737233303952962,
+      "gradient_communication_seconds": 0.13547445798758417,
+      "optimizer_and_finish_sync_seconds": 0.06289537495467812,
+      "step_seconds": 0.4057422499754466,
+      "collectives": {
+        "logical_gradient_bytes": 11230464,
+        "collectives": 1,
+        "gradient_synchronizations": 1,
+        "ring_tx_estimated_bytes": 11230464.0,
+        "bucket_limit_bytes": 67108864
+      },
+      "process_memory": {
+        "resident_bytes": 163151872,
+        "phys_footprint_bytes": 171803392,
+        "lifetime_peak_phys_footprint_bytes": 205357824,
+        "disk_read_bytes": 20480,
+        "disk_write_bytes": 46649344
+      },
+      "mlx_peak_bytes": 56024620
+    }
+  ],
+  "initial_validation_ce": 10.434348106384277,
+  "final_validation_ce": 10.43392038345337,
+  "logical_gradient_bytes": 22460928,
+  "ring_tx_estimated_bytes": 22460928.0,
+  "wire_bytes": null,
+  "interface": "en0",
+  "interface_delta": {
+    "rx": 23798785,
+    "tx": 23685770
+  },
+  "network_counter_scope": "whole interface; background/control traffic included",
+  "process_io": {
+    "read": 45056,
+    "write": 69144576
+  },
+  "logical_master_io": {
+    "read_bytes": 33691392,
+    "write_bytes": 33691392,
+    "restore_file_bytes": 0
+  },
+  "memory_enforcer": {
+    "backend": "xnu-memorystatus-fatal-footprint",
+    "pid": 91584,
+    "uid": 501,
+    "active_limit_mib": 1024,
+    "inactive_limit_mib": 1024,
+    "active_fatal": true,
+    "inactive_fatal": true,
+    "readback_verified": true,
+    "requested_bytes": 2147483648,
+    "kernel_limit_bytes": 1073741824,
+    "safety_reserve_bytes": 1073741824,
+    "qualification_source_sha256": {
+      "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+      "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+      "check_kernel_limit.hy": "4b0726ca40aed85b2876baa9dc9801cce20f9f48b3b029020b69a8618cc9abdb"
+    },
+    "qualification_sha256": "0269a41390df500bab4ba824bb3ef0633559435fc2b23766dcca9bfee08bd8a8"
+  },
+  "process_memory": {
+    "resident_bytes": 151814144,
+    "phys_footprint_bytes": 162431744,
+    "lifetime_peak_phys_footprint_bytes": 205357824,
+    "disk_read_bytes": 45056,
+    "disk_write_bytes": 69144576
+  },
+  "mlx_peak_bytes": 56024620,
+  "weight_sha256": "c5d8c5fc64b95e8905e5887f16f98ee49cdd317e6a57c49fd6da56caae7ecc63",
+  "master_sha256": "d5e112c3a8c9aa30ab0513eb903f28a24d879c91eb8e3a910c1ad6d1ef56719c",
+  "replica_hashes": [
+    [
+      "c5d8c5fc64b95e8905e5887f16f98ee49cdd317e6a57c49fd6da56caae7ecc63",
+      "d5e112c3a8c9aa30ab0513eb903f28a24d879c91eb8e3a910c1ad6d1ef56719c"
+    ],
+    [
+      "c5d8c5fc64b95e8905e5887f16f98ee49cdd317e6a57c49fd6da56caae7ecc63",
+      "d5e112c3a8c9aa30ab0513eb903f28a24d879c91eb8e3a910c1ad6d1ef56719c"
+    ]
+  ],
+  "scope": "replicated DDP; no model-state pooling or global checkpoint"
+}

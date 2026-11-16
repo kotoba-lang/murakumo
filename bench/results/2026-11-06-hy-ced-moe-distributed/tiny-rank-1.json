@@ -1,0 +1,154 @@
+{
+  "schema": "ced-moe-replicated-trial/v1",
+  "status": "complete",
+  "mode": "ddp",
+  "preset": "tiny",
+  "rank": 1,
+  "world_size": 2,
+  "host": "issacharnoMac-mini.local",
+  "device": {
+    "device_name": "Apple M4",
+    "max_recommended_working_set_size": 16106127360,
+    "memory_size": 17179869184,
+    "architecture": "applegpu_g16g",
+    "max_buffer_length": 9534832640,
+    "resource_limit": 499000
+  },
+  "global_microbatches": 2,
+  "local_batch": 1,
+  "sequence": 16,
+  "steps": 2,
+  "objective_semantics": "mean of two rank-local objectives, including local balancing",
+  "global_training_tokens": 64,
+  "local_tokens": 32,
+  "training_phase_seconds": 1.1571232920396142,
+  "training_global_tokens_per_second": 55.309577155939714,
+  "process_seconds_including_init_and_verification": 1.79438208299689,
+  "lineage": null,
+  "source_sha256": {
+    "model.hy": "10468ce593cbeea819de4f10ce14a175a6f29834b4de7e537e0591941422f9f1",
+    "train.hy": "538d80d3c3aff10f0f6175f60f09675b02d33fa3e31810cf919377f9e62978ec",
+    "nvme_master.hy": "5485bcf64ff1dfd005cefb32350ebb881e90abff960f7c07b242e46b9366384c",
+    "stream_checkpoint.hy": "526377a578423edcd0747879b58ec4a497b9bd7799f22560a2590b90ac5f9d56",
+    "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+    "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+    "process_memory.hy": "5f49f0f0f73d091c196431d7add8bfc76def7ab744326b6ff8b7b193001500f4",
+    "distributed_trial.hy": "a257ad97b5e054d82650de1eb965dcdd5ab902fbcfadf7fd65081b3917a14faa",
+    "ddp_ops.hy": "2cd0aeeacb584184cdf9141554a19a8a48fbaef7f9dc79d580be88c9b7228661"
+  },
+  "data_manifest_sha256": "abbeeeac4e69931808c7a93774f346710a22dfd5d3977136ed49b7198264f82a",
+  "input_hashes": [
+    "d1c34742b21e08e06b9e32a40ceb106957d7f935e05f4ad2e37ab663dce36ae7",
+    "e235be4aeafe5a6d85022373922c955b41085b237af44535ba2598735e8f6275"
+  ],
+  "trace": [
+    {
+      "trial_step": 1,
+      "global_tokens": 32,
+      "mean_local_objective": 10.641502380371094,
+      "gradient_norm": 9.226174354553223,
+      "compute_seconds": 0.7181507080094889,
+      "gradient_communication_seconds": 0.13688641699263826,
+      "optimizer_and_finish_sync_seconds": 0.10661324998363853,
+      "step_seconds": 0.9616505830199458,
+      "collectives": {
+        "logical_gradient_bytes": 11230464,
+        "collectives": 1,
+        "ring_tx_estimated_bytes": 11230464.0,
+        "bucket_limit_bytes": 67108864
+      },
+      "process_memory": {
+        "resident_bytes": 153632768,
+        "phys_footprint_bytes": 162464512,
+        "lifetime_peak_phys_footprint_bytes": 207389440,
+        "disk_read_bytes": 6647808,
+        "disk_write_bytes": 36519936
+      },
+      "mlx_peak_bytes": 56024620
+    },
+    {
+      "trial_step": 2,
+      "global_tokens": 64,
+      "mean_local_objective": 10.644947052001953,
+      "gradient_norm": 7.972971439361572,
+      "compute_seconds": 0.026074666006024927,
+      "gradient_communication_seconds": 0.10655787499854341,
+      "optimizer_and_finish_sync_seconds": 0.06147995899664238,
+      "step_seconds": 0.19411266600945964,
+      "collectives": {
+        "logical_gradient_bytes": 11230464,
+        "collectives": 1,
+        "ring_tx_estimated_bytes": 11230464.0,
+        "bucket_limit_bytes": 67108864
+      },
+      "process_memory": {
+        "resident_bytes": 165642240,
+        "phys_footprint_bytes": 174392088,
+        "lifetime_peak_phys_footprint_bytes": 207946520,
+        "disk_read_bytes": 6656000,
+        "disk_write_bytes": 48320512
+      },
+      "mlx_peak_bytes": 56024620
+    }
+  ],
+  "initial_validation_ce": 10.434348106384277,
+  "final_validation_ce": 10.43391752243042,
+  "logical_gradient_bytes": 22460928,
+  "ring_tx_estimated_bytes": 22460928.0,
+  "wire_bytes": null,
+  "interface": "en0",
+  "interface_delta": {
+    "rx": 23642089,
+    "tx": 23673028
+  },
+  "network_counter_scope": "whole interface; background/control traffic included",
+  "process_io": {
+    "read": 765952,
+    "write": 70717440
+  },
+  "logical_master_io": {
+    "read_bytes": 33691392,
+    "write_bytes": 33691392,
+    "restore_file_bytes": 0
+  },
+  "memory_enforcer": {
+    "backend": "xnu-memorystatus-fatal-footprint",
+    "pid": 56352,
+    "uid": 501,
+    "active_limit_mib": 1024,
+    "inactive_limit_mib": 1024,
+    "active_fatal": true,
+    "inactive_fatal": true,
+    "readback_verified": true,
+    "requested_bytes": 2147483648,
+    "kernel_limit_bytes": 1073741824,
+    "safety_reserve_bytes": 1073741824,
+    "qualification_source_sha256": {
+      "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+      "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+      "check_kernel_limit.hy": "4b0726ca40aed85b2876baa9dc9801cce20f9f48b3b029020b69a8618cc9abdb"
+    },
+    "qualification_sha256": "44584a91edf7dbee2d04cdf3d59a6ffdccbcd58cfc5a57c57e299e5837b2d183"
+  },
+  "process_memory": {
+    "resident_bytes": 154320896,
+    "phys_footprint_bytes": 165036824,
+    "lifetime_peak_phys_footprint_bytes": 207946520,
+    "disk_read_bytes": 6737920,
+    "disk_write_bytes": 70815744
+  },
+  "mlx_peak_bytes": 56024620,
+  "weight_sha256": "0da7d070c48d45f74a8752a819e6d9a300919addec1adc5c6a1efd002a5e229c",
+  "master_sha256": "1df2ab83f34beba4eefd51c1392570d0544b2ebb3713be731d5d0f1ac89cb96b",
+  "replica_hashes": [
+    [
+      "0da7d070c48d45f74a8752a819e6d9a300919addec1adc5c6a1efd002a5e229c",
+      "1df2ab83f34beba4eefd51c1392570d0544b2ebb3713be731d5d0f1ac89cb96b"
+    ],
+    [
+      "0da7d070c48d45f74a8752a819e6d9a300919addec1adc5c6a1efd002a5e229c",
+      "1df2ab83f34beba4eefd51c1392570d0544b2ebb3713be731d5d0f1ac89cb96b"
+    ]
+  ],
+  "scope": "replicated DDP; no model-state pooling or global checkpoint"
+}

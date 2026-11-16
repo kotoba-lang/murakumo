@@ -1,0 +1,93 @@
+{
+  "schema": "ced-moe-guarded-comparison/v1",
+  "date": "2026-11-06",
+  "source_revision": "ada22acc",
+  "source_sha256": {
+    "model.hy": "10468ce593cbeea819de4f10ce14a175a6f29834b4de7e537e0591941422f9f1",
+    "train.hy": "5ee78c1f1d4c87121178041c8f5b914056baf228d3846d8d3dede76a377f4a8b",
+    "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+    "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+    "nvme_master.hy": "e38bd3b572f9dd40a778bc268805e9a99504a1b9091b6ad311b92d8c007fd836",
+    "process_memory.hy": "5f49f0f0f73d091c196431d7add8bfc76def7ab744326b6ff8b7b193001500f4"
+  },
+  "host": "fleet naphtali / Apple M4 / 16GiB",
+  "developer_mac_training": false,
+  "requested_ceiling_bytes": 10737418240,
+  "kernel_fatal_footprint_limit_bytes": 9663676416,
+  "dataset_manifest_sha256": "abbeeeac4e69931808c7a93774f346710a22dfd5d3977136ed49b7198264f82a",
+  "optimizer": "sgd",
+  "weight_dtype": "bfloat16",
+  "master_dtype": "float32",
+  "master_offload": "nvme",
+  "activation_checkpoint": true,
+  "expert_token_chunk": 64,
+  "batch": 1,
+  "steps_per_run": 4,
+  "checkpoint_saved": false,
+  "outer_deadline_seconds": 120,
+  "cache_condition": "not cold-reset; OS page cache/SSD effects are uncontrolled",
+  "execution_order": [
+    512,
+    256
+  ],
+  "evidence_validation": "per-run rates, tokens, caps and exit receipts checked",
+  "trials": [
+    {
+      "context": 256,
+      "steps": 4,
+      "tokens": 1024,
+      "training_phase_seconds": 29.75960829097312,
+      "training_phase_tokens_per_second": 34.40905505166231,
+      "run_seconds_including_setup": 33.12635829200735,
+      "mlx_peak_bytes": 7253135800,
+      "lifetime_process_footprint_peak_bytes": 7415350112,
+      "initial_validation_ce": 10.473758697509766,
+      "final_validation_ce": 10.463567733764648,
+      "logical_offload_io": {
+        "logical_read_bytes": 16699174912,
+        "logical_write_bytes": 20873968640,
+        "checkpoint": false
+      },
+      "physical_process_io": {
+        "read_bytes": 3279405056,
+        "write_bytes": 20877619200
+      },
+      "system_swap_before_mib": 1809.88,
+      "system_swap_after_mib": 1809.88,
+      "status": "four_steps_completed_within_memory_budget"
+    },
+    {
+      "context": 512,
+      "steps": 4,
+      "tokens": 2048,
+      "training_phase_seconds": 52.551589749986306,
+      "training_phase_tokens_per_second": 38.9712282681331,
+      "run_seconds_including_setup": 56.28545937500894,
+      "mlx_peak_bytes": 9417892688,
+      "lifetime_process_footprint_peak_bytes": 9623552984,
+      "initial_validation_ce": 10.550695419311523,
+      "final_validation_ce": 10.559019088745117,
+      "logical_offload_io": {
+        "logical_read_bytes": 16699174912,
+        "logical_write_bytes": 20873968640,
+        "checkpoint": false
+      },
+      "physical_process_io": {
+        "read_bytes": 12529647616,
+        "write_bytes": 20877668352
+      },
+      "system_swap_before_mib": 1809.88,
+      "system_swap_after_mib": 1809.88,
+      "status": "four_steps_completed_within_memory_budget"
+    }
+  ],
+  "limitations": [
+    "single host, not distributed 1B",
+    "four steps are not convergence or sustained performance",
+    "different contexts use different held-out samples",
+    "30B duration remains insufficient_calibration",
+    "NVMe checkpoint/resume and AdamW offload unsupported",
+    "BF16 end-to-end bitwise reproducibility unqualified",
+    "kernel kill-on-limit, not a pre-allocation quota or whole-host reservation"
+  ]
+}

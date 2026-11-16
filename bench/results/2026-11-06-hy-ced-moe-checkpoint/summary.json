@@ -1,0 +1,240 @@
+{
+  "schema": "ced-moe-checkpoint-longer-pilot/v1",
+  "date": "2026-11-06",
+  "executing_source_revision": "54f10c9c",
+  "source_sha256": {
+    "model.hy": "10468ce593cbeea819de4f10ce14a175a6f29834b4de7e537e0591941422f9f1",
+    "train.hy": "538d80d3c3aff10f0f6175f60f09675b02d33fa3e31810cf919377f9e62978ec",
+    "nvme_master.hy": "5485bcf64ff1dfd005cefb32350ebb881e90abff960f7c07b242e46b9366384c",
+    "stream_checkpoint.hy": "526377a578423edcd0747879b58ec4a497b9bd7799f22560a2590b90ac5f9d56",
+    "memory_policy.hy": "79b46b4a45280b3e4d9e676ee18d0a680a3d9244e78587e0f73b6f3b18ce7961",
+    "memory_limit_helper.hy": "ca0964147a1c3185708db53272e033e839a8499903c6326b62c8883bb586b422",
+    "process_memory.hy": "5f49f0f0f73d091c196431d7add8bfc76def7ab744326b6ff8b7b193001500f4"
+  },
+  "source_unchanged_across_restart": true,
+  "host": "fleet naphtali, Apple M4,16GiB",
+  "developer_mac_training": false,
+  "model_total_parameters": 1043698432,
+  "config": {
+    "name": "1b",
+    "width": 768,
+    "layers": 16,
+    "experts": 64,
+    "ff": 416,
+    "heads": 12,
+    "head_dim": 64,
+    "vocab": 32768,
+    "top_k": 4,
+    "index_dim": 32,
+    "index_top_k": 16,
+    "window": 128,
+    "encoder_compression": 2,
+    "expert_token_chunk": 64,
+    "index_loss_weight": 0.01,
+    "balance_loss_weight": 0.01,
+    "activation_checkpoint": true
+  },
+  "optimizer": "sgd",
+  "lr": 0.001,
+  "master_dtype": "float32",
+  "master_offload": "nvme",
+  "total_steps": 64,
+  "total_processed_training_tokens": 16384,
+  "requested_ceiling_bytes": 10737418240,
+  "kernel_fatal_threshold_bytes": 9663676416,
+  "peak_kernel_footprint_bytes": 7419562552,
+  "peak_mlx_allocator_bytes": 7253135800,
+  "training_objective": {
+    "definition": "CE plus index/router auxiliary losses; means over different sampled batches",
+    "first_8_mean": 11.02557373046875,
+    "last_8_mean": 10.983851552009583,
+    "decreased": true
+  },
+  "fixed_validation": {
+    "tokens": 2048,
+    "batches": 8,
+    "sequence": 256,
+    "seed": 936,
+    "initial_ce": 10.539889812469482,
+    "final_ce": 10.545209884643555,
+    "delta_ce": 0.005320072174072266,
+    "improved": false,
+    "events": [
+      {
+        "step": 0,
+        "validation_ce": 10.539889812469482
+      },
+      {
+        "step": 8,
+        "validation_ce": 10.543117046356201,
+        "seconds": 1.6714180830167606
+      },
+      {
+        "step": 16,
+        "validation_ce": 10.533074617385864,
+        "seconds": 1.6807630420080386
+      },
+      {
+        "step": 24,
+        "validation_ce": 10.53735101222992,
+        "seconds": 1.688501416996587
+      },
+      {
+        "step": 32,
+        "validation_ce": 10.538034439086914,
+        "seconds": 1.6736052499618381
+      },
+      {
+        "step": 40,
+        "validation_ce": 10.537444114685059,
+        "seconds": 1.6811591670266353
+      },
+      {
+        "step": 48,
+        "validation_ce": 10.541115522384644,
+        "seconds": 1.6782604160252959
+      },
+      {
+        "step": 56,
+        "validation_ce": 10.537052750587463,
+        "seconds": 1.6717144579743035
+      },
+      {
+        "step": 64,
+        "validation_ce": 10.545209884643555,
+        "seconds": 1.6908706669928506
+      }
+    ]
+  },
+  "restart": {
+    "checkpoint_step": 32,
+    "checkpoint_tokens": 8192,
+    "ce_before": 10.538034439086914,
+    "ce_after": 10.538034439086914,
+    "ce_exact": true,
+    "load_seconds": 4.320234707964119,
+    "bf16_end_to_end_bitwise_qualified": false
+  },
+  "timing": {
+    "summed_training_process_seconds": 631.340129249962,
+    "summed_supervisor_seconds": 631.829331041954,
+    "effective_tokens_per_second_using_supervisors": 25.931053205429755,
+    "effective_tokens_per_second_using_train_runs": 25.95114620618896,
+    "wall_from_first_before_to_final_after_seconds": 706,
+    "wall_tokens_per_second_including_interphase_recording": 23.206798866855525,
+    "note": "supervisor sums include init/eval/checkpoint/reload; exclude interphase Git/Linear/evidence-recording pause"
+  },
+  "process_io_totals": {
+    "read_bytes": 161212403712,
+    "write_bytes": 300633673728,
+    "scope": "kernel per-process disk-I/O counters; includes optimizer/checkpoint activity, not whole-SSD device totals; postrun readback verification excluded"
+  },
+  "system_swap_mib": {
+    "before_A": 1809.88,
+    "after_A": 1809.88,
+    "before_B": 1809.88,
+    "after_B": 1809.88
+  },
+  "phases": [
+    {
+      "phase": "A",
+      "steps": 32,
+      "initial_step": 0,
+      "final_step": 32,
+      "tokens": 8192,
+      "training_phase_seconds": 280.4023374999524,
+      "training_phase_tokens_per_second": 29.215163015541517,
+      "end_to_end_seconds": 286.96357595798327,
+      "end_to_end_tokens_per_second": 28.547177015941074,
+      "checkpoint_load_seconds": 0,
+      "checkpoint_save_seconds": 20.996302541985642,
+      "optimizer_step_seconds": 252.68131533096312,
+      "mlx_peak_bytes": 7253135800,
+      "kernel_lifetime_footprint_peak_bytes": 7419562552,
+      "process_io": {
+        "read_bytes": 58812284928,
+        "write_bytes": 150313689088
+      },
+      "logical_master_io": {
+        "logical_read_bytes": 133593399296,
+        "logical_write_bytes": 137768193024,
+        "restore_copied_file_bytes": 0
+      },
+      "checkpoints": [
+        {
+          "path": "long1b-part-a/checkpoint-16-rank-0",
+          "step": 16,
+          "seconds": 13.281395166995935,
+          "file_bytes": 6262230306,
+          "state_sha256": "95505006cf18c142cb5a654d5f18c67fc2022eb7238e2b5e1849f3e89a9fe4e0",
+          "schema": "ced-moe-nvme-checkpoint/v2"
+        },
+        {
+          "path": "long1b-part-a/checkpoint-32-rank-0",
+          "step": 32,
+          "seconds": 7.714907374989707,
+          "file_bytes": 6262230306,
+          "state_sha256": "deb86137aa306ccda33cc014e7587363c8afffe0ce1219997a6080c8e3a084dc",
+          "schema": "ced-moe-nvme-checkpoint/v2"
+        }
+      ]
+    },
+    {
+      "phase": "B",
+      "steps": 32,
+      "initial_step": 32,
+      "final_step": 64,
+      "tokens": 8192,
+      "training_phase_seconds": 336.5274634169764,
+      "training_phase_tokens_per_second": 24.342738381056446,
+      "end_to_end_seconds": 344.3765532919788,
+      "end_to_end_tokens_per_second": 23.78791448398763,
+      "checkpoint_load_seconds": 4.320234707964119,
+      "checkpoint_save_seconds": 23.88703754200833,
+      "optimizer_step_seconds": 305.8772630849853,
+      "mlx_peak_bytes": 7252496816,
+      "kernel_lifetime_footprint_peak_bytes": 7419380648,
+      "process_io": {
+        "read_bytes": 102400118784,
+        "write_bytes": 150319984640
+      },
+      "logical_master_io": {
+        "logical_read_bytes": 133593399296,
+        "logical_write_bytes": 133593399296,
+        "restore_copied_file_bytes": 4174813516
+      },
+      "checkpoints": [
+        {
+          "path": "long1b-part-b/checkpoint-48-rank-0",
+          "step": 48,
+          "seconds": 12.736481542000547,
+          "file_bytes": 6262230306,
+          "state_sha256": "9245be990d3e18bc2f98a7db5fb60df2743ff5df1477a6988a5d77188c1c12b2",
+          "schema": "ced-moe-nvme-checkpoint/v2"
+        },
+        {
+          "path": "long1b-part-b/checkpoint-64-rank-0",
+          "step": 64,
+          "seconds": 11.150556000007782,
+          "file_bytes": 6262230306,
+          "state_sha256": "1d4e5c2b6a4c41aa59c1ce97bcf97d4c62c0f6905aeac63acf8719992aef8588",
+          "schema": "ced-moe-nvme-checkpoint/v2"
+        }
+      ]
+    }
+  ],
+  "final_checkpoint": {
+    "host": "naphtali",
+    "task_relative_path": "long1b-part-b/checkpoint-64-rank-0",
+    "file_bytes": 6262230306,
+    "state_sha256": "1d4e5c2b6a4c41aa59c1ce97bcf97d4c62c0f6905aeac63acf8719992aef8588"
+  },
+  "limitations": [
+    "validation CE did not improve; training objective decrease includes auxiliary terms",
+    "not convergence or useful1B pretraining",
+    "BF16 independent-continuation bitwise behavior unqualified",
+    "single fleet member, not distributed1B scaling",
+    "OS cache not cold-reset; SSD-throttling causes not measured",
+    "3B/global distributed checkpoint/AdamW offload/30B calibration unqualified"
+  ]
+}
