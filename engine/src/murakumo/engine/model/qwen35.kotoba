@@ -591,7 +591,7 @@
 ;; drafted block of bs (the last token, then bs - 1 drafts); the bs-token verify pass, which captures its rows and saves its
 ;; delta-rule inputs. Draft j + 1 is accepted while it equals the verify argmax j; the cycle emits the verify argmaxes
 ;; up to the first rejected draft's position. Returns [t0 t1 t2 cycles accepted].
-(defn- dflash-gen [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 D :vector-i64 ids :vector-i64 steps :i64 nl :i64 out :vector-i64 now :i64 bs :i64] :vector-i64
+(defn- dflash-gen [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 D :vector-i64 ids :vector-i64 steps :i64 nl :i64 out :vector-i64 now :i64 bs0 :i64] :vector-i64
   (let [np (vector-count ids)
         t0 (b/cc f now 0 0 0 0 0)
         pp (loop [i 0 last 1 sl 0]
@@ -610,9 +610,11 @@
         a0 (m/arena-u32 f X (+ (oTOK) (- (vector-at pp 0) 1)))
         o0 (vector-assoc! out 0 a0)
         t1 (b/cc f now 0 0 0 0 0)
+        ;; bs 0: the block adapts, 8 after a cycle that accepted 3 drafts or more, else 4
         g (loop [cnt 1 tok a0 pos np slot (vector-at pp 1) acc -1 cyc 0 nacc 0]
             (if (>= cnt steps) (vector-i64 cyc nacc)
-              (let [te (b/cc f (vector-at X 10) 0 0 0 0 0)
+              (let [bs (if (> bs0 0) bs0 (if (or (< acc 0) (>= acc 3)) 8 4))
+                    te (b/cc f (vector-at X 10) 0 0 0 0 0)
                     ce (m/open-enc-c f R X)
                     en (vector-at ce 1)
                     ;; the last cycle accepted acc drafts: its first acc + 1 tokens (positions pos - acc - 1 ..)
@@ -631,7 +633,8 @@
     (vector-i64 t0 t1 t2 (vector-at g 0) (vector-at g 1))))
 
 ;; load the pinned file, build the profile, run the prompt ids and steps greedy tokens: spec 0 plain, 1 drafted by
-;; the MTP head file mpath, 2 drafted by the DFlash drafter file mpath in blocks of bs (3 .. 16) (either pinned by
+;; the MTP head file mpath, 2 drafted by the DFlash drafter file mpath in blocks of bs (3 .. 16; 0 adapts between 4
+;; and 8) (either pinned by
 ;; mexpect); prints `greedy ...`
 ;; and `q35-ns ...` on stderr (drafted also `q35-spec cycles ... accepted ...`)
 (defn run [f [:fn [[:i64 :i64 :i64] :i64]] path :string expect :string ids :vector-i64 steps :i64 nl :i64 mpath :string mexpect :string spec :i64 bs :i64] :i64
@@ -696,7 +699,7 @@
                       (b/sel f R "setBuffer:offset:atIndex:") acc now)
         np (vector-count ids)
         u9 (if (> (+ np steps) (tmax)) (let [w (b/wr-text f R "refused: prompt and steps exceed the KV cache\n")] (vector-at [0] 1)) 0)
-        u11 (if (and (= spec 2) (or (< bs 3) (> bs 16))) (let [w (b/wr-text f R "refused: DFlash block size outside 3 .. 16\n")] (vector-at [0] 1)) 0)
+        u11 (if (and (= spec 2) (and (> bs 0) (or (< bs 3) (> bs 16)))) (let [w (b/wr-text f R "refused: DFlash block size outside 3 .. 16\n")] (vector-at [0] 1)) 0)
         u10 (if (and (> spec 0) (> (+ np (+ steps 16)) (tmax))) (let [w (b/wr-text f R "refused: prompt and steps exceed the KV cache\n")] (vector-at [0] 1)) 0)
         M (cond (= spec 1) (load-mtp f R dev X PL mpath mexpect) (= spec 2) (load-dflash f R dev X PL mpath mexpect) :else (vector-i64 0))
         out (vector-alloc steps)
