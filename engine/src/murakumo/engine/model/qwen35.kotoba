@@ -71,16 +71,21 @@
 (defn- dy [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 kid :i64 pv :vector-i64 gx :i64 gy :i64 tx :i64] :i64
   (m/disp-y f R en X PL kid (p16 pv) gx gy tx))
 
+;; 3 .. 8 tokens of a quantized matrix take the small-batch matvec (mvs)
+(defn- small [dt :i64 n :i64] :i64 (if (and (> n 2) (and (<= n 8) (or (= dt 8) (or (= dt 12) (or (= dt 13) (= dt 14)))))) 1 0))
+
 ;; Y (rows) = W X (cols) for the n tokens of the pass with the kernel for dtype dt; add 1 adds into Y
 ;; Threadgroups of 4 simdgroups, each simdgroup 4 rows over the whole row (no threadgroup reduction); Q8_0 and Q6_K
 ;; rows longer than 12 steps of 256 values are split between 2 simdgroups (ks). Q4_K and Q5_K use mvk (16-byte loads).
 ;; Two tokens read the weights once (the mv2 kernels); three or more use simdgroup matrices (mm: 64 rows per
 ;; threadgroup, up to 16 tokens).
 (defn- mv [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 woff :i64 dt :i64 rows :i64 cols :i64 xo :i64 yo :i64 add :i64 n :i64] :i64
+  (if (= (small dt n) 1)
+    (dy f R en X PL (k/k-mvs dt) (vector-i64 woff rows cols n (if (= add 1) 2 0) xo yo (ts) 1 0) (quot (+ rows 15) 16) 1 256)
   (if (> n 2)
     (d f R en X PL (k/k-mm dt n) (vector-i64 woff rows cols n (if (= add 1) 2 0) xo yo (ts) 1 0) (quot (+ rows 63) 64) 128)
     (let [ks (if (or (= dt 12) (= dt 13) (<= cols 3072)) 1 2) rpt (* 4 (quot 4 ks))]
-      (d f R en X PL (if (= n 1) (k/k-mv dt) (k/k-mv2 dt)) (vector-i64 woff rows cols ks (if (= add 1) 2 0) xo yo (ts)) (quot (+ rows (- rpt 1)) rpt) 128))))
+      (d f R en X PL (if (= n 1) (k/k-mv dt) (k/k-mv2 dt)) (vector-i64 woff rows cols ks (if (= add 1) 2 0) xo yo (ts)) (quot (+ rows (- rpt 1)) rpt) 128)))))
 
 ;; a barrier in a concurrent encoder
 (defn- bar [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64] :i64 (m/barrier! f R en))
@@ -91,22 +96,31 @@
   (let [tiles (quot (+ rows 63) 64) a (quot (quot cols 64) 4) b (quot (+ 255 tiles) tiles) s (if (< a b) a b)]
     (if (< s 1) 1 s)))
 
+;; the same for the small-batch matvec (32-row threadgroups, at least 2 steps of 256 values per split)
+(defn- ksplit-n [dt :i64 rows :i64 cols :i64 n :i64] :i64
+  (if (= (small dt n) 1)
+    (let [tiles (quot (+ rows 15) 16) a (quot (quot cols 256) 2) b (quot (+ 255 tiles) tiles) s (if (< a b) a b)]
+      (if (< s 1) 1 s))
+    (ksplit rows cols)))
+
 ;; a group of matvecs that read the same activations (spec k: weight off, dtype, rows, cols, x off, y off, add at
 ;; 7 k ..), then a barrier. Over two tokens each matvec is split along k into partial region k (oPS) and the partials
 ;; are added up after the barrier (then another barrier).
 (defn- grp! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 sp :vector-i64 n :i64] :i64
   (let [nm (quot (vector-count sp) 7)
         a (loop [i 0] (if (= i nm) 0
-            (let [o (* 7 i) dt (vector-at sp (+ o 1)) rows (vector-at sp (+ o 2)) cols (vector-at sp (+ o 3)) ks (ksplit rows cols)
+            (let [o (* 7 i) dt (vector-at sp (+ o 1)) rows (vector-at sp (+ o 2)) cols (vector-at sp (+ o 3)) ks (ksplit-n dt rows cols n)
                   ov (if (> (* ks (* 16 rows)) 327680) (let [w (b/wr-text f R "refused: k-split partials exceed their region\n")] (vector-at [0] 1)) 0)
                   u (if (and (> n 2) (> ks 1))
-                      (dy f R en X PL (k/k-mm dt n) (vector-i64 (vector-at sp o) rows cols n 0 (vector-at sp (+ o 4)) 0 (ts) ks (+ (oPS) (* i 327680))) (quot (+ rows 63) 64) ks 128)
+                      (if (= (small dt n) 1)
+                        (dy f R en X PL (k/k-mvs dt) (vector-i64 (vector-at sp o) rows cols n 0 (vector-at sp (+ o 4)) 0 (ts) ks (+ (oPS) (* i 327680))) (quot (+ rows 15) 16) ks 256)
+                      (dy f R en X PL (k/k-mm dt n) (vector-i64 (vector-at sp o) rows cols n 0 (vector-at sp (+ o 4)) 0 (ts) ks (+ (oPS) (* i 327680))) (quot (+ rows 63) 64) ks 128))
                       (mv f R en X PL (vector-at sp o) dt rows cols (vector-at sp (+ o 4)) (vector-at sp (+ o 5)) (vector-at sp (+ o 6)) n))]
               (recur (+ i 1)))))
         b (bar f R en)]
     (if (<= n 2) 0
       (let [c (loop [i 0] (if (= i nm) 0
-                (let [o (* 7 i) rows (vector-at sp (+ o 2)) ks (ksplit rows (vector-at sp (+ o 3)))
+                (let [o (* 7 i) rows (vector-at sp (+ o 2)) ks (ksplit-n (vector-at sp (+ o 1)) rows (vector-at sp (+ o 3)) n)
                       u (if (> ks 1)
                           (dy f R en X PL (k/k-mmr) (vector-i64 0 rows 0 n (if (= (vector-at sp (+ o 6)) 1) 2 0) 0 (vector-at sp (+ o 5)) (ts) ks (+ (oPS) (* i 327680))) (quot (+ rows 255) 256) n 256)
                           0)]
@@ -286,11 +300,13 @@
               (m/pipeline f R dev lib errp "dnr") (m/pipeline f R dev lib errp "cpy")
               (m/pipeline f R dev lib errp "qkn") (m/pipeline f R dev lib errp "attb")
               (m/pipeline f R dev lib errp "mm8_q8_0") (m/pipeline f R dev lib errp "mm8_q4_k")
-              (m/pipeline f R dev lib errp "mm8_q5_k") (m/pipeline f R dev lib errp "mm8_q6_k")))
+              (m/pipeline f R dev lib errp "mm8_q5_k") (m/pipeline f R dev lib errp "mm8_q6_k")
+              (m/pipeline f R dev lib errp "mvs_q8_0") (m/pipeline f R dev lib errp "mvs_q4_k")
+              (m/pipeline f R dev lib errp "mvs_q5_k") (m/pipeline f R dev lib errp "mvs_q6_k")))
 
 ;; threads per threadgroup each pipeline's dispatches use (kernel-id order)
 (defn- threads [] :vector-i64
-  (vector-i64 128 128 128 128 256 256 256 256 1024 256 1024 32 256 1024 128 128 128 128 128 128 256 128 128 128 128 128 512 256 512 256 32 128 128 128 128 128))
+  (vector-i64 128 128 128 128 256 256 256 256 1024 256 1024 32 256 1024 128 128 128 128 128 128 256 128 128 128 128 128 512 256 512 256 32 128 128 128 128 128 256 256 256 256))
 
 ;; the MTP head file (safetensors, pinned by digest like the model): the profile pr/q35-mtp with the weight buffer at
 ;; index 31

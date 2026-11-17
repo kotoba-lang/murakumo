@@ -405,6 +405,77 @@ template [[host_name(\"mm8_q4_k\")]] kernel void mm<12, 1> MM_ARGS;
 template [[host_name(\"mm8_q5_k\")]] kernel void mm<13, 1> MM_ARGS;
 template [[host_name(\"mm8_q6_k\")]] kernel void mm<14, 1> MM_ARGS;
 
+// the 8 values 256 blk + 8 l .. + 7 of a row, dequantized (lane l of a simdgroup that walks one 256-value step)
+template <uint T> inline void deq8(device const uchar *row, uint blk, uint l, thread float4 &w0, thread float4 &w1) {
+  if (T == 12 || T == 13) {
+    device const uchar *bl = row + blk * (T == 12 ? 144 : 176);
+    uint j = l / 4, o = (l % 4) * 8;
+    float d = float(*(device const half *)bl), dm = float(*(device const half *)(bl + 2));
+    float sc, m;
+    k4_scale_min(bl + 4, j, sc, m);
+    float a = d * sc, b = dm * m;
+    device const uint *qs = (device const uint *)(bl + (T == 12 ? 16 : 48) + (j / 2) * 32 + o);
+    uchar sh = uchar((j % 2) * 4);
+    uchar4 q0 = (as_type<uchar4>(qs[0]) >> sh) & uchar(15), q1 = (as_type<uchar4>(qs[1]) >> sh) & uchar(15);
+    float4 f0 = float4(q0), f1 = float4(q1);
+    if (T == 13) {
+      device const uint *qh = (device const uint *)(bl + 16 + o);
+      f0 += 16.0f * float4((as_type<uchar4>(qh[0]) >> uchar(j)) & uchar(1));
+      f1 += 16.0f * float4((as_type<uchar4>(qh[1]) >> uchar(j)) & uchar(1));
+    }
+    w0 = a * f0 - b; w1 = a * f1 - b;
+    return;
+  }
+  float sc = cw<T>(row, blk, l, w0, w1);
+  w0 *= sc; w1 *= sc;
+}
+
+// Y = W X for up to 8 tokens without weight tiles in threadgroup memory: each lane dequantizes its own 8 values of
+// 4 rows per 256-value step into registers and multiplies them by the 8 tokens' activations, which the threadgroup
+// stages once per step (8 x 256 floats, shared by its 8 simdgroups). Fields as mm (a weight off, b rows, c cols (a
+// multiple of 256), d tokens, e flags (2 add), f x off, g y off, h token stride, i k splits, j partial off);
+// threadgroup x takes 32 rows (simdgroup s rows 4 s .. + 3), y the split.
+constant constexpr uint SR = 2;
+template <uint T>
+kernel void mvs(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                uint2 tp [[threadgroup_position_in_grid]], uint2 t2 [[thread_position_in_threadgroup]],
+                uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]]) {
+  threadgroup float4 xt[8 * 64];
+  uint t = t2.x, r0 = tp.x * (8 * SR) + sg * SR;
+  uint ns = p.c / 256, per = (ns + p.i - 1) / p.i, kb = min(tp.y * per, ns), ke = min((tp.y + 1) * per, ns);
+  ulong rb = ulong(p.c / QE[T]) * QB[T];
+  device const uchar *w = W + p.a;
+  float acc[SR][8];
+  FU for (uint r = 0; r < SR; r++) FU for (uint k = 0; k < 8; k++) acc[r][k] = 0.0f;
+  for (uint blk = kb; blk < ke; blk++) {
+    FU for (uint i = 0; i < 2; i++) {
+      uint e = t + 256 * i, tok = e / 64, c4 = e % 64;
+      xt[e] = tok < p.d ? *(device const float4 *)(A + p.f + tok * p.h + blk * 256 + c4 * 4) : float4(0.0f);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float4 w0[SR], w1[SR];
+    FU for (uint r = 0; r < SR; r++) deq8<T>(w + ulong(min(r0 + r, p.b - 1)) * rb, blk, ln, w0[r], w1[r]);
+    FU for (uint k = 0; k < 8; k++) {
+      float4 x0 = xt[k * 64 + 2 * ln], x1 = xt[k * 64 + 2 * ln + 1];
+      FU for (uint r = 0; r < SR; r++) acc[r][k] += dot(w0[r], x0) + dot(w1[r], x1);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  FU for (uint r = 0; r < SR; r++) FU for (uint k = 0; k < 8; k++) {
+    float v = simd_sum(acc[r][k]);
+    if (ln == 0 && k < p.d && r0 + r < p.b) {
+      if (p.i > 1) A[p.j + (tp.y * 16 + k) * p.b + r0 + r] = v;
+      else { device float *y = A + p.g + k * p.h + r0 + r; if (p.e & 2u) *y += v; else *y = v; }
+    }
+  }
+}
+
+#define MVS_ARGS (device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]], uint2 tp [[threadgroup_position_in_grid]], uint2 t2 [[thread_position_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]])
+template [[host_name(\"mvs_q8_0\")]] kernel void mvs<8> MVS_ARGS;
+template [[host_name(\"mvs_q4_k\")]] kernel void mvs<12> MVS_ARGS;
+template [[host_name(\"mvs_q5_k\")]] kernel void mvs<13> MVS_ARGS;
+template [[host_name(\"mvs_q6_k\")]] kernel void mvs<14> MVS_ARGS;
+
 #define MVQ_ARGS (device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]], uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]], uint ns [[simdgroups_per_threadgroup]])
 #define EMB_ARGS (device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]], uint i [[thread_position_in_grid]])
 template [[host_name(\"mv_q8_0\")]] kernel void mvq<8, 1> MVQ_ARGS;
@@ -432,3 +503,5 @@ template [[host_name(\"emb_q6_k\")]] kernel void embq<14> EMB_ARGS;
 ;; column tile (ids 32..35: Q8_0, Q4_K, Q5_K, Q6_K; BF16 takes the 16-token kernel)
 (defn mm-id [dt :i64] :i64 (cond (= dt 8) 21 (= dt 12) 22 (= dt 13) 23 (= dt 14) 24 (= dt 30) 25 :else (vector-at [0] 1)))
 (defn mm-idn [dt :i64 n :i64] :i64 (if (or (> n 8) (= dt 30)) (mm-id dt) (+ 11 (mm-id dt))))
+;; the small-batch matvec for 3 .. 8 tokens (kernel ids 36..39: Q8_0, Q4_K, Q5_K, Q6_K)
+(defn mvs-id [dt :i64] :i64 (+ 15 (mm-id dt)))
