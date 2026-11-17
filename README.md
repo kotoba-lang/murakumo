@@ -13,9 +13,9 @@ inference on the machine it runs on, measured in the open. On an M1 Max today
 (loaded host, records below): Qwen2.5-0.5B decode 292.6 tok/s
 against MLX 252.4 and llama.cpp 168.9, prefill 8,814 against llama.cpp 8,860;
 Qwen3.5-4B decode 44.0 against llama.cpp 38.6, MLX 55.5 and Kapitsa's
-speculative 106.3; with DFlash drafts, 87.7–88.5 on text inside a think block
-(a build comparison against its own plain decode, not yet a same-hour round with
-the other engines). None of this has passed the claim gate (AWAI-18) yet: it
+speculative 106.3; with DFlash drafts, 70–88 on text inside a think block
+against 50–54 for its own plain decode in the same rounds (a build comparison,
+not yet a same-hour round with the other engines). None of this has passed the claim gate (AWAI-18) yet: it
 needs quiet-host rounds.
 
 [Benchmarks](#benchmarks) · [Quick start](#quick-start) · [What murakumo is today](#what-murakumo-is-today) · [How it works](#how-it-works) · [Plan](docs/engine-plan.md) · [Engine profiles](docs/engine-profiles.md) · [Roadmap](docs/inference-roadmap.md) · [How we measure](docs/benchmarks.md) · [Press kit](docs/assets/brand/README.md)
@@ -44,7 +44,7 @@ read their own 4-bit packs):
 | Kapitsa 0.2.36 | speculative (DFlash2 drafter, 73 % of tokens drafted), its own benchmark | **106.3** |
 | MLX 4-bit (0.31.1) | plain greedy | 55.5 |
 | <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | plain greedy | 44.0 run between the others; 41.6–45.8 run alone |
-| <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | speculative (DFlash drafter, blocks of 8; output equal to plain greedy), build comparison 2026-11-17 | 87.7–88.5 inside a think block (plain 50–59 in the same rounds); about level with plain on chat text with an empty think block |
+| <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | speculative (DFlash drafter, blocks of 8; output equal to plain greedy), build comparison 2026-11-17 | 70–88 inside a think block (11.4–14.2 ms/token against 18.4–20.0 for plain, paired rounds under load); about level with plain on chat text with an empty think block |
 | llama.cpp Metal (b11669), same GGUF | plain greedy | 38.6 |
 
 <sub>murakumo's greedy tokens equal a pinned oracle's on both models (llama.cpp's on Qwen3.5), and every

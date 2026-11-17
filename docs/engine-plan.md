@@ -107,8 +107,9 @@ recorded number under `bench/results/`, and the same-day comparison engines on t
 
 E5 status (2026-11-17, Qwen3.5-4B): drafts from the MTP head and from the DFlash block drafter both run, and both
 give output equal to plain greedy decoding (gated: exact tokens, accept/replay/context mutants). With DFlash and
-blocks of 8, text inside a think block decodes at 11.3–11.4 ms/token against 17–20 for plain decoding in the same
-rounds; chat text with an empty think block is about level with plain. A cycle costs about 39 ms, most of it the
+blocks of 8, text inside a think block decodes at 11.4–14.2 ms/token against 18.4–20.0 for plain decoding in paired
+rounds under load (the reduced-head record; 12.3–12.4 against 17.0–20.7 in the earlier cycle record, and 11.3–11.4 in
+later rounds that ran no plain build); chat text with an empty think block is about level with plain. A cycle costs about 39 ms, most of it the
 8-token verify pass (about 25 ms, close to llama.cpp's pp8). Tree verify, adaptive blocks and a register-only
 small-batch matvec were tried and not kept ([records](../bench/README.md)). Not yet run against Kapitsa in the
 same hour, so E5's target is open.
