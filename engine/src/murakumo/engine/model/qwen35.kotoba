@@ -78,7 +78,7 @@
 ;; threadgroup, up to 16 tokens).
 (defn- mv [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 woff :i64 dt :i64 rows :i64 cols :i64 xo :i64 yo :i64 add :i64 n :i64] :i64
   (if (> n 2)
-    (d f R en X PL (k/k-mm dt) (vector-i64 woff rows cols n (if (= add 1) 2 0) xo yo (ts) 1 0) (quot (+ rows 63) 64) 128)
+    (d f R en X PL (k/k-mm dt n) (vector-i64 woff rows cols n (if (= add 1) 2 0) xo yo (ts) 1 0) (quot (+ rows 63) 64) 128)
     (let [ks (if (or (= dt 12) (= dt 13) (<= cols 3072)) 1 2) rpt (* 4 (quot 4 ks))]
       (d f R en X PL (if (= n 1) (k/k-mv dt) (k/k-mv2 dt)) (vector-i64 woff rows cols ks (if (= add 1) 2 0) xo yo (ts)) (quot (+ rows (- rpt 1)) rpt) 128))))
 
@@ -100,7 +100,7 @@
             (let [o (* 7 i) dt (vector-at sp (+ o 1)) rows (vector-at sp (+ o 2)) cols (vector-at sp (+ o 3)) ks (ksplit rows cols)
                   ov (if (> (* ks (* 16 rows)) 327680) (let [w (b/wr-text f R "refused: k-split partials exceed their region\n")] (vector-at [0] 1)) 0)
                   u (if (and (> n 2) (> ks 1))
-                      (dy f R en X PL (k/k-mm dt) (vector-i64 (vector-at sp o) rows cols n 0 (vector-at sp (+ o 4)) 0 (ts) ks (+ (oPS) (* i 327680))) (quot (+ rows 63) 64) ks 128)
+                      (dy f R en X PL (k/k-mm dt n) (vector-i64 (vector-at sp o) rows cols n 0 (vector-at sp (+ o 4)) 0 (ts) ks (+ (oPS) (* i 327680))) (quot (+ rows 63) 64) ks 128)
                       (mv f R en X PL (vector-at sp o) dt rows cols (vector-at sp (+ o 4)) (vector-at sp (+ o 5)) (vector-at sp (+ o 6)) n))]
               (recur (+ i 1)))))
         b (bar f R en)]
@@ -284,11 +284,13 @@
               (m/pipeline f R dev lib errp "mm_q6_k") (m/pipeline f R dev lib errp "mm_bf16")
               (m/pipeline f R dev lib errp "dnfn") (m/pipeline f R dev lib errp "mmr")
               (m/pipeline f R dev lib errp "dnr") (m/pipeline f R dev lib errp "cpy")
-              (m/pipeline f R dev lib errp "qkn") (m/pipeline f R dev lib errp "attb")))
+              (m/pipeline f R dev lib errp "qkn") (m/pipeline f R dev lib errp "attb")
+              (m/pipeline f R dev lib errp "mm8_q8_0") (m/pipeline f R dev lib errp "mm8_q4_k")
+              (m/pipeline f R dev lib errp "mm8_q5_k") (m/pipeline f R dev lib errp "mm8_q6_k")))
 
 ;; threads per threadgroup each pipeline's dispatches use (kernel-id order)
 (defn- threads [] :vector-i64
-  (vector-i64 128 128 128 128 256 256 256 256 1024 256 1024 32 256 1024 128 128 128 128 128 128 256 128 128 128 128 128 512 256 512 256 32 128))
+  (vector-i64 128 128 128 128 256 256 256 256 1024 256 1024 32 256 1024 128 128 128 128 128 128 256 128 128 128 128 128 512 256 512 256 32 128 128 128 128 128))
 
 ;; the MTP head file (safetensors, pinned by digest like the model): the profile pr/q35-mtp with the weight buffer at
 ;; index 31

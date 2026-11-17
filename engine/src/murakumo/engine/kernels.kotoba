@@ -13,6 +13,7 @@
 ;;   21..25 mm_q8_0 mm_q4_k mm_q5_k mm_q6_k mm_bf16 (up to 16 tokens, simdgroup matrices)  26 dnfn (Gated DeltaNet over
 ;;   the tokens of a pass)  27 mmr (adds mm's k-split partial sums)  28 dnr (replays dnfn's saved delta-rule inputs)
 ;;   29 cpy  30 qkn (Qwen3 q/k norm + RoPE)  31 attb (block attention): the DFlash drafter
+;;   32..35 mm8_q8_0 mm8_q4_k mm8_q5_k mm8_q6_k (up to 8 tokens)
 ;; Every kernel takes (W bytes, A floats, P sixteen uints).
 (defn header [] :string
   "#include <metal_stdlib>
@@ -35,7 +36,7 @@ struct P { uint a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, q; };
 (defn k-emb [dt :i64] :i64 (quant/emb-id dt))
 (defn k-mv2 [dt :i64] :i64 (quant/mv2-id dt))
 (defn k-bfq8 [] :i64 20)
-(defn k-mm [dt :i64] :i64 (quant/mm-id dt))
+(defn k-mm [dt :i64 n :i64] :i64 (quant/mm-idn dt n))
 (defn k-dnfn [] :i64 26)
 (defn k-mmr [] :i64 27)
 (defn k-dnr [] :i64 28)
