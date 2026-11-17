@@ -77,7 +77,8 @@ kernel void dnf(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
 // dnf for n tokens in one dispatch: the conv window and the delta-rule state stay in registers across the tokens, so
 // the state is read once (slot e, conv g) and written once after the last token (slot m, conv h; the write slots must
 // differ from the read ones). Fields as dnf, plus n the token stride (token j's d, f, j, l at + j n) and o the token
-// count, q the save area (0: none; else token j's inputs of the delta rule at q + 16448 j: q [16][128] | k [16][128]
+// count (low 8 bits; bits 8 .. 15: a branch length l > 0 makes every l-th token start again from the read state and
+// window, for a pass of branches from the same position), q the save area (0: none; else token j's inputs of the delta rule at q + 16448 j: q [16][128] | k [16][128]
 // | v [32][128] | g [32] | beta [32] | the conv input x [8192], which dnr replays). 512 threads (the state held across the tokens needs the registers of two 1024-thread lanes): simdgroup s
 // takes dv rows 8 s .. 8 s + 7.
 kernel void dnfn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
@@ -97,8 +98,13 @@ kernel void dnfn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1
   }
   float4 st[8];
   FU for (uint r = 0; r < 8; r++) st[r] = *(device const float4 *)(A + p.e + (hv * 128 + sg * 8 + r) * 128 + ln * 4);
-  for (uint j = 0; j < p.o; j++) {
+  uint cnt = p.o & 255u, bl = p.o >> 8;
+  for (uint j = 0; j < cnt; j++) {
     uint jo = j * p.n;
+    if (bl > 0u && j > 0u && j % bl == 0u) {
+      FU for (uint r = 0; r < 8; r++) st[r] = *(device const float4 *)(A + p.e + (hv * 128 + sg * 8 + r) * 128 + ln * 4);
+      if (t < 384) { device const float *s = A + p.g + c * 3; s0 = s[0]; s1 = s[1]; s2 = s[2]; }
+    }
     if (t < 384) {
       float x = A[p.l + jo + c];
       if (p.q != 0 && (part == 2 || hv < 16)) A[p.q + j * 16448 + 8256 + c] = x;

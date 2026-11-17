@@ -119,7 +119,9 @@
 
 ;; cap 1 copies the residual rows after layers 1, 5, .., 29 into oCT (the DFlash drafter's input); sv 1 makes the
 ;; multi-token delta net save its inputs for replay (oSV)
-(defn- layer! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 l :i64 pos :i64 n :i64 slot :i64 cap :i64 sv :i64] :i64
+;; tl > 0: the pass is branches of tl tokens that all start at position pos (attention keys per branch, the delta net
+;; restarting from the read state at each branch)
+(defn- layer! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 l :i64 pos :i64 n :i64 slot :i64 cap :i64 sv :i64 tl :i64] :i64
   (let [g (pr/gbase)
         eps (vector-at P (+ g 3))
         base (vector-at P (+ g 4))
@@ -136,7 +138,7 @@
                      dn (if (> n 2)
                           (d f R en X PL (k/k-dnfn) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (vector-at P (pr/ps l 18)) (oAB)
                                                                   (+ (oSSM slot) (* ord 524288)) (oY) (+ (oCONV slot) (* ord 24576)) (+ (oCONV (rem (+ slot 1) 3)) (* ord 24576))
-                                                                  (vector-at P (pr/ps l 21)) (oZ) eps (oQ) (+ (oSSM (rem (+ slot 1) 3)) (* ord 524288)) (ts) n (if (= sv 1) (+ (oSV) (* ord 263168)) 0)) 32 512)
+                                                                  (vector-at P (pr/ps l 21)) (oZ) eps (oQ) (+ (oSSM (rem (+ slot 1) 3)) (* ord 524288)) (ts) (+ n (* 256 tl)) (if (= sv 1) (+ (oSV) (* ord 263168)) 0)) 32 512)
                          (loop [j 0]
                           (if (= j n) 0
                             (let [sr (rem (+ slot j) 3) sw (rem (+ slot (+ j 1)) 3) o (* j (ts))
@@ -152,9 +154,9 @@
                      b2 (grp! f R en X PL (vector-i64 (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0
                                                      (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 1024 2560 (oH) (oK) 0
                                                      (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 1024 2560 (oH) (oV) 0) n)
-                     qk (dy f R en X PL (k/k-qkr) (vector-i64 (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) pos (oQ) (oK) (oV) kc vc base eps (ts)) 20 n 32)
+                     qk (dy f R en X PL (k/k-qkr) (vector-i64 (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) pos (oQ) (oK) (oV) kc vc base eps (ts) tl) 20 n 32)
                      b3 (bar f R en)
-                     at (dy f R en X PL (k/k-attd) (vector-i64 0 (ts) (+ pos 1) (oQ) 0 (oY) kc vc) 16 n 256)
+                     at (dy f R en X PL (k/k-attd) (vector-i64 (if (> tl 0) pos 0) (ts) (+ pos 1) (oQ) tl (oY) kc vc) 16 n 256)
                      b4 (bar f R en)]
                  (grp! f R en X PL (vector-i64 (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1) n)))
         r2 (rms f R en X PL (vector-at P (pr/ps l 1)) (oX) (oH) eps n)
@@ -173,14 +175,14 @@
 ;; .. slot + n (n of 1 or 2), or to slot + 1 (n over 2: the state after the last token only). Tokens h0 .. n - 1 go
 ;; through the head: token j's argmax lands in word oTOK + j and in the position log at pos + j. Token j's final-norm
 ;; hidden stays in oH + j (ts).
-(defn step-body! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64 h0 :i64 cap :i64 sv :i64] :i64
+(defn step-body! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64 h0 :i64 cap :i64 sv :i64 tl :i64] :i64
   (let [g (pr/gbase)
         e0 (loop [j 0] (if (= j n) 0
              (let [tk (vector-at toks j)
                    u (d f R en X PL (k/k-emb (vector-at P (+ g 1))) (vector-i64 (vector-at P g) (if (< tk 0) 0 tk) 2560 (if (< tk 0) 1 0) (+ (oTOK) (- -1 tk)) 0 (+ (oX) (* j (ts))) 0) 10 256)]
                (recur (+ j 1)))))
         eb (bar f R en)
-        ly (loop [l 0] (if (= l nl) 0 (let [u (layer! f R en X PL P l pos n slot cap sv)] (recur (+ l 1)))))
+        ly (loop [l 0] (if (= l nl) 0 (let [u (layer! f R en X PL P l pos n slot cap sv tl)] (recur (+ l 1)))))
         fr (rms f R en X PL (vector-at P (+ g 2)) (oX) (oH) (vector-at P (+ g 3)) n)
         fb (bar f R en)
         nh (- n h0)
@@ -193,7 +195,7 @@
 (defn step-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64 h0 :i64] :i64
   (let [t0 (b/cc f (vector-at X 10) 0 0 0 0 0)
         ce (m/open-enc-c f R X)
-        u (step-body! f R (vector-at ce 1) X PL P toks n pos slot nl h0 0 0)]
+        u (step-body! f R (vector-at ce 1) X PL P toks n pos slot nl h0 0 0 0)]
     (m/commit! f R X ce t0)))
 
 ;; bind buffer w at index 0 (the weights the following dispatches read)
@@ -286,11 +288,12 @@
               (m/pipeline f R dev lib errp "dnr") (m/pipeline f R dev lib errp "cpy")
               (m/pipeline f R dev lib errp "qkn") (m/pipeline f R dev lib errp "attb")
               (m/pipeline f R dev lib errp "mm8_q8_0") (m/pipeline f R dev lib errp "mm8_q4_k")
-              (m/pipeline f R dev lib errp "mm8_q5_k") (m/pipeline f R dev lib errp "mm8_q6_k")))
+              (m/pipeline f R dev lib errp "mm8_q5_k") (m/pipeline f R dev lib errp "mm8_q6_k")
+              (m/pipeline f R dev lib errp "argtop2")))
 
 ;; threads per threadgroup each pipeline's dispatches use (kernel-id order)
 (defn- threads [] :vector-i64
-  (vector-i64 128 128 128 128 256 256 256 256 1024 256 1024 32 256 1024 128 128 128 128 128 128 256 128 128 128 128 128 512 256 512 256 32 128 128 128 128 128))
+  (vector-i64 128 128 128 128 256 256 256 256 1024 256 1024 32 256 1024 128 128 128 128 128 128 256 128 128 128 128 128 512 256 512 256 32 128 128 128 128 128 1024))
 
 ;; the MTP head file (safetensors, pinned by digest like the model): the profile pr/q35-mtp with the weight buffer at
 ;; index 31
@@ -384,7 +387,7 @@
         ce (m/open-enc-c f R X)
         en (vector-at ce 1)
         mt (mtp-body! f R en X PL P M W2 nx acc p 1)
-        sb (step-body! f R en X PL P (vector-i64 tp (- -1 (wD))) 2 (+ p acc) slot nl 0 0 0)
+        sb (step-body! f R en X PL P (vector-i64 tp (- -1 (wD))) 2 (+ p acc) slot nl 0 0 0 0)
         z (b/msg f R en "endEncoding" 0 0 0)
         t1 (b/cc f (vector-at X 10) 0 0 0 0 0)
         ac (vector-at X 9)
@@ -410,7 +413,7 @@
                      ce (m/open-enc-c f R X)
                      en (vector-at ce 1)
                      mt (if (> pn 0) (mtp-body! f R en X PL P M W2 nx pn (- i pn) 0) 0)
-                     sb (step-body! f R en X PL P tv n i (rem i 3) nl 0 0 0)
+                     sb (step-body! f R en X PL P tv n i (rem i 3) nl 0 0 0 0)
                      cb (m/commit! f R X ce te)
                      w (m/wait! f R X cb)]
                  (recur (+ i n) n))))
@@ -460,9 +463,9 @@
 
 ;; the drafter's context: the m captured rows in oCT of blocks 0 .. m - 1 (main-model positions pos ..) through fc and
 ;; hidden_norm, then each layer's k (k_norm, RoPE) and v into its KV cache at those positions
-(defn- dctx! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 D :vector-i64 m :i64 pos :i64] :i64
+(defn- dctx! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 D :vector-i64 m :i64 pos :i64 r0 :i64] :i64
   (let [w3 (bindw! f R en X (vector-at D 159))
-        fc (grp! f R en X PL (vector-i64 (vector-at D 48) 8 2560 20480 (oCT) (oX) 0) m)
+        fc (grp! f R en X PL (vector-i64 (vector-at D 48) 8 2560 20480 (+ (oCT) (* r0 (ts))) (oX) 0) m)
         hn (rms f R en X PL (vector-at D 96) (oX) (oH) (df-eps) m)
         b0 (bar f R en)
         kv (loop [l 0]
@@ -486,7 +489,8 @@
 ;; block causally in the sliding-window layers 0 .. 4 and fully in layer 5 (as z-lab/dflash's model.py: a layer is
 ;; causal when its type is sliding_attention). The rows 1 .. bs - 1 go through the final norm, the tied head and argmax: draft j (position pos + j) in
 ;; word oTOK + 16 + j.
-(defn- dblock! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 D :vector-i64 tok :i64 pos :i64 bs :i64] :i64
+;; with t2 1 also the runner-up of draft 1 into word oTOK + 16
+(defn- dblock! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 D :vector-i64 tok :i64 pos :i64 bs :i64 t2 :i64] :i64
   (let [g (pr/gbase)
         e0 (loop [j 0] (if (= j bs) 0
              (let [u (d f R en X PL (k/k-emb (vector-at P (+ g 1))) (vector-i64 (vector-at P g) (if (= j 0) tok (df-mask)) 2560 0 0 0 (* j (ts)) 0) 10 256)]
@@ -527,19 +531,20 @@
         hd (mv f R en X PL (vector-at P g) et (df-hv) 2560 (+ (oH) (ts)) (+ (oLG) (ts)) 0 (- bs 1))
         hs (mv f R en X PL (+ (vector-at P g) (* 248044 (row-bytes et 2560))) et 36 2560 (+ (oH) (ts)) (+ (oLG) (+ (ts) (df-hv))) 0 (- bs 1))
         hb (bar f R en)
-        am (dy f R en X PL (k/k-argmax) (vector-i64 0 (ts) (+ (df-hv) 36) 0 0 (+ (oLG) (ts)) (+ (oTOK) 17) (+ (oLOG) 600) (df-hv) 248044) 1 (- bs 1) 1024)]
+        am (dy f R en X PL (k/k-argmax) (vector-i64 0 (ts) (+ (df-hv) 36) 0 0 (+ (oLG) (ts)) (+ (oTOK) 17) (+ (oLOG) 600) (df-hv) 248044) 1 (- bs 1) 1024)
+        a2 (if (= t2 1) (d f R en X PL (k/k-argtop2) (vector-i64 0 0 (+ (df-hv) 36) 0 0 (+ (oLG) (ts)) (+ (oTOK) 17) 0 (df-hv) 248044 (+ (oTOK) 16)) 1 1024) 0)]
     (bar f R en)))
 
 ;; the delta-net states after the first cnt tokens of the last verify pass (which read slot): dnr from slot into
 ;; slot + 1 for every delta-net layer
-(defn- replay! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 cnt :i64 slot :i64 nl :i64] :i64
+(defn- replay! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 cnt :i64 slot :i64 nl :i64 r0 :i64] :i64
   (let [s1 (rem (+ slot 1) 3)
         u (loop [l 0]
             (if (= l nl) 0
               (let [ord (vector-at P (pr/ps l 3))
                     v (if (= (vector-at P (pr/ps l 2)) 0)
                         (d f R en X PL (k/k-dnr) (vector-i64 0 0 0 0 (+ (oSSM slot) (* ord 524288)) 0 (+ (oCONV slot) (* ord 24576)) (+ (oCONV s1) (* ord 24576))
-                                                             0 0 0 0 (+ (oSSM s1) (* ord 524288)) 0 cnt (+ (oSV) (* ord 263168))) 32 512)
+                                                             0 0 0 0 (+ (oSSM s1) (* ord 524288)) 0 cnt (+ (oSV) (+ (* ord 263168) (* r0 16448)))) 32 512)
                         0)]
                 (recur (+ l 1)))))]
     (bar f R en)))
@@ -591,7 +596,7 @@
 ;; drafted block of bs (the last token, then bs - 1 drafts); the bs-token verify pass, which captures its rows and saves its
 ;; delta-rule inputs. Draft j + 1 is accepted while it equals the verify argmax j; the cycle emits the verify argmaxes
 ;; up to the first rejected draft's position. Returns [t0 t1 t2 cycles accepted].
-(defn- dflash-gen [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 D :vector-i64 ids :vector-i64 steps :i64 nl :i64 out :vector-i64 now :i64 bs :i64] :vector-i64
+(defn- dflash-gen [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 D :vector-i64 ids :vector-i64 steps :i64 nl :i64 out :vector-i64 now :i64 bs :i64 tr :i64] :vector-i64
   (let [np (vector-count ids)
         t0 (b/cc f now 0 0 0 0 0)
         pp (loop [i 0 last 1 sl 0]
@@ -602,36 +607,64 @@
                       te (b/cc f (vector-at X 10) 0 0 0 0 0)
                       ce (m/open-enc-c f R X)
                       en (vector-at ce 1)
-                      sb (step-body! f R en X PL P tv n i sl nl (if (>= (+ i n) np) (- n 1) n) 1 0)
-                      dc (dctx! f R en X PL D n i)
+                      sb (step-body! f R en X PL P tv n i sl nl (if (>= (+ i n) np) (- n 1) n) 1 0 0)
+                      dc (dctx! f R en X PL D n i 0)
                       cb (m/commit! f R X ce te)
                       w (m/wait! f R X cb)]
                   (recur (+ i n) n (rem (+ sl (if (> n 2) 1 n)) 3)))))
         a0 (m/arena-u32 f X (+ (oTOK) (- (vector-at pp 0) 1)))
         o0 (vector-assoc! out 0 a0)
         t1 (b/cc f now 0 0 0 0 0)
-        g (loop [cnt 1 tok a0 pos np slot (vector-at pp 1) acc -1 cyc 0 nacc 0]
+        ;; tr 1: a tree of two branches of 4 from a block of 4 drafts: branch 0 [tok, d1, d2, d3], branch 1 [tok, d1',
+        ;; d2, d3] with d1' the drafter's runner-up for position 1; one 8-token pass verifies both, the longer accepted
+        ;; branch wins (its attention entries are moved to the shared slots, its delta-rule inputs replayed)
+        vn (if (= tr 1) 8 bs)
+        g (loop [cnt 1 tok a0 pos np slot (vector-at pp 1) acc -1 br 0 cyc 0 nacc 0]
             (if (>= cnt steps) (vector-i64 cyc nacc)
               (let [te (b/cc f (vector-at X 10) 0 0 0 0 0)
                     ce (m/open-enc-c f R X)
                     en (vector-at ce 1)
-                    ;; the last cycle accepted acc drafts: its first acc + 1 tokens (positions pos - acc - 1 ..)
-                    rp (if (< acc 0) 0 (let [r (replay! f R en X PL P (+ acc 1) (rem (+ slot 2) 3) nl)] (dctx! f R en X PL D (+ acc 1) (- pos (+ acc 1)))))
-                    db (dblock! f R en X PL P D tok pos bs)
-                    toks (vector-alloc bs)
-                    tf (loop [j 0] (if (= j bs) 0 (let [z (vector-assoc! toks j (if (= j 0) tok (- -17 j)))] (recur (+ j 1)))))
-                    vb (step-body! f R en X PL P toks bs pos slot nl 0 1 1)
+                    pp0 (- pos (+ acc 1))
+                    ;; the last cycle accepted acc drafts of branch br: its tokens' attention entries to the shared slots
+                    kf (if (or (< acc 0) (= br 0)) 0
+                         (let [u (loop [l 0]
+                                   (if (= l nl) 0
+                                     (let [ord (vector-at P (pr/ps l 3))
+                                           v (if (= (vector-at P (pr/ps l 2)) 0) 0
+                                               (let [kc (+ (oKC) (* ord (* (tmax) 1024))) vc (+ (oVC) (* ord (* (tmax) 1024)))
+                                                     k1 (dy f R en X PL (k/k-cpy) (vector-i64 0 1024 1024 0 1024 (+ kc (* (+ pp0 (* 4 br)) 1024)) (+ kc (* pp0 1024)) 0) 4 (+ acc 1) 256)]
+                                                 (dy f R en X PL (k/k-cpy) (vector-i64 0 1024 1024 0 1024 (+ vc (* (+ pp0 (* 4 br)) 1024)) (+ vc (* pp0 1024)) 0) 4 (+ acc 1) 256)))]
+                                       (recur (+ l 1)))))]
+                           (bar f R en)))
+                    rp (if (< acc 0) 0 (let [r (replay! f R en X PL P (+ acc 1) (rem (+ slot 2) 3) nl (* 4 br))] (dctx! f R en X PL D (+ acc 1) pp0 (* 4 br))))
+                    db (dblock! f R en X PL P D tok pos (if (= tr 1) 4 bs) tr)
+                    toks (vector-alloc vn)
+                    tf (loop [j 0] (if (= j vn) 0
+                         (let [k (rem j 4)
+                               z (vector-assoc! toks j (if (= tr 1)
+                                                         (cond (= k 0) tok (= j 5) -17 :else (- -17 k))
+                                                         (if (= j 0) tok (- -17 j))))]
+                           (recur (+ j 1)))))
+                    vb (step-body! f R en X PL P toks vn pos slot nl 0 1 1 (if (= tr 1) 4 0))
                     cb (m/commit! f R X ce te)
                     w (m/wait! f R X cb)
-                    na (loop [j 0] (if (= j (- bs 1)) j (if (= (m/arena-u32 f X (+ (oTOK) (+ 17 j))) (m/arena-u32 f X (+ (oTOK) j))) (recur (+ j 1)) j)))
+                    ;; accepted drafts of each branch (branch 1's first draft is word oTOK + 16)
+                    acc0 (loop [j 0] (if (= j (if (= tr 1) 3 (- bs 1))) j (if (= (m/arena-u32 f X (+ (oTOK) (+ 17 j))) (m/arena-u32 f X (+ (oTOK) j))) (recur (+ j 1)) j)))
+                    acc1 (if (= tr 1)
+                           (loop [j 0] (if (= j 3) j (if (= (m/arena-u32 f X (+ (oTOK) (if (= j 0) 16 (+ 17 j)))) (m/arena-u32 f X (+ (oTOK) (+ 4 j)))) (recur (+ j 1)) j)))
+                           -1)
+                    nbr (if (> acc1 acc0) 1 0)
+                    na (if (= nbr 1) acc1 acc0)
+                    b0 (* 4 nbr)
                     em (loop [j 0 c cnt] (if (or (> j na) (>= c steps)) c
-                         (let [z (vector-assoc! out c (m/arena-u32 f X (+ (oTOK) j)))] (recur (+ j 1) (+ c 1)))))]
-                (recur em (m/arena-u32 f X (+ (oTOK) na)) (+ pos (+ na 1)) (rem (+ slot 1) 3) na (+ cyc 1) (+ nacc na)))))
+                         (let [z (vector-assoc! out c (m/arena-u32 f X (+ (oTOK) (+ b0 j))))] (recur (+ j 1) (+ c 1)))))]
+                (recur em (m/arena-u32 f X (+ (oTOK) (+ b0 na))) (+ pos (+ na 1)) (rem (+ slot 1) 3) na nbr (+ cyc 1) (+ nacc na)))))
         t2 (b/cc f now 0 0 0 0 0)]
     (vector-i64 t0 t1 t2 (vector-at g 0) (vector-at g 1))))
 
 ;; load the pinned file, build the profile, run the prompt ids and steps greedy tokens: spec 0 plain, 1 drafted by
-;; the MTP head file mpath, 2 drafted by the DFlash drafter file mpath in blocks of bs (3 .. 16) (either pinned by
+;; the MTP head file mpath, 2 drafted by the DFlash drafter file mpath in blocks of bs (3 .. 16), 3 by it in a tree
+;; of two branches of 4 (either pinned by
 ;; mexpect); prints `greedy ...`
 ;; and `q35-ns ...` on stderr (drafted also `q35-spec cycles ... accepted ...`)
 (defn run [f [:fn [[:i64 :i64 :i64] :i64]] path :string expect :string ids :vector-i64 steps :i64 nl :i64 mpath :string mexpect :string spec :i64 bs :i64] :i64
@@ -698,9 +731,9 @@
         u9 (if (> (+ np steps) (tmax)) (let [w (b/wr-text f R "refused: prompt and steps exceed the KV cache\n")] (vector-at [0] 1)) 0)
         u11 (if (and (= spec 2) (or (< bs 3) (> bs 16))) (let [w (b/wr-text f R "refused: DFlash block size outside 3 .. 16\n")] (vector-at [0] 1)) 0)
         u10 (if (and (> spec 0) (> (+ np (+ steps 16)) (tmax))) (let [w (b/wr-text f R "refused: prompt and steps exceed the KV cache\n")] (vector-at [0] 1)) 0)
-        M (cond (= spec 1) (load-mtp f R dev X PL mpath mexpect) (= spec 2) (load-dflash f R dev X PL mpath mexpect) :else (vector-i64 0))
+        M (cond (= spec 1) (load-mtp f R dev X PL mpath mexpect) (> spec 1) (load-dflash f R dev X PL mpath mexpect) :else (vector-i64 0))
         out (vector-alloc steps)
-        res (cond (= spec 1) (spec-gen f R X PL P M ids steps nl out now) (= spec 2) (dflash-gen f R X PL P M ids steps nl out now bs) :else (plain-gen f R X PL P ids steps nl out now))
+        res (cond (= spec 1) (spec-gen f R X PL P M ids steps nl out now) (= spec 2) (dflash-gen f R X PL P M ids steps nl out now bs 0) (= spec 3) (dflash-gen f R X PL P M ids steps nl out now 8 1) :else (plain-gen f R X PL P ids steps nl out now))
         t0 (vector-at res 0)
         t1 (vector-at res 1)
         t2 (vector-at res 2)

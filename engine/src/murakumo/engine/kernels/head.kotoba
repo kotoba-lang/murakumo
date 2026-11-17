@@ -24,4 +24,38 @@ kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer
     ((device uint *)A)[p.g + y] = ix; ((device uint *)A)[p.h + p.e + y] = ix;
   }
 }
+
+// the best two logits of one row (first index on ties): f logits, c n, the best's token to word g, the runner-up's to
+// word k (with i > 0 the two-range mapping of argmax); one 1024-thread threadgroup
+inline bool tbetter(float a, uint ia, float b, uint ib) { return a > b || (a == b && ia < ib); }
+kernel void argtop2(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                    uint t [[thread_position_in_threadgroup]]) {
+  threadgroup float bv[1024], cv[1024];
+  threadgroup uint bi[1024], ci[1024];
+  float b1 = -INFINITY, b2 = -INFINITY;
+  uint i1 = 0xffffffffu, i2 = 0xffffffffu;
+  for (uint i = t; i < p.c; i += 1024) {
+    float v = A[p.f + i];
+    if (tbetter(v, i, b1, i1)) { b2 = b1; i2 = i1; b1 = v; i1 = i; }
+    else if (tbetter(v, i, b2, i2)) { b2 = v; i2 = i; }
+  }
+  bv[t] = b1; bi[t] = i1; cv[t] = b2; ci[t] = i2;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint w = 512; w > 0; w >>= 1) {
+    if (t < w) {
+      float x1 = bv[t], x2 = cv[t], y1 = bv[t + w], y2 = cv[t + w];
+      uint j1 = bi[t], j2 = ci[t], k1 = bi[t + w], k2 = ci[t + w];
+      float r1, r2; uint s1, s2;
+      if (tbetter(x1, j1, y1, k1)) { r1 = x1; s1 = j1; if (tbetter(x2, j2, y1, k1)) { r2 = x2; s2 = j2; } else { r2 = y1; s2 = k1; } }
+      else { r1 = y1; s1 = k1; if (tbetter(x1, j1, y2, k2)) { r2 = x1; s2 = j1; } else { r2 = y2; s2 = k2; } }
+      bv[t] = r1; bi[t] = s1; cv[t] = r2; ci[t] = s2;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (t == 0) {
+    uint a = bi[0], b = ci[0];
+    if (p.i > 0u) { if (a >= p.i) a = a - p.i + p.j; if (b >= p.i) b = b - p.i + p.j; }
+    ((device uint *)A)[p.g] = a; ((device uint *)A)[p.k] = b;
+  }
+}
 ")

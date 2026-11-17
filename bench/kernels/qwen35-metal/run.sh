@@ -74,7 +74,7 @@ build() {
   if [ -n "${5:-}" ]; then
     FROM=$6 TO=$7 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/src-$1/murakumo/engine/$5"
   fi
-  sed -e "s#@PATH@#$2#g;s#@EXPECT@#$3#g;s#@IDS@#${IDS:-760 6511 314 9338 369}#g;s#@STEPS@#$4#g;s#@LAYERS@#${LAYERS:-32}#g;s#@MTP@#${DRAFT:-$MTP}#g;s#@MEXPECT@#${MEXP:-}#g;s#@BLOCK@#${BS:-16}#g" "$HERE/${IN:-qwen35_metal.kotoba.in}" > "$WK/$1.kotoba"
+  sed -e "s#@PATH@#$2#g;s#@EXPECT@#$3#g;s#@IDS@#${IDS:-760 6511 314 9338 369}#g;s#@STEPS@#$4#g;s#@LAYERS@#${LAYERS:-32}#g;s#@MTP@#${DRAFT:-$MTP}#g;s#@MEXPECT@#${MEXP:-}#g;s#@BLOCK@#${BS:-16}#g;s#@MODE@#${MODE:-2}#g" "$HERE/${IN:-qwen35_metal.kotoba.in}" > "$WK/$1.kotoba"
   "$AMU/bin/amu" compile "$WK/$1.kotoba" --source-path "$WK/src-$1" --runtime-profile amu-program-metal -o "$WK/$1" >/dev/null
 }
 runit() { { "$WK/$1" > /dev/null 2> "$WK/$1.txt"; rc=$?; } 2>/dev/null || true; }
