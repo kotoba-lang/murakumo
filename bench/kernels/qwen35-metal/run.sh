@@ -23,7 +23,7 @@
 #   (the prompt goes through the model up to 16 tokens per pass: simdgroup-matrix matvecs (mm) and one Gated DeltaNet
 #   dispatch over the pass's tokens (dnfn); exact and even-prompt take that path)
 #   mm-mutant        the multi-token matvec multiplying rows 8 .. 15 of each tile by rows 0 .. 7's weights changes the
-#                    tokens
+#                    tokens (the 5-token prompt takes the 8-column kernel, the chat prompt's passes the 16-column one)
 #   dnfn-mutant      the multi-token Gated DeltaNet's conv1d reading only the current token changes the tokens
 #   multi-slot-mutant  decode reading the state slot as if the 5-token prompt pass had advanced it five slots
 #                    (instead of one) changes the tokens
@@ -41,7 +41,7 @@
 #                    are accepted (the drafts only choose what is verified)
 #   mtp-digest       an MTP digest that differs in one character refuses before any token
 # With the DFlash drafter file (5th argument: model.safetensors of z-lab/Qwen3.5-4B-DFlash @ 9a1996c, sha256 below),
-# the DFlash-drafted decode (qwen35_dflash.kotoba.in, blocks of 16) is checked over 48 tokens of a chat prompt that
+# the DFlash-drafted decode (qwen35_dflash.kotoba.in, blocks of 8) is checked over 48 tokens of a chat prompt that
 # opens a think block (the chat-prompt row's ids without the empty think block):
 #   dflash-exact     the 48 tokens equal the plain decode's
 #   dflash-accept-mutant  every draft accepted without the verify check changes the tokens
@@ -104,7 +104,7 @@ mutant conv-mutant "conv1d without its state" kernels/deltanet.kotoba "float o =
 mutant gate-mutant "attention output gate dropped" kernels/attn.kotoba "(o / z) * (1.0f / (1.0f + precise::exp(-gt)))" "(o / z)"
 mutant q6k-mutant "Q6_K scale index" kernels/quant.kotoba "[li / 16 + 2 * k]);" "[1 - li / 16 + 2 * k]);"
 mutant q4k-mutant "Q4_K/Q5_K sub-block pair scales swapped" kernels/quant.kotoba "dd.x * (s0 * lo + s1 * hi)" "dd.x * (s1 * lo + s0 * hi)"
-mutant mm-mutant "multi-token matvec tile rows" kernels/quant.kotoba "simdgroup_multiply_accumulate(c10, a1, b0, c10);" "simdgroup_multiply_accumulate(c10, a0, b0, c10);"
+mutant mm-mutant "multi-token matvec tile rows" kernels/quant.kotoba "simdgroup_multiply_accumulate(c[1][b], a1, bb, c[1][b]);" "simdgroup_multiply_accumulate(c[1][b], a0, bb, c[1][b]);"
 mutant dnfn-mutant "multi-token conv1d without its state" kernels/deltanet.kotoba "float o = w[0] * s0 + w[1] * s1 + w[2] * s2 + w[3] * x;" "float o = w[3] * x;"
 mutant multi-slot-mutant "state slot after a multi-token pass" model/qwen35.kotoba "(rem (+ sl (if (> n 2) 1 n)) 3)" "(rem (+ sl n) 3)"
 
@@ -191,7 +191,7 @@ if [ -n "$DFLASH" ]; then
   rc=0; runit t48
   T48=$(grep '^greedy' "$WK/t48.txt" || true)
   dfl() { # name [file from to]
-    IDS="$THINK" DRAFT="$DFLASH" MEXP="$WK/dflash.sha256" IN=qwen35_dflash.kotoba.in build "$1" "$MODEL" "$WK/model.sha256" 48 "${2:-}" "${3:-}" "${4:-}"; unset IDS DRAFT MEXP IN
+    IDS="$THINK" BS=8 DRAFT="$DFLASH" MEXP="$WK/dflash.sha256" IN=qwen35_dflash.kotoba.in build "$1" "$MODEL" "$WK/model.sha256" 48 "${2:-}" "${3:-}" "${4:-}"; unset IDS BS DRAFT MEXP IN
     rc=0; runit "$1"
     sgot=$(grep '^greedy' "$WK/$1.txt" || true); sacc=$(awk '/^q35-spec/{print $5 "/" $3}' "$WK/$1.txt")
   }
