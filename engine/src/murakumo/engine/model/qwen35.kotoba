@@ -29,23 +29,25 @@
 ;; one token's activations
 (defn ts [] :i64 307776)
 ;; tokens a pass takes at most
-(defn nb [] :i64 2)
-;; argmax words (token j's at + j), then the position log
-(defn oTOK [] :i64 615552)
-(defn oLOG [] :i64 615556)
-(defn oKC [] :i64 616580)
-(defn oVC [] :i64 4810884)
+(defn nb [] :i64 16)
+;; argmax words (token j's at + j; 32 words), then the position log
+(defn oTOK [] :i64 4924416)
+(defn oLOG [] :i64 4924448)
+(defn oKC [] :i64 4925472)
+(defn oVC [] :i64 9119776)
 ;; the recurrent states in three slots: a pass of n tokens reads slot c and writes c + 1 .. c + n (mod 3), so the
 ;; state after every token of the pass survives it (the caller keeps the slot of the last accepted token)
-(defn oCONV [s :i64] :i64 (+ 9005188 (* s 589824)))
-(defn oSSM [s :i64] :i64 (+ 10774660 (* s 12582912)))
-;; the MTP head's activations (row j at + j (ts), the layout of a token's) and its KV cache ([pos][1024])
-(defn oM [] :i64 48523396)
-(defn oMK [] :i64 49138948)
-(defn oMV [] :i64 49663236)
-(defn arena-floats [] :i64 50187524)
-;; the argmax word of the MTP head's draft (oTOK + 3)
-(defn wD [] :i64 3)
+(defn oCONV [s :i64] :i64 (+ 13314080 (* s 589824)))
+(defn oSSM [s :i64] :i64 (+ 15083552 (* s 12582912)))
+;; the MTP head's activations (two rows, row j at + j (ts), the layout of a token's) and its KV cache ([pos][1024])
+(defn oM [] :i64 52832288)
+(defn oMK [] :i64 53447840)
+(defn oMV [] :i64 53972128)
+;; mm's k-split partial sums: four regions (one per matvec of a group) of 327680 floats
+(defn oPS [] :i64 54496416)
+(defn arena-floats [] :i64 55807136)
+;; the argmax word of the MTP head's draft (oTOK + 16)
+(defn wD [] :i64 16)
 ;; positions the KV cache and the position log hold
 (defn tmax [] :i64 512)
 
@@ -58,21 +60,55 @@
 (defn- d [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 kid :i64 pv :vector-i64 gx :i64 tx :i64] :i64
   (m/disp f R en X PL kid (p16 pv) gx tx))
 
+;; d over a grid of gx x gy threadgroups (gy: the tokens of a pass)
+(defn- dy [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 kid :i64 pv :vector-i64 gx :i64 gy :i64 tx :i64] :i64
+  (m/disp-y f R en X PL kid (p16 pv) gx gy tx))
+
 ;; Y (rows) = W X (cols) for the n tokens of the pass with the kernel for dtype dt; add 1 adds into Y
 ;; Threadgroups of 4 simdgroups, each simdgroup 4 rows over the whole row (no threadgroup reduction); Q8_0 and Q6_K
 ;; rows longer than 12 steps of 256 values are split between 2 simdgroups (ks). Q4_K and Q5_K use mvk (16-byte loads).
-;; Two tokens read the weights once (the mv2 kernels).
+;; Two tokens read the weights once (the mv2 kernels); three or more use simdgroup matrices (mm: 64 rows per
+;; threadgroup, up to 16 tokens).
 (defn- mv [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 woff :i64 dt :i64 rows :i64 cols :i64 xo :i64 yo :i64 add :i64 n :i64] :i64
-  (let [ks (if (or (= dt 12) (= dt 13) (<= cols 3072)) 1 2) rpt (* 4 (quot 4 ks))]
-    (d f R en X PL (if (= n 1) (k/k-mv dt) (k/k-mv2 dt)) (vector-i64 woff rows cols ks (if (= add 1) 2 0) xo yo (ts)) (quot (+ rows (- rpt 1)) rpt) 128)))
+  (if (> n 2)
+    (d f R en X PL (k/k-mm dt) (vector-i64 woff rows cols n (if (= add 1) 2 0) xo yo (ts) 1 0) (quot (+ rows 63) 64) 128)
+    (let [ks (if (or (= dt 12) (= dt 13) (<= cols 3072)) 1 2) rpt (* 4 (quot 4 ks))]
+      (d f R en X PL (if (= n 1) (k/k-mv dt) (k/k-mv2 dt)) (vector-i64 woff rows cols ks (if (= add 1) 2 0) xo yo (ts)) (quot (+ rows (- rpt 1)) rpt) 128))))
 
 ;; a barrier in a concurrent encoder
 (defn- bar [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64] :i64 (m/barrier! f R en))
 
+;; k splits of a multi-token matvec: enough 64-row threadgroups to fill the GPU (about 256), each split at least 4
+;; steps of 64 values
+(defn- ksplit [rows :i64 cols :i64] :i64
+  (let [tiles (quot (+ rows 63) 64) a (quot (quot cols 64) 4) b (quot (+ 255 tiles) tiles) s (if (< a b) a b)]
+    (if (< s 1) 1 s)))
+
+;; a group of matvecs that read the same activations (spec k: weight off, dtype, rows, cols, x off, y off, add at
+;; 7 k ..), then a barrier. Over two tokens each matvec is split along k into partial region k (oPS) and the partials
+;; are added up after the barrier (then another barrier).
+(defn- grp! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 sp :vector-i64 n :i64] :i64
+  (let [nm (quot (vector-count sp) 7)
+        a (loop [i 0] (if (= i nm) 0
+            (let [o (* 7 i) dt (vector-at sp (+ o 1)) rows (vector-at sp (+ o 2)) cols (vector-at sp (+ o 3)) ks (ksplit rows cols)
+                  ov (if (> (* ks (* 16 rows)) 327680) (let [w (b/wr-text f R "refused: k-split partials exceed their region\n")] (vector-at [0] 1)) 0)
+                  u (if (and (> n 2) (> ks 1))
+                      (dy f R en X PL (k/k-mm dt) (vector-i64 (vector-at sp o) rows cols n 0 (vector-at sp (+ o 4)) 0 (ts) ks (+ (oPS) (* i 327680))) (quot (+ rows 63) 64) ks 128)
+                      (mv f R en X PL (vector-at sp o) dt rows cols (vector-at sp (+ o 4)) (vector-at sp (+ o 5)) (vector-at sp (+ o 6)) n))]
+              (recur (+ i 1)))))
+        b (bar f R en)]
+    (if (<= n 2) 0
+      (let [c (loop [i 0] (if (= i nm) 0
+                (let [o (* 7 i) rows (vector-at sp (+ o 2)) ks (ksplit rows (vector-at sp (+ o 3)))
+                      u (if (> ks 1)
+                          (dy f R en X PL (k/k-mmr) (vector-i64 0 rows 0 n (if (= (vector-at sp (+ o 6)) 1) 2 0) 0 (vector-at sp (+ o 5)) (ts) ks (+ (oPS) (* i 327680))) (quot (+ rows 255) 256) n 256)
+                          0)]
+                  (recur (+ i 1)))))]
+        (bar f R en)))))
+
 ;; RMSNorm of each token's row
 (defn- rms [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 w :i64 xo :i64 yo :i64 eps :i64 n :i64] :i64
-  (loop [j 0] (if (= j n) 0
-    (let [u (d f R en X PL (k/k-rms1) (vector-i64 w 0 2560 0 0 (+ xo (* j (ts))) (+ yo (* j (ts))) eps) 1 1024)] (recur (+ j 1))))))
+  (dy f R en X PL (k/k-rms1) (vector-i64 w (ts) 2560 0 0 xo yo eps) 1 n 1024))
 
 (defn- layer! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 l :i64 pos :i64 n :i64 slot :i64] :i64
   (let [g (pr/gbase)
@@ -82,56 +118,51 @@
         r1 (rms f R en X PL (vector-at P (pr/ps l 0)) (oX) (oH) eps n)
         b1 (bar f R en)
         body (if (= (vector-at P (pr/ps l 2)) 0)
-               (let [q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0 n)
-                     z (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 4096 2560 (oH) (oZ) 0 n)
-                     al (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 32 2560 (oH) (oAB) 0 n)
-                     be (mv f R en X PL (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) 32 2560 (oH) (+ (oAB) 32) 0 n)
-                     b2 (bar f R en)
-                     ;; token j reads state slot slot + j and writes slot + j + 1, after token j - 1's write
-                     dn (loop [j 0]
+               (let [b2 (grp! f R en X PL (vector-i64 (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0
+                                                     (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 4096 2560 (oH) (oZ) 0
+                                                     (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 32 2560 (oH) (oAB) 0
+                                                     (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) 32 2560 (oH) (+ (oAB) 32) 0) n)
+                     ;; one or two tokens: token j reads state slot slot + j and writes slot + j + 1, after token j - 1's
+                     ;; write; more: every token in one dispatch, reading slot and writing slot + 1 after the last
+                     dn (if (> n 2)
+                          (d f R en X PL (k/k-dnfn) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (vector-at P (pr/ps l 18)) (oAB)
+                                                                  (+ (oSSM slot) (* ord 524288)) (oY) (+ (oCONV slot) (* ord 24576)) (+ (oCONV (rem (+ slot 1) 3)) (* ord 24576))
+                                                                  (vector-at P (pr/ps l 21)) (oZ) eps (oQ) (+ (oSSM (rem (+ slot 1) 3)) (* ord 524288)) (ts) n 0) 32 512)
+                         (loop [j 0]
                           (if (= j n) 0
                             (let [sr (rem (+ slot j) 3) sw (rem (+ slot (+ j 1)) 3) o (* j (ts))
                                   bj (if (> j 0) (bar f R en) 0)
                                   u (d f R en X PL (k/k-dnf) (vector-i64 (vector-at P (pr/ps l 19)) (vector-at P (pr/ps l 20)) (vector-at P (pr/ps l 18)) (+ (oAB) o)
                                                                        (+ (oSSM sr) (* ord 524288)) (+ (oY) o) (+ (oCONV sr) (* ord 24576)) (+ (oCONV sw) (* ord 24576))
                                                                        (vector-at P (pr/ps l 21)) (+ (oZ) o) eps (+ (oQ) o) (+ (oSSM sw) (* ord 524288))) 32 1024)]
-                              (recur (+ j 1)))))
+                              (recur (+ j 1))))))
                      b3 (bar f R en)]
-                 (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1 n))
+                 (grp! f R en X PL (vector-i64 (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1) n))
                (let [kc (+ (oKC) (* ord (* (tmax) 1024)))
                      vc (+ (oVC) (* ord (* (tmax) 1024)))
-                     q (mv f R en X PL (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0 n)
-                     kk (mv f R en X PL (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 1024 2560 (oH) (oK) 0 n)
-                     vv (mv f R en X PL (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 1024 2560 (oH) (oV) 0 n)
-                     b2 (bar f R en)
-                     qk (loop [j 0] (if (= j n) 0
-                          (let [o (* j (ts))
-                                u (d f R en X PL (k/k-qkr) (vector-i64 (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) (+ pos j) (+ (oQ) o) (+ (oK) o) (+ (oV) o) kc vc base eps) 20 32)]
-                            (recur (+ j 1)))))
+                     b2 (grp! f R en X PL (vector-i64 (vector-at P (pr/ps l 10)) (vector-at P (pr/ps l 11)) 8192 2560 (oH) (oQ) 0
+                                                     (vector-at P (pr/ps l 12)) (vector-at P (pr/ps l 13)) 1024 2560 (oH) (oK) 0
+                                                     (vector-at P (pr/ps l 14)) (vector-at P (pr/ps l 15)) 1024 2560 (oH) (oV) 0) n)
+                     qk (dy f R en X PL (k/k-qkr) (vector-i64 (vector-at P (pr/ps l 16)) (vector-at P (pr/ps l 17)) pos (oQ) (oK) (oV) kc vc base eps (ts)) 20 n 32)
                      b3 (bar f R en)
-                     at (loop [j 0] (if (= j n) 0
-                          (let [o (* j (ts))
-                                u (d f R en X PL (k/k-attd) (vector-i64 0 0 (+ pos (+ j 1)) (+ (oQ) o) 0 (+ (oY) o) kc vc) 16 256)]
-                            (recur (+ j 1)))))
+                     at (dy f R en X PL (k/k-attd) (vector-i64 0 (ts) (+ pos 1) (oQ) 0 (oY) kc vc) 16 n 256)
                      b4 (bar f R en)]
-                 (mv f R en X PL (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1 n)))
-        b6 (bar f R en)
+                 (grp! f R en X PL (vector-i64 (vector-at P (pr/ps l 22)) (vector-at P (pr/ps l 23)) 2560 4096 (oY) (oX) 1) n)))
         r2 (rms f R en X PL (vector-at P (pr/ps l 1)) (oX) (oH) eps n)
         b7 (bar f R en)
-        fg (mv f R en X PL (vector-at P (pr/ps l 4)) (vector-at P (pr/ps l 5)) 9216 2560 (oH) (oFG) 0 n)
-        fu (mv f R en X PL (vector-at P (pr/ps l 6)) (vector-at P (pr/ps l 7)) 9216 2560 (oH) (oFU) 0 n)
-        b8 (bar f R en)
-        sw (loop [j 0] (if (= j n) 0
-             (let [o (* j (ts)) u (d f R en X PL (k/k-swiglu) (vector-i64 0 0 9216 0 (+ (oFU) o) (+ (oFG) o) (+ (oG2) o) 0) 36 256)] (recur (+ j 1)))))
+        b8 (grp! f R en X PL (vector-i64 (vector-at P (pr/ps l 4)) (vector-at P (pr/ps l 5)) 9216 2560 (oH) (oFG) 0
+                                        (vector-at P (pr/ps l 6)) (vector-at P (pr/ps l 7)) 9216 2560 (oH) (oFU) 0) n)
+        sw (dy f R en X PL (k/k-swiglu) (vector-i64 0 (ts) 9216 0 (oFU) (oFG) (oG2) 0) 36 n 256)
         b9 (bar f R en)
-        dn2 (mv f R en X PL (vector-at P (pr/ps l 8)) (vector-at P (pr/ps l 9)) 2560 9216 (oG2) (oX) 1 n)]
-    (bar f R en)))
+        dn2 (grp! f R en X PL (vector-i64 (vector-at P (pr/ps l 8)) (vector-at P (pr/ps l 9)) 2560 9216 (oG2) (oX) 1) n)]
+    0))
 
 ;; n tokens (at positions pos ..) through the model into the open encoder en: token j is toks j, or when that is
 ;; negative the arena's argmax word oTOK + (-1 - it); the recurrent states are read from slot and written to slot + 1
-;; .. slot + n. Token j's argmax lands in word oTOK + j and in the position log at pos + j; its final-norm hidden stays
-;; in oH + j (ts).
-(defn step-body! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64] :i64
+;; .. slot + n (n of 1 or 2), or to slot + 1 (n over 2: the state after the last token only). Tokens h0 .. n - 1 go
+;; through the head: token j's argmax lands in word oTOK + j and in the position log at pos + j. Token j's final-norm
+;; hidden stays in oH + j (ts).
+(defn step-body! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64 h0 :i64] :i64
   (let [g (pr/gbase)
         e0 (loop [j 0] (if (= j n) 0
              (let [tk (vector-at toks j)
@@ -141,18 +172,17 @@
         ly (loop [l 0] (if (= l nl) 0 (let [u (layer! f R en X PL P l pos n slot)] (recur (+ l 1)))))
         fr (rms f R en X PL (vector-at P (+ g 2)) (oX) (oH) (vector-at P (+ g 3)) n)
         fb (bar f R en)
-        hd (mv f R en X PL (vector-at P g) (vector-at P (+ g 1)) (pr/q35-vocab) 2560 (oH) (oLG) 0 n)
+        nh (- n h0)
+        hd (if (= nh 0) 0 (mv f R en X PL (vector-at P g) (vector-at P (+ g 1)) (pr/q35-vocab) 2560 (+ (oH) (* h0 (ts))) (+ (oLG) (* h0 (ts))) 0 nh))
         hb (bar f R en)
-        am (loop [j 0] (if (= j n) 0
-             (let [u (d f R en X PL (k/k-argmax) (vector-i64 0 0 (pr/q35-vocab) 0 (+ pos j) (+ (oLG) (* j (ts))) (+ (oTOK) j) (oLOG)) 1 1024)]
-               (recur (+ j 1)))))]
+        am (if (= nh 0) 0 (dy f R en X PL (k/k-argmax) (vector-i64 0 (ts) (pr/q35-vocab) 0 (+ pos h0) (+ (oLG) (* h0 (ts))) (+ (oTOK) h0) (oLOG)) 1 nh 1024))]
     (bar f R en)))
 
 ;; step-body! in its own command buffer (committed)
-(defn step-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64] :i64
+(defn step-enc! [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 toks :vector-i64 n :i64 pos :i64 slot :i64 nl :i64 h0 :i64] :i64
   (let [t0 (b/cc f (vector-at X 10) 0 0 0 0 0)
         ce (m/open-enc-c f R X)
-        u (step-body! f R (vector-at ce 1) X PL P toks n pos slot nl)]
+        u (step-body! f R (vector-at ce 1) X PL P toks n pos slot nl h0)]
     (m/commit! f R X ce t0)))
 
 ;; bind buffer w at index 0 (the weights the following dispatches read)
@@ -238,7 +268,14 @@
               (m/pipeline f R dev lib errp "mv2_q8_0") (m/pipeline f R dev lib errp "mvk2_q4_k")
               (m/pipeline f R dev lib errp "mvk2_q5_k") (m/pipeline f R dev lib errp "mv2_q6_k")
               (m/pipeline f R dev lib errp "mv_bf16") (m/pipeline f R dev lib errp "mv2_bf16")
-              (m/pipeline f R dev lib errp "bfq8")))
+              (m/pipeline f R dev lib errp "bfq8") (m/pipeline f R dev lib errp "mm_q8_0")
+              (m/pipeline f R dev lib errp "mm_q4_k") (m/pipeline f R dev lib errp "mm_q5_k")
+              (m/pipeline f R dev lib errp "mm_q6_k") (m/pipeline f R dev lib errp "mm_bf16")
+              (m/pipeline f R dev lib errp "dnfn") (m/pipeline f R dev lib errp "mmr")))
+
+;; threads per threadgroup each pipeline's dispatches use (kernel-id order)
+(defn- threads [] :vector-i64
+  (vector-i64 128 128 128 128 256 256 256 256 1024 256 1024 32 256 1024 128 128 128 128 128 128 256 128 128 128 128 128 512 256))
 
 ;; the MTP head file (safetensors, pinned by digest like the model): the profile pr/q35-mtp with the weight buffer at
 ;; index 31
@@ -284,19 +321,26 @@
         cw (m/wait! f R X (m/commit! f R X ce (b/cc f (vector-at X 10) 0 0 0 0 0)))]
     M))
 
-;; plain greedy decode: the prompt two tokens per pass, then one token per buffer (pipelined); returns [t0 t1 t2]
+;; plain greedy decode: the prompt up to 16 tokens per pass (only the last token through the head), then one token
+;; per buffer (pipelined); returns [t0 t1 t2]
 (defn- plain-gen [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64 PL :vector-i64 P :vector-i64 ids :vector-i64 steps :i64 nl :i64 out :vector-i64 now :i64] :vector-i64
   (let [np (vector-count ids)
         t0 (b/cc f now 0 0 0 0 0)
-        ;; prompt: two tokens per pass (the weights are read once for both); every token is accepted, so the state
-        ;; slot is the position mod 3
-        pr0 (loop [i 0 last 1]
-              (if (>= i np) last
+        ;; prompt: up to 16 tokens per pass (the weights are read once for all); a pass of n moves the state from
+        ;; slot c to c + n (one or two tokens) or c + 1 (more)
+        pp (loop [i 0 last 1 sl 0 lg "q35-passes"]
+              (if (>= i np) (let [w (b/wr-text f R (string-concat lg "\n"))] (vector-i64 last sl))
                 (let [n (if (>= (- np i) (nb)) (nb) (- np i))
-                      tv (if (= n 1) (vector-i64 (vector-at ids i)) (vector-i64 (vector-at ids i) (vector-at ids (+ i 1))))
-                      cb (step-enc! f R X PL P tv n i (rem i 3) nl)
-                      w (m/wait! f R X cb)]
-                  (recur (+ i n) n))))
+                      tv (vector-alloc n)
+                      fl (loop [j 0] (if (= j n) 0 (let [z (vector-assoc! tv j (vector-at ids (+ i j)))] (recur (+ j 1)))))
+                      ta (b/cc f now 0 0 0 0 0)
+                      cb (step-enc! f R X PL P tv n i sl nl (if (>= (+ i n) np) (- n 1) n))
+                      w (m/wait! f R X cb)
+                      tb (b/cc f now 0 0 0 0 0)]
+                  (recur (+ i n) n (rem (+ sl (if (> n 2) 1 n)) 3)
+                         (string-concat lg (string-concat " " (string-concat (string-from-i64 n) (string-concat ":" (string-from-i64 (m/ticks-ns f (- tb ta)))))))))))
+        pr0 (vector-at pp 0)
+        sb (vector-at pp 1)
         dbg (if (< nl (pr/q35-layers)) (dump f R X (- pr0 1)) 0)
         t1 (b/cc f now 0 0 0 0 0)
         o0 (vector-assoc! out 0 (m/arena-u32 f X (+ (oLOG) (- np 1))))
@@ -309,7 +353,7 @@
                   (let [w (m/wait! f R X prev)
                         a (vector-assoc! out (- s 1) (m/arena-u32 f X (+ (oLOG) (+ np (- s 2)))))] 0))
                 ;; the first step reads the last prompt token's argmax (word pr0 - 1), later ones word 0
-                (let [cb (step-enc! f R X PL P (vector-i64 (if (= s 1) (- 0 pr0) -1)) 1 (+ np (- s 1)) (rem (+ np (- s 1)) 3) nl)
+                (let [cb (step-enc! f R X PL P (vector-i64 (if (= s 1) (- 0 pr0) -1)) 1 (+ np (- s 1)) (rem (+ sb (- s 1)) 3) nl 0)
                       a (if (= prev 0) 0
                           (let [w (m/wait! f R X prev)
                                 v (vector-assoc! out (- s 1) (m/arena-u32 f X (+ (oLOG) (+ np (- s 2)))))] 0))]
@@ -325,7 +369,7 @@
         ce (m/open-enc-c f R X)
         en (vector-at ce 1)
         mt (mtp-body! f R en X PL P M W2 nx acc p 1)
-        sb (step-body! f R en X PL P (vector-i64 tp (- -1 (wD))) 2 (+ p acc) slot nl)
+        sb (step-body! f R en X PL P (vector-i64 tp (- -1 (wD))) 2 (+ p acc) slot nl 0)
         z (b/msg f R en "endEncoding" 0 0 0)
         t1 (b/cc f (vector-at X 10) 0 0 0 0 0)
         ac (vector-at X 9)
@@ -344,14 +388,14 @@
         t0 (b/cc f now 0 0 0 0 0)
         pr (loop [i 0 pn 0]
              (if (>= i np) pn
-               (let [n (if (>= (- np i) (nb)) (nb) (- np i))
+               (let [n (if (>= (- np i) 2) 2 (- np i))
                      tv (if (= n 1) (vector-i64 (vector-at ids i)) (vector-i64 (vector-at ids i) (vector-at ids (+ i 1))))
                      nx (if (< pn 2) (vector-i64 (vector-at ids i)) (vector-i64 (vector-at ids (- i 1)) (vector-at ids i)))
                      te (b/cc f (vector-at X 10) 0 0 0 0 0)
                      ce (m/open-enc-c f R X)
                      en (vector-at ce 1)
                      mt (if (> pn 0) (mtp-body! f R en X PL P M W2 nx pn (- i pn) 0) 0)
-                     sb (step-body! f R en X PL P tv n i (rem i 3) nl)
+                     sb (step-body! f R en X PL P tv n i (rem i 3) nl 0)
                      cb (m/commit! f R X ce te)
                      w (m/wait! f R X cb)]
                  (recur (+ i n) n))))
@@ -436,6 +480,12 @@
         errp (+ (b/scratch f) 184)
         lib (m/library f R dev (k/source) errp)
         PL (pipelines f R dev lib errp)
+        ;; a pipeline that cannot take the threadgroup size its dispatches use is refused (the GPU would run it
+        ;; partly, silently)
+        tw (loop [i 0] (if (= i (vector-count PL)) 0
+             (if (< (b/msg f R (vector-at PL i) "maxTotalThreadsPerThreadgroup" 0 0 0) (vector-at (threads) i))
+               (let [w (b/wr-text f R (string-concat "refused: pipeline " (string-concat (string-from-i64 i) " takes fewer threads than its dispatches\n")))] (vector-at [0] 1))
+               (recur (+ i 1)))))
         X (vector-i64 (b/sel f R "setComputePipelineState:") (b/sel f R "setBytes:length:atIndex:")
                       (b/sel f R "dispatchThreadgroups:threadsPerThreadgroup:")
                       (b/cc f (vector-at R 3) 160 0 0 0 0) queue W A (b/msg f R A "contents" 0 0 0)

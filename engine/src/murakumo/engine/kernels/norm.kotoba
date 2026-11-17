@@ -4,12 +4,16 @@
 (defn source [] :string
   "
 // RMSNorm of one row: a weight off (F32 in W), c n, f x off, g out off, h epsilon bits; one 1024-thread threadgroup
+// per row (threadgroup y is the token, b the token stride)
 kernel void rms1(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                 uint t [[thread_position_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]],
-                 uint ln [[thread_index_in_simdgroup]]) {
+                 uint2 tp [[threadgroup_position_in_grid]], uint2 t2 [[thread_position_in_threadgroup]],
+                 uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]]) {
+  uint t = t2.x;
   threadgroup float red[32];
+  device float *xr = A + p.f + tp.y * p.b;
+  device float *yr = A + p.g + tp.y * p.b;
   float ss = 0.0f;
-  for (uint k = t; k < p.c; k += 1024) { float v = A[p.f + k]; ss += v * v; }
+  for (uint k = t; k < p.c; k += 1024) { float v = xr[k]; ss += v * v; }
   ss = simd_sum(ss);
   if (ln == 0) red[sg] = ss;
   threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -17,14 +21,15 @@ kernel void rms1(device const uchar *W [[buffer(0)]], device float *A [[buffer(1
   FU for (uint i = 0; i < 32; i++) tot += red[i];
   float r = 1.0f / precise::sqrt(tot / float(p.c) + as_type<float>(p.h));
   device const float *w = (device const float *)(W + p.a);
-  for (uint k = t; k < p.c; k += 1024) A[p.g + k] = A[p.f + k] * r * w[k];
+  for (uint k = t; k < p.c; k += 1024) yr[k] = xr[k] * r * w[k];
 }
 
-// g[i] = silu(f[i]) * e[i] for i < c
+// g[i] = silu(f[i]) * e[i] for i < c (grid y is the token, b the token stride)
 kernel void swiglu(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                   uint i [[thread_position_in_grid]]) {
+                   uint2 gid [[thread_position_in_grid]]) {
+  uint i = gid.x, o = gid.y * p.b;
   if (i >= p.c) return;
-  float g = A[p.f + i];
-  A[p.g + i] = g / (1.0f + precise::exp(-g)) * A[p.e + i];
+  float g = A[p.f + o + i];
+  A[p.g + o + i] = g / (1.0f + precise::exp(-g)) * A[p.e + o + i];
 }
 ")

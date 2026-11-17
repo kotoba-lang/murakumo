@@ -30,8 +30,9 @@
 
 (defn pk [lo :i64 hi :i64] :i64 (bit-or (bit-and lo 4294967295) (i64-shift-left hi 32)))
 
-;; one dispatch of pipeline k: gx threadgroups of tx threads, parameters pv (an even count of at most 24 uint words)
-(defn disp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 k :i64 pv :vector-i64 gx :i64 tx :i64] :i64
+;; one dispatch of pipeline k: a grid of gx x gy threadgroups of tx threads, parameters pv (an even count of at most
+;; 24 uint words)
+(defn disp-y [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 k :i64 pv :vector-i64 gx :i64 gy :i64 tx :i64] :i64
   (let [pm (vector-at X 3)
         np2 (quot (vector-count pv) 2)
         u2 (if (or (> (vector-count pv) 24) (= (rem (vector-count pv) 2) 1)) (vector-at [0] 1) 0)
@@ -40,13 +41,17 @@
                (let [u (b/poke f (+ pm (* 8 i)) (pk (vector-at pv (* 2 i)) (vector-at pv (+ (* 2 i) 1))))] (recur (+ i 1)))))
         grid (+ pm 96)
         group (+ pm 128)
-        v0 (b/poke f grid gx) v1 (b/poke f (+ grid 8) 1) v2 (b/poke f (+ grid 16) 1)
+        v0 (b/poke f grid gx) v1 (b/poke f (+ grid 8) gy) v2 (b/poke f (+ grid 16) 1)
         v3 (b/poke f group tx) v4 (b/poke f (+ group 8) 1) v5 (b/poke f (+ group 16) 1)
         ms (vector-at R 0)
         s0 (b/cc f ms en (vector-at X 0) (vector-at PL k) 0 0)
         s1 (b/cc f ms en (vector-at X 1) pm (* 4 (vector-count pv)) 2)
         s2 (b/cc f ms en (vector-at X 2) grid group 0)]
     0))
+
+;; disp with one row of gx threadgroups
+(defn disp [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 en :i64 X :vector-i64 PL :vector-i64 k :i64 pv :vector-i64 gx :i64 tx :i64] :i64
+  (disp-y f R en X PL k pv gx 1 tx))
 
 ;; a command buffer and compute encoder with W (binding 0) and A (binding 1) bound; returns [cb en]
 (defn open-enc [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 X :vector-i64] :vector-i64

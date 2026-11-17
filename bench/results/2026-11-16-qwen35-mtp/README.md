@@ -21,7 +21,7 @@ Linear AWAI-2938 (E5 in [docs/engine-plan.md](../../../docs/engine-plan.md)). Fo
 
   | | |
   | --- | --- |
-  | Source | nace-ai/Qwen3.5-4B-MLX @ 9f7d3278 |
+  | Source | MTP sidecar of Qwen/Qwen3.5-4B @ 851bf6e (Kapitsa's manifest lists it as a companion of nace-ai/Qwen3.5-4B-MLX @ 9f7d3278; corrected 2026-11-17, this row first named the main repository) |
   | Format | BF16, norms stored as 1 + w |
   | sha256 | 4f491dd27975520ec9c9bfa970ca215cc7f12a0328761d3656ab7b9f388e472a |
   | Provenance | the same file Kapitsa 0.2.36 downloaded for [E0](../2026-11-15-e0-kapitsa/README.md); its manifest records this digest. No upstream digest is checked here. |
