@@ -40,11 +40,23 @@
 #   mtp-mutant       the MTP head's hidden half of the fc input left stale: the tokens stay equal and fewer drafts
 #                    are accepted (the drafts only choose what is verified)
 #   mtp-digest       an MTP digest that differs in one character refuses before any token
+# With the DFlash drafter file (5th argument: model.safetensors of z-lab/Qwen3.5-4B-DFlash @ 9a1996c, sha256 below),
+# the DFlash-drafted decode (qwen35_dflash.kotoba.in, blocks of 16) is checked over 48 tokens of a chat prompt that
+# opens a think block (the chat-prompt row's ids without the empty think block):
+#   dflash-exact     the 48 tokens equal the plain decode's
+#   dflash-accept-mutant  every draft accepted without the verify check changes the tokens
+#   dflash-replay-mutant  the delta-net states advanced over the whole block instead of the accepted tokens changes
+#                    the tokens
+#   dflash-ctx-mutant  the drafter's context not updated with the accepted tokens: the tokens stay equal and fewer
+#                    than half as many drafts are accepted
+#   dflash-digest    a DFlash digest that differs in one character refuses before any token
 # Timing on stderr (`q35-ns ...`) is a diagnostic, not a benchmark. A Mac GPU host is required (not a CI step).
 #
 #   sh run.sh /path/to/amu-checkout /path/to/Qwen3.5-4B-Q4_K_M.gguf [python3] [/path/to/mtp.safetensors]
+#             [/path/to/dflash/model.safetensors]
 set -eu
-AMU=${1:?amu checkout}; MODEL=${2:?model gguf}; PY=${3:-python3}; MTP=${4:-}
+AMU=${1:?amu checkout}; MODEL=${2:?model gguf}; PY=${3:-python3}; MTP=${4:-}; DFLASH=${5:-}
+DPIN=1eb221d36abb13a5f1b972f8d031a9723fad8cbb7d275abe548b60e77577eb42
 MPIN=4f491dd27975520ec9c9bfa970ca215cc7f12a0328761d3656ab7b9f388e472a
 PIN=00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -62,7 +74,7 @@ build() {
   if [ -n "${5:-}" ]; then
     FROM=$6 TO=$7 perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/ or die "mutation did not apply\n"' "$WK/src-$1/murakumo/engine/$5"
   fi
-  sed -e "s#@PATH@#$2#g;s#@EXPECT@#$3#g;s#@IDS@#${IDS:-760 6511 314 9338 369}#g;s#@STEPS@#$4#g;s#@LAYERS@#${LAYERS:-32}#g;s#@MTP@#$MTP#g;s#@MEXPECT@#${MEXP:-}#g" "$HERE/${IN:-qwen35_metal.kotoba.in}" > "$WK/$1.kotoba"
+  sed -e "s#@PATH@#$2#g;s#@EXPECT@#$3#g;s#@IDS@#${IDS:-760 6511 314 9338 369}#g;s#@STEPS@#$4#g;s#@LAYERS@#${LAYERS:-32}#g;s#@MTP@#${DRAFT:-$MTP}#g;s#@MEXPECT@#${MEXP:-}#g;s#@BLOCK@#${BS:-16}#g" "$HERE/${IN:-qwen35_metal.kotoba.in}" > "$WK/$1.kotoba"
   "$AMU/bin/amu" compile "$WK/$1.kotoba" --source-path "$WK/src-$1" --runtime-profile amu-program-metal -o "$WK/$1" >/dev/null
 }
 runit() { { "$WK/$1" > /dev/null 2> "$WK/$1.txt"; rc=$?; } 2>/dev/null || true; }
@@ -168,6 +180,39 @@ if [ -n "$MTP" ]; then
   rc=0; runit md
   if [ "$rc" != 0 ] && ! grep -q '^greedy' "$WK/md.txt"; then echo "mtp-digest: one character off refuses before any token (exit $rc)"
   else echo "mtp-digest: NOT refused (exit $rc)"; fail=1; fi
+fi
+
+if [ -n "$DFLASH" ]; then
+  dh=$(shasum -a 256 "$DFLASH" | cut -c1-64)
+  [ "$dh" = "$DPIN" ] || { echo "DFlash digest $dh is not the pinned $DPIN"; exit 1; }
+  printf "%s" "$DPIN" > "$WK/dflash.sha256"
+  THINK="248045 846 198 814 20139 1204 264 33828 25710 46966 1345 424 369 6992 13 9357 264 2342 2716 41228 364 264 21520 30501 13 248046 198 248045 74455 198"
+  IDS="$THINK" build t48 "$MODEL" "$WK/model.sha256" 48; unset IDS
+  rc=0; runit t48
+  T48=$(grep '^greedy' "$WK/t48.txt" || true)
+  dfl() { # name [file from to]
+    IDS="$THINK" DRAFT="$DFLASH" MEXP="$WK/dflash.sha256" IN=qwen35_dflash.kotoba.in build "$1" "$MODEL" "$WK/model.sha256" 48 "${2:-}" "${3:-}" "${4:-}"; unset IDS DRAFT MEXP IN
+    rc=0; runit "$1"
+    sgot=$(grep '^greedy' "$WK/$1.txt" || true); sacc=$(awk '/^q35-spec/{print $5 "/" $3}' "$WK/$1.txt")
+  }
+  dfl d48
+  if [ "$rc" = 0 ] && [ -n "$T48" ] && [ "$sgot" = "$T48" ]; then echo "dflash-exact: 48 tokens equal the plain decode's, $sacc drafts accepted per cycles ($(grep '^q35-ns' "$WK/d48.txt"))"
+  else echo "dflash-exact: FAILED (exit $rc): $sgot / $T48"; fail=1; fi
+  d48=${sacc%/*}
+  dfl dam model/qwen35.kotoba "(if (= (m/arena-u32 f X (+ (oTOK) (+ 17 j))) (m/arena-u32 f X (+ (oTOK) j)))" "(if (= 1 1)"
+  if [ -n "$sgot" ] && [ "$sgot" != "$T48" ]; then echo "dflash-accept-mutant (verify check dropped): tokens change (detected)"
+  else echo "dflash-accept-mutant NOT detected (exit $rc): $sgot"; fail=1; fi
+  dfl drm model/qwen35.kotoba "(replay! f R en X PL P (+ acc 1)" "(replay! f R en X PL P bs"
+  if [ -n "$sgot" ] && [ "$sgot" != "$T48" ]; then echo "dflash-replay-mutant (state advanced over the whole block): tokens change (detected)"
+  else echo "dflash-replay-mutant NOT detected (exit $rc): $sgot"; fail=1; fi
+  dfl dxm model/qwen35.kotoba "(dctx! f R en X PL D (+ acc 1) (- pos (+ acc 1)))" "0"
+  if [ "$rc" = 0 ] && [ "$sgot" = "$T48" ] && [ $((2 * ${sacc%/*})) -lt "$d48" ]; then echo "dflash-ctx-mutant (context not updated): tokens equal, $sacc accepted against $d48 (detected)"
+  else echo "dflash-ctx-mutant NOT detected (exit $rc): $sacc $sgot"; fail=1; fi
+  printf "%s%s" "$(printf "%s" "$DPIN" | cut -c1-63)" "$( [ "$(printf "%s" "$DPIN" | cut -c64)" = 0 ] && echo 1 || echo 0)" > "$WK/dbad.sha256"
+  DRAFT="$DFLASH" MEXP="$WK/dbad.sha256" IN=qwen35_dflash.kotoba.in build dd "$MODEL" "$WK/model.sha256" 2; unset DRAFT MEXP IN
+  rc=0; runit dd
+  if [ "$rc" != 0 ] && ! grep -q '^greedy' "$WK/dd.txt"; then echo "dflash-digest: one character off refuses before any token (exit $rc)"
+  else echo "dflash-digest: NOT refused (exit $rc)"; fail=1; fi
 fi
 
 [ "$fail" = 0 ] && echo "gate passed, build dir $WK" || { echo "GATE FAILED, build dir $WK"; exit 1; }

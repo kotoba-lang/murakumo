@@ -3,14 +3,16 @@
             [murakumo.engine.kernels.norm :as norm]
             [murakumo.engine.kernels.deltanet :as dnet]
             [murakumo.engine.kernels.attn :as attn]
-            [murakumo.engine.kernels.head :as head]))
+            [murakumo.engine.kernels.head :as head]
+            [murakumo.engine.kernels.dflash :as dflash]))
 
 ;; The kernel library: one MSL source of every kernel the plans use, and the pipeline order (kernel ids):
 ;;   0..3 mv_q8_0 mvk_q4_k mvk_q5_k mv_q6_k  4..7 emb_q8_0 emb_q4_k emb_q5_k emb_q6_k  8 rms1  9 swiglu
 ;;   10 dnf (fused Gated DeltaNet)  11 qkr  12 attd  13 argmax  14..17 mv2_q8_0 mvk2_q4_k mvk2_q5_k mv2_q6_k (two tokens)
 ;;   18 mv_bf16  19 mv2_bf16  20 bfq8 (BF16 rows to Q8_0, at load)
 ;;   21..25 mm_q8_0 mm_q4_k mm_q5_k mm_q6_k mm_bf16 (up to 16 tokens, simdgroup matrices)  26 dnfn (Gated DeltaNet over
-;;   the tokens of a pass)  27 mmr (adds mm's k-split partial sums)
+;;   the tokens of a pass)  27 mmr (adds mm's k-split partial sums)  28 dnr (replays dnfn's saved delta-rule inputs)
+;;   29 cpy  30 qkn (Qwen3 q/k norm + RoPE)  31 attb (block attention): the DFlash drafter
 ;; Every kernel takes (W bytes, A floats, P sixteen uints).
 (defn header [] :string
   "#include <metal_stdlib>
@@ -21,7 +23,7 @@ struct P { uint a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, q; };
 
 (defn source [] :string
   (string-concat (header) (string-concat (quant/source) (string-concat (norm/source)
-    (string-concat (dnet/source) (string-concat (attn/source) (head/source)))))))
+    (string-concat (dnet/source) (string-concat (attn/source) (string-concat (head/source) (dflash/source))))))))
 
 (defn k-rms1 [] :i64 8)
 (defn k-swiglu [] :i64 9)
@@ -36,3 +38,7 @@ struct P { uint a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, q; };
 (defn k-mm [dt :i64] :i64 (quant/mm-id dt))
 (defn k-dnfn [] :i64 26)
 (defn k-mmr [] :i64 27)
+(defn k-dnr [] :i64 28)
+(defn k-cpy [] :i64 29)
+(defn k-qkn [] :i64 30)
+(defn k-attb [] :i64 31)
