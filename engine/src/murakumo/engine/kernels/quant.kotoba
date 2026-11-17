@@ -334,7 +334,9 @@ kernel void mm(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]
                uint sg [[simdgroup_index_in_threadgroup]]) {
   threadgroup half wt[64 * 64];
   threadgroup float xt[8 * NC * 64];
-  threadgroup float ot[64 * 8 * NC];
+  // the results go through the weight tile's memory after the last step (fewer threadgroup bytes, more threadgroups
+  // per core)
+  threadgroup float *ot = (threadgroup float *)wt;
   uint t = t2.x, r0 = tp.x * 64;
   uint ns = p.c / 64, per = (ns + p.i - 1) / p.i, kb = min(tp.y * per, ns) * 64, ke = min((tp.y + 1) * per, ns) * 64;
   ulong rb = ulong(p.c / QE[T]) * QB[T];
