@@ -18,6 +18,7 @@ versions and argv. Method: [docs/benchmarks.md](../docs/benchmarks.md).
 | [2026-11-17-qwen35-dflash](results/2026-11-17-qwen35-dflash/README.md) | same | Qwen3.5-4B Q4_K_M + DFlash drafter | — (build comparison only) | DFlash drafts, lossless: 16.6–21.0 ms/token against 18.2–19.5 plain with a think block (3.3–3.5 tokens per cycle); 24–30 against 17 without (2.15) |
 | [2026-11-17-qwen35-dflash-2](results/2026-11-17-qwen35-dflash-2/README.md) | same | Qwen3.5-4B Q4_K_M + DFlash drafter | — (build comparison only) | 8-column verify matvec: DFlash block 8 12.3–12.4 ms/token against 17.0–20.7 plain with a think block (about 1.4×); 18.2–18.7 against 16.8–17.0 without |
 | [2026-11-17-qwen35-verify](results/2026-11-17-qwen35-verify/README.md) | same | Qwen3.5-4B Q4_K_M | — (build comparison only) | 8-token pass 25.4–26.5 ms (llama.cpp pp8 about 23.9 ms); six matvec variants tried, one kept (16-token pass 37 → 35 ms) |
+| [2026-11-17-qwen35-dhead](results/2026-11-17-qwen35-dhead/README.md) | same | Qwen3.5-4B Q4_K_M + DFlash drafter | — (build comparison only) | drafter head over tokens 0–65535 + specials: 11.4 ms/token with a think block (12.2–15.6 before), 16.8–17.1 without (level with plain) |
 
 | Tool | Does |
 | --- | --- |

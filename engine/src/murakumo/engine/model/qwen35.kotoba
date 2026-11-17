@@ -446,6 +446,13 @@
 
 ;; drafter layers
 (defn- df-layers [] :i64 (pr/df-layers))
+;; the drafter head's vocabulary: tokens 0 .. df-hv - 1 (byte-pair ids, the earliest merges first), then the special
+;; tokens 248044 .. 248079
+(defn- df-hv [] :i64 65536)
+;; bytes of one row of cols values in dtype dt
+(defn- row-bytes [dt :i64 cols :i64] :i64
+  (cond (= dt 8) (* (quot cols 32) 34) (= dt 12) (* (quot cols 256) 144) (= dt 13) (* (quot cols 256) 176)
+        (= dt 14) (* (quot cols 256) 210) (= dt 30) (* cols 2) :else (vector-at [0] 1)))
 ;; drafter constants: RoPE base 1e7 and epsilon 1e-6 (float bits), the mask token
 (defn- df-rope [] :i64 1259902592)
 (defn- df-eps [] :i64 897988541)
@@ -514,9 +521,13 @@
         fr (rms f R en X PL (vector-at D 97) (oX) (oH) (df-eps) bs)
         fb (bar f R en)
         w1 (bindw! f R en X (vector-at X 5))
-        hd (mv f R en X PL (vector-at P g) (vector-at P (+ g 1)) (pr/q35-vocab) 2560 (+ (oH) (ts)) (+ (oLG) (ts)) 0 (- bs 1))
+        ;; the drafts come from the first df-hv tokens and the special tokens 248044 .. 248079 only (the verify pass
+        ;; still takes its argmax over the whole vocabulary, so this changes which drafts are tried, not the output)
+        et (vector-at P (+ g 1))
+        hd (mv f R en X PL (vector-at P g) et (df-hv) 2560 (+ (oH) (ts)) (+ (oLG) (ts)) 0 (- bs 1))
+        hs (mv f R en X PL (+ (vector-at P g) (* 248044 (row-bytes et 2560))) et 36 2560 (+ (oH) (ts)) (+ (oLG) (+ (ts) (df-hv))) 0 (- bs 1))
         hb (bar f R en)
-        am (dy f R en X PL (k/k-argmax) (vector-i64 0 (ts) (pr/q35-vocab) 0 0 (+ (oLG) (ts)) (+ (oTOK) 17) (+ (oLOG) 600)) 1 (- bs 1) 1024)]
+        am (dy f R en X PL (k/k-argmax) (vector-i64 0 (ts) (+ (df-hv) 36) 0 0 (+ (oLG) (ts)) (+ (oTOK) 17) (+ (oLOG) 600) (df-hv) 248044) 1 (- bs 1) 1024)]
     (bar f R en)))
 
 ;; the delta-net states after the first cnt tokens of the last verify pass (which read slot): dnr from slot into

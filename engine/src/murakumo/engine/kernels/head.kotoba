@@ -2,7 +2,7 @@
 
 ;; argmax of the logits (first index on ties): c n, f logits off, g out word (uint), also logged at word h + e
 ;; (e the position); one 1024-thread threadgroup per token (threadgroup y is token y: logits at f + y b, out word
-;; g + y, logged at h + e + y).
+;; g + y, logged at h + e + y). With i > 0 the logits are two ranges: index k >= i stands for token k - i + j.
 (defn source [] :string
   "
 kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
@@ -19,6 +19,9 @@ kernel void argmax(device const uchar *W [[buffer(0)]], device float *A [[buffer
     if (t < w && (bv[t + w] > bv[t] || (bv[t + w] == bv[t] && bi[t + w] < bi[t]))) { bv[t] = bv[t + w]; bi[t] = bi[t + w]; }
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
-  if (t == 0) { ((device uint *)A)[p.g + y] = bi[0]; ((device uint *)A)[p.h + p.e + y] = bi[0]; }
+  if (t == 0) {
+    uint ix = (p.i > 0u && bi[0] >= p.i) ? bi[0] - p.i + p.j : bi[0];
+    ((device uint *)A)[p.g + y] = ix; ((device uint *)A)[p.h + p.e + y] = ix;
+  }
 }
 ")
