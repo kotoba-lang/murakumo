@@ -13,7 +13,9 @@ inference on the machine it runs on, measured in the open. On an M1 Max today
 (loaded host, records below): Qwen2.5-0.5B decode 292.6 tok/s
 against MLX 252.4 and llama.cpp 168.9, prefill 8,814 against llama.cpp 8,860;
 Qwen3.5-4B decode 44.0 against llama.cpp 38.6, MLX 55.5 and Kapitsa's
-speculative 106.3. None of this has passed the claim gate (AWAI-18) yet: it
+speculative 106.3; with DFlash drafts, 87.7–88.5 on text inside a think block
+(a build comparison against its own plain decode, not yet a same-hour round with
+the other engines). None of this has passed the claim gate (AWAI-18) yet: it
 needs quiet-host rounds.
 
 [Benchmarks](#benchmarks) · [Quick start](#quick-start) · [What murakumo is today](#what-murakumo-is-today) · [How it works](#how-it-works) · [Plan](docs/engine-plan.md) · [Engine profiles](docs/engine-profiles.md) · [Roadmap](docs/inference-roadmap.md) · [How we measure](docs/benchmarks.md) · [Press kit](docs/assets/brand/README.md)
@@ -42,18 +44,25 @@ read their own 4-bit packs):
 | Kapitsa 0.2.36 | speculative (DFlash2 drafter, 73 % of tokens drafted), its own benchmark | **106.3** |
 | MLX 4-bit (0.31.1) | plain greedy | 55.5 |
 | <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | plain greedy | 44.0 run between the others; 41.6–45.8 run alone |
+| <mark>murakumo</mark>, Kotoba via Amu selfhost, Metal | speculative (DFlash drafter, blocks of 8; output equal to plain greedy), build comparison 2026-11-17 | 87.7–88.5 inside a think block (plain 50–59 in the same rounds); about level with plain on chat text with an empty think block |
 | llama.cpp Metal (b11669), same GGUF | plain greedy | 38.6 |
 
 <sub>murakumo's greedy tokens equal a pinned oracle's on both models (llama.cpp's on Qwen3.5), and every
 build passes a gate with must-fail mutants and digest/wrong-model refusals.
 MLX and Kapitsa read different files, so their bytes per token differ: MLX's
 4-bit Qwen3.5 pack reads about 2.4 GB per token against this Q4_K_M file's
-2.74 GB. Kapitsa's figure is speculative decoding and is not comparable with
-the plain rows; murakumo's speculative decoding is step E5 of
-[the plan](docs/engine-plan.md). The kernels are hand-written MSL until E7.
+2.74 GB. The speculative rows are not comparable with the plain ones, and
+murakumo's speculative row is not from the same-hour round: it compares its own
+builds on two chat prompts (step E5 of [the plan](docs/engine-plan.md)). How much
+drafting helps depends on the text; Kapitsa also verifies a tree of candidates.
+The kernels are hand-written MSL until E7.
 Records: [Qwen2.5 decode](bench/results/2026-11-15-e2-decode/README.md),
 [Qwen2.5 prefill](bench/results/2026-11-15-e3-f16/README.md),
 [Qwen3.5 decode](bench/results/2026-11-16-qwen35-decode-3/README.md),
+[Qwen3.5 DFlash drafts](bench/results/2026-11-17-qwen35-dhead/README.md) (and the
+[cycle](bench/results/2026-11-17-qwen35-dflash-2/README.md),
+[verify pass](bench/results/2026-11-17-qwen35-verify/README.md) and
+[tree](bench/results/2026-11-17-qwen35-tree/README.md) records),
 [Kapitsa, MLX and llama.cpp on Qwen3.5](bench/results/2026-11-15-e0-kapitsa/README.md),
 [earlier records](bench/README.md). The poster is drawn from
 [`bench/poster.json`](bench/poster.json) by `bench/poster.py`.
@@ -97,11 +106,14 @@ sh bench/kernels/qwen35-metal/run.sh ../amu Qwen3.5-4B-Q4_K_M.gguf
   RMSNorm, RoPE, attention with a KV cache, SwiGLU, the head and argmax, with
   decode steps chained on the GPU. Qwen2.5-0.5B (Q8_0, decode and batched
   prefill) and Qwen3.5-4B (Q4_K_M with Q5_K/Q6_K/Q8_0 tensors; gated DeltaNet
-  and gated attention layers, decode) generate tokens equal to a pinned oracle.
+  and gated attention layers; decode, and the prompt in 16-token passes) generate
+  tokens equal to a pinned oracle. Qwen3.5 also decodes with drafts from its MTP
+  head or from the DFlash block drafter, verified so the output equals plain
+  greedy decoding.
   Qwen3.5 picks its kernels from one library through a profile read from the
   GGUF ([engine profiles](docs/engine-profiles.md)); the Qwen2.5 program
   (`bench/kernels/qwen2-metal/`) moves onto it next. It is not yet served
-  through `/v1` (step E4) and has no speculative decoding (E5).
+  through `/v1` (step E4).
 - **Amu selfhost.** The engine's host code is Kotoba compiled by `bin/amu`, the
   signed Mach-O that Amu builds of itself. The Metal kernels are still
   hand-written MSL text inside that Kotoba program; Amu emitting them from
