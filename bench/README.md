@@ -21,6 +21,7 @@ versions and argv. Method: [docs/benchmarks.md](../docs/benchmarks.md).
 | [2026-11-17-qwen35-dhead](results/2026-11-17-qwen35-dhead/README.md) | same | Qwen3.5-4B Q4_K_M + DFlash drafter | — (build comparison only) | drafter head over tokens 0–65535 + specials: 11.4 ms/token with a think block (12.2–15.6 before), 16.8–17.1 without (level with plain) |
 | [2026-11-17-qwen35-tree](results/2026-11-17-qwen35-tree/README.md) | same | Qwen3.5-4B Q4_K_M + DFlash drafter | — (build comparison only) | two-branch tree verify (not merged): lossless but no faster than a chain with blocks of 4 (16.1–16.4 ms/token on the chat prompt) |
 | [2026-11-17-qwen35-adapt](results/2026-11-17-qwen35-adapt/README.md) | same | Qwen3.5-4B Q4_K_M + DFlash drafter | — (build comparison only) | adaptive block 4/8 (not merged): no better than fixed blocks of 8 (11.4–12.9 ms/token with a think block) |
+| [2026-11-17-qwen35-mvs](results/2026-11-17-qwen35-mvs/README.md) | same | Qwen3.5-4B Q4_K_M | — (build comparison only) | small-batch matvec with weights in registers (not merged): 8-token pass 40.6–66.2 ms against 25.6 for `mm8` |
 
 | Tool | Does |
 | --- | --- |
