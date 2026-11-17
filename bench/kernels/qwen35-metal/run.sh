@@ -19,11 +19,20 @@
 #   q6k-mutant       one scale index of the Q6_K matvec off by one changes the tokens
 #   q4k-mutant       the 16-byte Q4_K/Q5_K matvec with the scales of its low- and high-nibble sub-blocks swapped changes
 #                    the tokens
-#   even-prompt      the prompt and the first exact token (6 tokens, so the last prompt pass takes two) continue with
-#                    the next 15 exact tokens
+#   even-prompt      the prompt and the first exact token (6 tokens) continue with the next 15 exact tokens
+#   (the prompt goes through the model up to 16 tokens per pass: simdgroup-matrix matvecs (mm) and one Gated DeltaNet
+#   dispatch over the pass's tokens (dnfn); exact and even-prompt take that path)
+#   mm-mutant        the multi-token matvec multiplying rows 8 .. 15 of each tile by rows 0 .. 7's weights changes the
+#                    tokens
+#   dnfn-mutant      the multi-token Gated DeltaNet's conv1d reading only the current token changes the tokens
+#   multi-slot-mutant  decode reading the state slot as if the 5-token prompt pass had advanced it five slots
+#                    (instead of one) changes the tokens
+#   chat-prompt      a 34-token chat prompt (passes of 16, 16 and 2) gives the same 32 tokens as the same prompt two
+#                    tokens per pass
 #   digest           a pinned digest that differs in one character refuses before any token
 #   wrong-model      the synthetic S1 fixture (architecture qwen2) is refused by the qwen35 profile
-# With the MTP head file (4th argument: mtp.safetensors of nace-ai/Qwen3.5-4B-MLX @ 9f7d327, sha256 below), the
+# With the MTP head file (4th argument: mtp.safetensors, the MTP sidecar of Qwen/Qwen3.5-4B @ 851bf6e as Kapitsa 0.2.36
+# pulls it, sha256 below), the
 # drafted decode (qwen35_spec.kotoba.in) is checked against the plain one over 48 tokens:
 #   spec-exact       the 48 tokens equal the plain decode's (drafts are verified, so they never change the output)
 #   accept-mutant    every draft accepted without the verify check changes the tokens
@@ -83,6 +92,19 @@ mutant conv-mutant "conv1d without its state" kernels/deltanet.kotoba "float o =
 mutant gate-mutant "attention output gate dropped" kernels/attn.kotoba "(o / z) * (1.0f / (1.0f + precise::exp(-gt)))" "(o / z)"
 mutant q6k-mutant "Q6_K scale index" kernels/quant.kotoba "[li / 16 + 2 * k]);" "[1 - li / 16 + 2 * k]);"
 mutant q4k-mutant "Q4_K/Q5_K sub-block pair scales swapped" kernels/quant.kotoba "dd.x * (s0 * lo + s1 * hi)" "dd.x * (s1 * lo + s0 * hi)"
+mutant mm-mutant "multi-token matvec tile rows" kernels/quant.kotoba "simdgroup_multiply_accumulate(c10, a1, b0, c10);" "simdgroup_multiply_accumulate(c10, a0, b0, c10);"
+mutant dnfn-mutant "multi-token conv1d without its state" kernels/deltanet.kotoba "float o = w[0] * s0 + w[1] * s1 + w[2] * s2 + w[3] * x;" "float o = w[3] * x;"
+mutant multi-slot-mutant "state slot after a multi-token pass" model/qwen35.kotoba "(rem (+ sl (if (> n 2) 1 n)) 3)" "(rem (+ sl n) 3)"
+
+# a chat prompt in passes of 16, 16 and 2 against the same prompt two tokens per pass
+CHAT="248045 846 198 814 20139 1204 264 33828 25710 46966 1345 424 369 6992 13 9357 264 2342 2716 41228 364 264 21520 30501 13 248046 198 248045 74455 198 248068 271 248069 271"
+IDS="$CHAT" build c16 "$MODEL" "$WK/model.sha256" 32; unset IDS
+rc=0; runit c16
+IDS="$CHAT" build c2 "$MODEL" "$WK/model.sha256" 32 model/qwen35.kotoba "(let [n (if (>= (- np i) (nb)) (nb) (- np i))" "(let [n (if (>= (- np i) 2) 2 (- np i))"; unset IDS
+runit c2
+g16=$(grep '^greedy' "$WK/c16.txt" || true); g2=$(grep '^greedy' "$WK/c2.txt" || true)
+if [ "$rc" = 0 ] && [ -n "$g16" ] && [ "$g16" = "$g2" ]; then echo "chat-prompt: 32 tokens equal with passes of 16 and of 2 ($(grep '^q35-ns' "$WK/c16.txt" | cut -d' ' -f2-5) against $(grep '^q35-ns' "$WK/c2.txt" | cut -d' ' -f4-5))"
+else echo "chat-prompt: FAILED (exit $rc): $g16 / $g2"; fail=1; fi
 
 # residual after 4 layers (3 delta-net layers and the first gated-attention one), last prompt position, first 6 values,
 # against ref_forward35.py --layers 4 (numpy, recorded 2026-11-15): within 2e-4 of each
@@ -135,7 +157,7 @@ if [ -n "$MTP" ]; then
   spec am model/qwen35.kotoba "(if (= a0 dr)" "(if (= 1 1)"
   if [ -n "$sgot" ] && [ "$sgot" != "$W48" ]; then echo "accept-mutant (verify check dropped): tokens change (detected)"
   else echo "accept-mutant NOT detected (exit $rc): $sgot"; fail=1; fi
-  spec sm model/qwen35.kotoba "(rem (+ slot 1) 3)" "(rem (+ slot 2) 3)"
+  spec sm model/qwen35.kotoba "q -1 (rem (+ slot 1) 3)" "q -1 (rem (+ slot 2) 3)"
   if [ -n "$sgot" ] && [ "$sgot" != "$W48" ]; then echo "slot-mutant (rejected draft advances two state slots): tokens change (detected)"
   else echo "slot-mutant NOT detected (exit $rc): $sgot"; fail=1; fi
   spec mm model/qwen35.kotoba "(+ mb (+ (oQ) 2560)) eps n)" "(+ mb (oX)) eps n)"

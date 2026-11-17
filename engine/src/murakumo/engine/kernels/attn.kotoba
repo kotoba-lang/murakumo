@@ -7,12 +7,14 @@
 // q/k norm + RoPE + cache store: a q_norm off, b k_norm off (F32 [256] in W), c pos, d q off (16 heads of 512:
 // q 256 | gate 256), e k off (4 x 256), f v off (4 x 256), g k cache off, h v cache off (slot base, [pos][1024]),
 // i rope base bits, j epsilon bits. Threadgroup t < 16 is q head t, t >= 16 k head t - 16 (which also stores v);
-// lane l holds dims l + 32 j, so it holds the RoPE pair (l, l + 32).
+// lane l holds dims l + 32 j, so it holds the RoPE pair (l, l + 32). Threadgroup y is token y of a pass (position
+// c + y, its d, e, f at + y k).
 kernel void qkr(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                uint tg [[threadgroup_position_in_grid]], uint ln [[thread_index_in_simdgroup]]) {
+                uint2 tp [[threadgroup_position_in_grid]], uint ln [[thread_index_in_simdgroup]]) {
+  uint tg = tp.x, pos = p.c + tp.y, to = tp.y * p.k;
   bool isk = tg >= 16;
   uint h = isk ? tg - 16 : tg;
-  device float *x = A + (isk ? p.e + h * 256 : p.d + h * 512);
+  device float *x = A + (isk ? p.e + to + h * 256 : p.d + to + h * 512);
   device const float *w = (device const float *)(W + (isk ? p.b : p.a));
   float v[8];
   float ss = 0.0f;
@@ -20,15 +22,15 @@ kernel void qkr(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
   float r = 1.0f / precise::sqrt(simd_sum(ss) / 256.0f + as_type<float>(p.j));
   FU for (uint j = 0; j < 8; j++) v[j] = v[j] * r * w[ln + 32 * j];
   float inv = precise::pow(as_type<float>(p.i), -float(2 * ln) / 64.0f);
-  float ang = float(p.c) * inv;
+  float ang = float(pos) * inv;
   float c = precise::cos(ang), s = precise::sin(ang);
   float a = v[0], b = v[1];
   v[0] = a * c - b * s;
   v[1] = a * s + b * c;
   if (isk) {
     FU for (uint j = 0; j < 8; j++) {
-      A[p.g + p.c * 1024 + h * 256 + ln + 32 * j] = v[j];
-      A[p.h + p.c * 1024 + h * 256 + ln + 32 * j] = A[p.f + h * 256 + ln + 32 * j];
+      A[p.g + pos * 1024 + h * 256 + ln + 32 * j] = v[j];
+      A[p.h + pos * 1024 + h * 256 + ln + 32 * j] = A[p.f + to + h * 256 + ln + 32 * j];
     }
   } else {
     FU for (uint j = 0; j < 8; j++) x[ln + 32 * j] = v[j];
@@ -37,14 +39,16 @@ kernel void qkr(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
 
 // decode attention for one token: c positions seen (pos + 1), d q off (heads of 512, q then gate), g k cache off,
 // h v cache off, f out off (16 x 256). One 256-thread threadgroup per q head, kv head = head / 4; thread t scores
-// positions t, t + 256, ...; then thread t sums dim t over the positions. Scale 1/16.
+// positions t, t + 256, ...; then thread t sums dim t over the positions. Scale 1/16. Threadgroup y is token y of a
+// pass (it sees c + y positions; its d and f at + y b).
 kernel void attd(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
-                 uint h [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]],
+                 uint2 hp [[threadgroup_position_in_grid]], uint2 t2 [[thread_position_in_threadgroup]],
                  uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]]) {
   threadgroup float sc[1024];
   threadgroup float red[8];
-  uint kh = h / 4, n = p.c;
-  device const float4 *qv = (device const float4 *)(A + p.d + h * 512);
+  uint h = hp.x, to = hp.y * p.b, t = t2.x;
+  uint kh = h / 4, n = p.c + hp.y;
+  device const float4 *qv = (device const float4 *)(A + p.d + to + h * 512);
   float lm = -INFINITY;
   for (uint s = t; s < n; s += 256) {
     device const float4 *kr = (device const float4 *)(A + p.g + s * 1024 + kh * 256);
@@ -67,7 +71,7 @@ kernel void attd(device const uchar *W [[buffer(0)]], device float *A [[buffer(1
   z = ((red[0] + red[1]) + (red[2] + red[3])) + ((red[4] + red[5]) + (red[6] + red[7]));
   float o = 0.0f;
   for (uint s = 0; s < n; s++) o += sc[s] * A[p.h + s * 1024 + kh * 256 + t];
-  float gt = A[p.d + h * 512 + 256 + t];
-  A[p.f + h * 256 + t] = (o / z) * (1.0f / (1.0f + precise::exp(-gt)));
+  float gt = A[p.d + to + h * 512 + 256 + t];
+  A[p.f + to + h * 256 + t] = (o / z) * (1.0f / (1.0f + precise::exp(-gt)));
 }
 ")

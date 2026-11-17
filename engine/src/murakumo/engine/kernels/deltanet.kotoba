@@ -74,4 +74,76 @@ kernel void dnf(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
     A[p.f + hv * 128 + t] = ((threadgroup float *)ty)[t] * r * w * (z / (1.0f + exp(-z)));
   }
 }
+// dnf for n tokens in one dispatch: the conv window and the delta-rule state stay in registers across the tokens, so
+// the state is read once (slot e, conv g) and written once after the last token (slot m, conv h; the write slots must
+// differ from the read ones). Fields as dnf, plus n the token stride (token j's d, f, j, l at + j n) and o the token
+// count. 512 threads (the state held across the tokens needs the registers of two 1024-thread lanes): simdgroup s
+// takes dv rows 8 s .. 8 s + 7.
+kernel void dnfn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                 uint hv [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]],
+                 uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]]) {
+  threadgroup float4 tq[32], tk[32], tv[32], ty[32];
+  threadgroup float red[4];
+  uint hk = hv % 16;
+  uint part = t / 128, i = t % 128;
+  uint c = part == 0 ? hk * 128 + i : (part == 1 ? 2048 + hk * 128 + i : 4096 + hv * 128 + i);
+  // the conv weights and the norm weight are reloaded per token (from cache) so the kernel fits 1024 threads
+  device const float *w = (device const float *)(W + p.c) + c * 4;
+  float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+  if (t < 384) {
+    device const float *s = A + p.g + c * 3;
+    s0 = s[0]; s1 = s[1]; s2 = s[2];
+  }
+  float4 st[8];
+  FU for (uint r = 0; r < 8; r++) st[r] = *(device const float4 *)(A + p.e + (hv * 128 + sg * 8 + r) * 128 + ln * 4);
+  for (uint j = 0; j < p.o; j++) {
+    uint jo = j * p.n;
+    if (t < 384) {
+      float x = A[p.l + jo + c];
+      float o = w[0] * s0 + w[1] * s1 + w[2] * s2 + w[3] * x;
+      s0 = s1; s1 = s2; s2 = x;
+      o = o / (1.0f + precise::exp(-o));
+      threadgroup float *dst = (threadgroup float *)(part == 0 ? tq : (part == 1 ? tk : tv));
+      dst[i] = o;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sg < 2) {
+      float4 v = sg == 0 ? tq[ln] : tk[ln];
+      float n = simd_sum(dot(v, v));
+      if (ln == 0) red[sg] = n;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float4 q = tq[ln] * ((1.0f / precise::sqrt(red[0] / 128.0f + 1e-6f)) * (1.0f / 128.0f));
+    float4 k = tk[ln] * ((1.0f / precise::sqrt(red[1] / 128.0f + 1e-6f)) * (1.0f / precise::sqrt(128.0f)));
+    float al = A[p.d + jo + hv] + ((device const float *)(W + p.b))[hv];
+    float sp = al > 20.0f ? al : precise::log(1.0f + precise::exp(al));
+    float g = precise::exp(((device const float *)(W + p.a))[hv] * sp);
+    float beta = 1.0f / (1.0f + precise::exp(-A[p.d + jo + 32 + hv]));
+    FU for (uint r = 0; r < 8; r++) {
+      uint dv = sg * 8 + r;
+      float4 s = st[r] * g;
+      float kvm = simd_sum(dot(s, k));
+      float delta = (((threadgroup float *)tv)[dv] - kvm) * beta;
+      s += k * delta;
+      st[r] = s;
+      float y = simd_sum(dot(s, q));
+      if (ln == 0) ((threadgroup float *)ty)[dv] = y;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sg == 0) {
+      float4 v = ty[ln];
+      float n = simd_sum(dot(v, v));
+      if (ln == 0) red[2] = n;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (t < 128) {
+      float r = 1.0f / precise::sqrt(red[2] / 128.0f + as_type<float>(p.k));
+      float z = A[p.j + jo + hv * 128 + t];
+      A[p.f + jo + hv * 128 + t] = ((threadgroup float *)ty)[t] * r * ((device const float *)(W + p.i))[t] * (z / (1.0f + exp(-z)));
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  FU for (uint r = 0; r < 8; r++) *(device float4 *)(A + p.m + (hv * 128 + sg * 8 + r) * 128 + ln * 4) = st[r];
+  if (t < 384 && (part == 2 || hv < 16)) { device float *n = A + p.h + c * 3; n[0] = s0; n[1] = s1; n[2] = s2; }
+}
 ")
