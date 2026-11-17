@@ -77,7 +77,8 @@ kernel void dnf(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)
 // dnf for n tokens in one dispatch: the conv window and the delta-rule state stay in registers across the tokens, so
 // the state is read once (slot e, conv g) and written once after the last token (slot m, conv h; the write slots must
 // differ from the read ones). Fields as dnf, plus n the token stride (token j's d, f, j, l at + j n) and o the token
-// count. 512 threads (the state held across the tokens needs the registers of two 1024-thread lanes): simdgroup s
+// count, q the save area (0: none; else token j's inputs of the delta rule at q + 16448 j: q [16][128] | k [16][128]
+// | v [32][128] | g [32] | beta [32] | the conv input x [8192], which dnr replays). 512 threads (the state held across the tokens needs the registers of two 1024-thread lanes): simdgroup s
 // takes dv rows 8 s .. 8 s + 7.
 kernel void dnfn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
                  uint hv [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]],
@@ -100,6 +101,7 @@ kernel void dnfn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1
     uint jo = j * p.n;
     if (t < 384) {
       float x = A[p.l + jo + c];
+      if (p.q != 0 && (part == 2 || hv < 16)) A[p.q + j * 16448 + 8256 + c] = x;
       float o = w[0] * s0 + w[1] * s1 + w[2] * s2 + w[3] * x;
       s0 = s1; s1 = s2; s2 = x;
       o = o / (1.0f + precise::exp(-o));
@@ -119,6 +121,12 @@ kernel void dnfn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1
     float sp = al > 20.0f ? al : precise::log(1.0f + precise::exp(al));
     float g = precise::exp(((device const float *)(W + p.a))[hv] * sp);
     float beta = 1.0f / (1.0f + precise::exp(-A[p.d + jo + 32 + hv]));
+    if (p.q != 0) {
+      device float *sv = A + p.q + j * 16448;
+      if (sg == 0 && hv < 16) { *(device float4 *)(sv + hk * 128 + ln * 4) = q; *(device float4 *)(sv + 2048 + hk * 128 + ln * 4) = k; }
+      if (t < 128) sv[4096 + hv * 128 + t] = ((threadgroup float *)tv)[t];
+      if (t == 0) { sv[8192 + hv] = g; sv[8224 + hv] = beta; }
+    }
     FU for (uint r = 0; r < 8; r++) {
       uint dv = sg * 8 + r;
       float4 s = st[r] * g;
@@ -145,5 +153,38 @@ kernel void dnfn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1
   }
   FU for (uint r = 0; r < 8; r++) *(device float4 *)(A + p.m + (hv * 128 + sg * 8 + r) * 128 + ln * 4) = st[r];
   if (t < 384 && (part == 2 || hv < 16)) { device float *n = A + p.h + c * 3; n[0] = s0; n[1] = s1; n[2] = s2; }
+}
+
+// replay of the first o tokens a dnfn pass saved (q: its save area): the delta-rule state from slot e (the one that
+// pass read) is advanced over them with the same arithmetic and written to slot m; the conv window from g, shifted
+// over their inputs, to h. A drafted block whose first o tokens are accepted leaves the state after them.
+kernel void dnr(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                uint hv [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]],
+                uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]]) {
+  uint hk = hv % 16;
+  float4 st[8];
+  FU for (uint r = 0; r < 8; r++) st[r] = *(device const float4 *)(A + p.e + (hv * 128 + sg * 8 + r) * 128 + ln * 4);
+  for (uint j = 0; j < p.o; j++) {
+    device const float *sv = A + p.q + j * 16448;
+    float4 k = *(device const float4 *)(sv + 2048 + hk * 128 + ln * 4);
+    float g = sv[8192 + hv], beta = sv[8224 + hv];
+    FU for (uint r = 0; r < 8; r++) {
+      uint dv = sg * 8 + r;
+      float4 s = st[r] * g;
+      float kvm = simd_sum(dot(s, k));
+      float delta = (sv[4096 + hv * 128 + dv] - kvm) * beta;
+      s += k * delta;
+      st[r] = s;
+    }
+  }
+  FU for (uint r = 0; r < 8; r++) *(device float4 *)(A + p.m + (hv * 128 + sg * 8 + r) * 128 + ln * 4) = st[r];
+  uint part = t / 128, i = t % 128;
+  if (t < 384 && (part == 2 || hv < 16)) {
+    uint c = part == 0 ? hk * 128 + i : (part == 1 ? 2048 + hk * 128 + i : 4096 + hv * 128 + i);
+    device const float *s = A + p.g + c * 3;
+    float s0 = s[0], s1 = s[1], s2 = s[2];
+    for (uint j = 0; j < p.o; j++) { s0 = s1; s1 = s2; s2 = A[p.q + j * 16448 + 8256 + c]; }
+    device float *n = A + p.h + c * 3; n[0] = s0; n[1] = s1; n[2] = s2;
+  }
 }
 ")

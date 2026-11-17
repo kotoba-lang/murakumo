@@ -158,3 +158,71 @@
                         z (b/poke f (+ dst (* 8 i)) (bit-or lo (i64-shift-left hi 32)))]
                     (recur (+ i 1)))))]
         (recur (+ k 1))))))
+
+;; The DFlash block drafter of Qwen3.5-4B (z-lab/Qwen3.5-4B-DFlash: Qwen3, 6 layers, hidden 2560, 32 q heads and 8 kv
+;; heads of 128, MLP 9216; its input is fc over the main model's hidden rows after layers 1, 5, .., 29), from a BF16
+;; safetensors file with plain RMSNorm weights. The profile D (offsets in bytes): matrix m (BF16) at D m: 0 fc
+;; [2560 x 20480], layer l's at 1 + 7 l + (0 q [4096 x 2560], 1 k [1024 x 2560], 2 v, 3 o [2560 x 4096], 4 gate
+;; [9216 x 2560], 5 up, 6 down [2560 x 9216]); its Q8_0 copy at D (48 + m). Norm j: F32 copy at D (96 + j), BF16
+;; source at D (128 + j): 0 hidden_norm, 1 norm, layer l's at 2 + 4 l + (0 input, 1 post-attention, 2 q_norm [128],
+;; 3 k_norm [128]).
+(defn df-layers [] :i64 6)
+(defn df-mvals [m :i64] :i64
+  (if (= m 0) 52428800
+    (let [k (rem (- m 1) 7)] (cond (= k 0) 10485760 (= k 1) 2621440 (= k 2) 2621440 (= k 3) 10485760 :else 23592960))))
+(defn df-norm-n [j :i64] :i64 (if (< j 2) 2560 (if (< (rem (- j 2) 4) 2) 2560 128)))
+;; bytes after the data for the 26 F32 norm copies (14 of 2560, 12 of 128), and the Q8_0 copies' bytes
+(defn df-extra [] :i64 149504)
+(defn df-q8-bytes [] :i64 674037760)
+
+(defn dflash [f [:fn [[:i64 :i64 :i64] :i64]] R :vector-i64 p :i64 hl :i64 dlen :i64] :vector-i64
+  (let [D (vector-alloc 160)
+        m0 (vector-assoc! D 0 (b/st-find f R p hl "fc.weight" "2560,20480" 52428800 dlen))
+        ml (loop [l 0]
+             (if (= l (df-layers)) 0
+               (let [pre (string-concat "layers." (string-concat (string-from-i64 l) "."))
+                     b (+ 1 (* 7 l))
+                     a0 (vector-assoc! D b (b/st-find f R p hl (string-concat pre "self_attn.q_proj.weight") "4096,2560" 10485760 dlen))
+                     a1 (vector-assoc! D (+ b 1) (b/st-find f R p hl (string-concat pre "self_attn.k_proj.weight") "1024,2560" 2621440 dlen))
+                     a2 (vector-assoc! D (+ b 2) (b/st-find f R p hl (string-concat pre "self_attn.v_proj.weight") "1024,2560" 2621440 dlen))
+                     a3 (vector-assoc! D (+ b 3) (b/st-find f R p hl (string-concat pre "self_attn.o_proj.weight") "2560,4096" 10485760 dlen))
+                     a4 (vector-assoc! D (+ b 4) (b/st-find f R p hl (string-concat pre "mlp.gate_proj.weight") "9216,2560" 23592960 dlen))
+                     a5 (vector-assoc! D (+ b 5) (b/st-find f R p hl (string-concat pre "mlp.up_proj.weight") "9216,2560" 23592960 dlen))
+                     a6 (vector-assoc! D (+ b 6) (b/st-find f R p hl (string-concat pre "mlp.down_proj.weight") "2560,9216" 23592960 dlen))
+                     n (+ 130 (* 4 l))
+                     n0 (vector-assoc! D n (b/st-find f R p hl (string-concat pre "input_layernorm.weight") "2560" 2560 dlen))
+                     n1 (vector-assoc! D (+ n 1) (b/st-find f R p hl (string-concat pre "post_attention_layernorm.weight") "2560" 2560 dlen))
+                     n2 (vector-assoc! D (+ n 2) (b/st-find f R p hl (string-concat pre "self_attn.q_norm.weight") "128" 128 dlen))
+                     n3 (vector-assoc! D (+ n 3) (b/st-find f R p hl (string-concat pre "self_attn.k_norm.weight") "128" 128 dlen))]
+                 (recur (+ l 1)))))
+        h0 (vector-assoc! D 128 (b/st-find f R p hl "hidden_norm.weight" "2560" 2560 dlen))
+        h1 (vector-assoc! D 129 (b/st-find f R p hl "norm.weight" "2560" 2560 dlen))
+        ;; the BF16 matrices are converted, so they need only 2-byte alignment
+        al (loop [m 0 bad 0]
+             (if (= m 43) (if (= bad 0) 0 (let [w (b/wr-text f R "refused: a DFlash matrix is not 2-byte aligned\n")] (vector-at [0] 1)))
+               (recur (+ m 1) (+ bad (rem (vector-at D m) 2)))))
+        nc (loop [j 0 o dlen]
+             (if (= j 26) o
+               (let [u (vector-assoc! D (+ 96 j) o)] (recur (+ j 1) (+ o (* 4 (df-norm-n j)))))))
+        q8 (loop [m 0 o (+ dlen (df-extra))]
+             (if (= m 43) o
+               (let [u (vector-assoc! D (+ 48 m) o)] (recur (+ m 1) (+ o (* (quot (df-mvals m) 32) 34))))))
+        u (if (and (= nc (+ dlen (df-extra))) (= q8 (+ dlen (+ (df-extra) (df-q8-bytes))))) 0
+            (let [w (b/wr-text f R "refused: DFlash layout\n")] (vector-at [0] 1)))]
+    D))
+
+;; write the F32 copies of the DFlash norms into the buffer contents wd
+(defn df-norms! [f [:fn [[:i64 :i64 :i64] :i64]] wd :i64 D :vector-i64] :i64
+  (loop [j 0]
+    (if (= j 26) 0
+      (let [n (df-norm-n j)
+            src (+ wd (vector-at D (+ 128 j)))
+            dst (+ wd (vector-at D (+ 96 j)))
+            u (loop [i 0]
+                (if (= i (quot n 2)) 0
+                  (let [w (bit-and (b/peek f (+ src (* 4 i))) 4294967295)
+                        lo (i64-shift-left (bit-and w 65535) 16)
+                        hi (bit-and w 4294901760)
+                        z (b/poke f (+ dst (* 8 i)) (bit-or lo (i64-shift-left hi 32)))]
+                    (recur (+ i 1)))))]
+        (recur (+ j 1))))))

@@ -49,7 +49,7 @@ The plan maps each (tensor, phase) to a kernel variant. Today it is code in the 
 | embedding row | the embedding's dtype | `emb_<dtype>` |
 | layer kernel set | the layer kind | gated attention (q\|gate, q/k norm, partial RoPE, sigmoid gate); GQA attention; Gated DeltaNet (conv1d, delta rule and gated norm fused in one threadgroup per value head; `dnfn` takes every token of a pass in one dispatch, the state in registers) |
 | prefill | dtype, shape and memory | Qwen3.5: passes of up to 16 tokens through `mm` (in-place dequantization), only the last prompt token through the head. Qwen2.5 (E3): f16 copy + tiled GEMM, 64 x 128 tiles, split k for short n |
-| decoding method (E5) | what the model ships | plain; MTP head (Qwen3.5-4B: one draft token per pass, verified by a two-token pass; the recurrent states keep three slots so a rejected draft's state is never written over the one before it); external drafter (DFlash-style, next); chosen per model when a head or drafter is present |
+| decoding method (E5) | what the model ships | plain; MTP head (Qwen3.5-4B: one draft token per pass, verified by a two-token pass; the recurrent states keep three slots so a rejected draft's state is never written over the one before it); DFlash block drafter (Qwen3.5-4B: a 6-layer Qwen3 stack over the main model's rows after layers 1, 5, .., 29 drafts a block of up to 16 tokens; one multi-token pass verifies it; the delta-net states are replayed over the accepted tokens from the inputs the verify pass saved, `dnr`); chosen per model when a head or drafter is present |
 
 A new model then needs only three things: a profile (KVs, layer kinds, tensor roles), any missing layer-kind kernels,
 and a gate. Every quant format and kernel already in the library is reused.

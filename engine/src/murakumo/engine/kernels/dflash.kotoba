@@ -1,0 +1,86 @@
+(ns murakumo.engine.kernels.dflash)
+
+;; Kernels of the DFlash block drafter (z-lab/Qwen3.5-4B-DFlash, a 6-layer Qwen3 stack): the copy that captures the
+;; main model's hidden rows, the Qwen3 q/k norm with full NEOX RoPE (head dim 128, 32 q heads, 8 kv heads), and the
+;; block attention (a query of the 16-token block sees every cached context position and, in the full-attention layer,
+;; every block position; in the sliding-window layers only the block positions up to its own: they are causal).
+(defn source [] :string
+  "
+// c floats from f + y b to g + y e (grid y: the row)
+kernel void cpy(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                uint2 gid [[thread_position_in_grid]]) {
+  uint i = gid.x;
+  if (i >= p.c) return;
+  A[p.g + gid.y * p.e + i] = A[p.f + gid.y * p.b + i];
+}
+
+// Qwen3 q/k RMSNorm per 128-dim head (weights a q, b k, F32 in W) and NEOX RoPE over the whole head (base i bits,
+// position c + y for row y, rows k apart): threadgroup x < m is q head x (in place at d), the rest k head x - m (from
+// e, stored with its v from f into the caches g, h at [pos][1024]); m 0 takes k and v only. Lane l holds dims l + 32 j,
+// so dims (l, l + 64) and (l + 32, l + 96) are its RoPE pairs. j epsilon bits.
+kernel void qkn(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                uint2 tp [[threadgroup_position_in_grid]], uint ln [[thread_index_in_simdgroup]]) {
+  uint pos = p.c + tp.y, to = tp.y * p.k;
+  bool isk = tp.x >= p.m;
+  uint h = isk ? tp.x - p.m : tp.x;
+  device float *x = A + (isk ? p.e : p.d) + to + h * 128;
+  device const float *w = (device const float *)(W + (isk ? p.b : p.a));
+  float v[4];
+  float ss = 0.0f;
+  FU for (uint j = 0; j < 4; j++) { v[j] = x[ln + 32 * j]; ss += v[j] * v[j]; }
+  float r = 1.0f / precise::sqrt(simd_sum(ss) / 128.0f + as_type<float>(p.j));
+  FU for (uint j = 0; j < 4; j++) v[j] = v[j] * r * w[ln + 32 * j];
+  FU for (uint j = 0; j < 2; j++) {
+    float inv = precise::pow(as_type<float>(p.i), -float(2 * (ln + 32 * j)) / 128.0f);
+    float ang = float(pos) * inv;
+    float c = precise::cos(ang), s = precise::sin(ang);
+    float a = v[j], b = v[j + 2];
+    v[j] = a * c - b * s;
+    v[j + 2] = b * c + a * s;
+  }
+  if (isk) {
+    FU for (uint j = 0; j < 4; j++) {
+      A[p.g + pos * 1024 + h * 128 + ln + 32 * j] = v[j];
+      A[p.h + pos * 1024 + h * 128 + ln + 32 * j] = A[p.f + to + h * 128 + ln + 32 * j];
+    }
+  } else {
+    FU for (uint j = 0; j < 4; j++) x[ln + 32 * j] = v[j];
+  }
+}
+
+// block attention: query row y (q at d + y b, 32 heads of 128), head x, over the c cached positions (k cache g, v
+// cache h, [pos][1024], kv head = head / 4; the last a are the block's), or with e 1 (causal) over the first
+// c - a + 1 + y; out at f + y b. One 128-thread threadgroup per (head, row); thread t
+// scores positions t, t + 128, ..., then sums dim t. Scale 1 / sqrt(128).
+kernel void attb(device const uchar *W [[buffer(0)]], device float *A [[buffer(1)]], constant P &p [[buffer(2)]],
+                 uint2 hp [[threadgroup_position_in_grid]], uint2 t2 [[thread_position_in_threadgroup]],
+                 uint sg [[simdgroup_index_in_threadgroup]], uint ln [[thread_index_in_simdgroup]]) {
+  threadgroup float sc[1024];
+  threadgroup float red[4];
+  uint h = hp.x, t = t2.x, to = hp.y * p.b, kh = h / 4, n = p.e == 1u ? p.c - p.a + 1 + hp.y : p.c;
+  device const float4 *qv = (device const float4 *)(A + p.d + to + h * 128);
+  float lm = -INFINITY;
+  for (uint s = t; s < n; s += 128) {
+    device const float4 *kr = (device const float4 *)(A + p.g + s * 1024 + kh * 128);
+    float acc = 0.0f;
+    for (uint i = 0; i < 32; i++) acc += dot(qv[i], kr[i]);
+    acc *= 0.08838834764831845f;
+    sc[s] = acc;
+    lm = max(lm, acc);
+  }
+  float mx = simd_max(lm);
+  if (ln == 0) red[sg] = mx;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  mx = max(max(red[0], red[1]), max(red[2], red[3]));
+  float lz = 0.0f;
+  for (uint s = t; s < n; s += 128) { float e = precise::exp(sc[s] - mx); sc[s] = e; lz += e; }
+  float z = simd_sum(lz);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (ln == 0) red[sg] = z;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  z = (red[0] + red[1]) + (red[2] + red[3]);
+  float o = 0.0f;
+  for (uint s = 0; s < n; s++) o += sc[s] * A[p.h + s * 1024 + kh * 128 + t];
+  A[p.f + to + h * 128 + t] = o / z;
+}
+")
