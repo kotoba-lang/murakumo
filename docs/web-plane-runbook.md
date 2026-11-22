@@ -89,6 +89,7 @@ kotobase.
   `PUT https://kotobase.net/ipfs/<cid>` (401 without a valid credential); the
   read side is `https://ipfs.yataverse.com/ipfs/<cid>` (301 to the per-CID
   subdomain, which the read-back follows). Other candidates were 405 or did not resolve.
+  Today (2026-11-22, JUN-1441): read raw blocks from `https://yataverse.com/ipfs/<cid>` (no redirect, verify the CID); `ipfs.yataverse.com` and its per-CID subdomains are down.
 
   | file | content |
   |---|---|
