@@ -2,6 +2,8 @@
 
 Snapshot recorded 2026-11-25 JST. These are published results and prices.
 Murakumo did not run these evaluations or measure these endpoints.
+See the [Orca agent CLI comparison](orca-agent-cli-comparison-2026-11-25.md)
+for host RAM, installation size, and same-model harness results.
 
 ## Model choice
 

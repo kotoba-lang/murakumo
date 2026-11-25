@@ -10,6 +10,8 @@ that produced it.
 - Numbers other projects publish, which we have not run: [Other engines, as published](#other-engines-as-published).
 - External agent results, including task runtime, API cost, and provider throughput:
   [Long-running agent benchmarks, 2026-11-25](agent-benchmarks-2026-11-25.md).
+- Published CLI resource and performance data for 45 Orca catalog entries:
+  [Orca agent CLI comparison, 2026-11-25](orca-agent-cli-comparison-2026-11-25.md).
 
 ## How we measure
 
