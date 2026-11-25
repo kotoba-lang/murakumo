@@ -1,13 +1,13 @@
 """Stdlib checks and descriptive arithmetic on dated receipts; no tensor execution."""
+from paired_core import descriptive, gradient_changes, summarize_pairs
 from study_control import HERE, write
-import hashlib, json, math, pathlib, re, statistics
+import hashlib, json, math, pathlib, re
 GIB=1024**3
 SOURCE=HERE.parents[2]/'experiments/ced_moe'
 KINDS=['weights','master','m','v']
 
 def read(path):return json.loads((HERE/path).read_text())
 def changed(a,b):return {k:sum(a[k][n]!=b[k][n] for n in a[k]) for k in KINDS}
-def gradient_changes(a,b):return sum(a[n]!=b[n] for n in a)
 def swap(row):return float(re.search(r'used = ([0-9.]+)M',row['swap'])[1])
 def group(seed,mode,phase):
     base=pathlib.Path(f'phases/actual-s{seed}-{mode}-{phase}')
@@ -87,18 +87,37 @@ for seed in [936,937,938]:
         assert sum(x['owned_tensor_shards_per_generation'] for x in checks)==1216
         r['checkpoint_readback']={'files_per_generation':1216,'tensor_bytes_per_generation':[sum(x['file_bytes_per_generation'][i] for x in checks) for i in range(2)],'changed_shards_32_to_64':{k:sum(x['changed_shards_32_to_64'][k] for x in checks) for k in KINDS},'all_file_headers_hashes_global_seals_checked':True}
         conditions[f'{seed}-{mode}']=r
-pairs=[]
-for seed in [936,937,938]:
-    if f'{seed}-ram' not in conditions or f'{seed}-nvme' not in conditions:continue
-    assert cohorts[seed,'ram']==cohorts[seed,'nvme'] and all_streams[seed,'ram']==all_streams[seed,'nvme']
-    r,n=[conditions[f'{seed}-{m}'] for m in ['ram','nvme']]
-    prefix=[group(seed,m,'prefix')[0] for m in ['ram','nvme']]
-    assert all(a['initial_state_sha256']==b['initial_state_sha256'] for a,b in zip(*prefix))
-    pairs.append({'seed':seed,'same_initial_states_stream_cohort_except_placement':True,'prefix_preoptimizer_gradient_changed_shards':sum(gradient_changes(a['trace'][0]['first_update_gradient_sha256'],b['trace'][0]['first_update_gradient_sha256']) for a,b in zip(*prefix)),'ram_minus_nvme_initial_ce':r['initial_dev_ce']-n['initial_dev_ce'],'ram_minus_nvme_step32_ce':r['step32_dev_ce']-n['step32_dev_ce'],'ram_minus_nvme_final64_ce':r['final_dev_ce']-n['final_dev_ce'],'ram_minus_nvme_secondary64_ce':r['final_secondary_dev_ce']-n['final_secondary_dev_ce'],'ram_to_nvme_all_in_speed_ratio':r['all_in_tok_s']/n['all_in_tok_s'],'ram_to_nvme_dev_inclusive_speed_ratio':r['phase_dev_inclusive_tok_s']/n['phase_dev_inclusive_tok_s']})
 
-def descriptive(values):
-    return {'n':len(values),'values':values,'mean':statistics.mean(values),'sample_sd':statistics.stdev(values) if len(values)>1 else None,'min':min(values),'max':max(values),'positive':sum(x>0 for x in values),'zero':sum(x==0 for x in values),'negative':sum(x<0 for x in values)} if values else None
-summary={'implementation_commit':'02a6ee4b','schema':'ced-moe-seed-replay-summary/v1','completed_conditions':len(conditions),'completed_seed_pairs':len(pairs),'conditions':conditions,'pairs':pairs,'primary_delta_ram_minus_nvme':descriptive([p['ram_minus_nvme_final64_ce'] for p in pairs]),'secondary_delta_ram_minus_nvme':descriptive([p['ram_minus_nvme_secondary64_ce'] for p in pairs]),'within_placement_replay_delta':{m:descriptive([r['replay_minus_main_dev_ce'] for r in conditions.values() if r['placement']==m]) for m in ['ram','nvme']},'limits':['descriptive n3; fixed-order2:1 not fullybalanced; no significance or equivalent-convergence claim','same-checkpoint replay is not independent initialization/seed replication','1Gbps shared hosts and retained inference; no coldcache/isolated latency claim','extra dev sample is not independenttest; no selection on test','all-in includes fingerprints and largerterminaldev diagnostics; excludes reporting gaps/readback/archive/replay','logical I/O versus process OS versus device-wide counters are distinct; no exclusive wire/NAND count','developer Mac executes stdlib only; model work fleet only']}
+paired = summarize_pairs(
+    [936, 937, 938], conditions, cohorts, all_streams,
+    lambda seed, mode: group(seed, mode, 'prefix')[0],
+)
+summary = {
+    'implementation_commit': '02a6ee4b',
+    'schema': 'ced-moe-seed-replay-summary/v1',
+    'completed_conditions': len(conditions),
+    'completed_seed_pairs': paired['completed_seed_pairs'],
+    'conditions': conditions,
+    'pairs': paired['pairs'],
+    'primary_delta_ram_minus_nvme': paired['primary_delta_ram_minus_nvme'],
+    'secondary_delta_ram_minus_nvme': paired['secondary_delta_ram_minus_nvme'],
+    'within_placement_replay_delta': {
+        mode: descriptive([
+            run['replay_minus_main_dev_ce']
+            for run in conditions.values() if run['placement'] == mode
+        ])
+        for mode in ['ram', 'nvme']
+    },
+    'limits': [
+        'descriptive n3; fixed-order2:1 not fullybalanced; no significance or equivalent-convergence claim',
+        'same-checkpoint replay is not independent initialization/seed replication',
+        '1Gbps shared hosts and retained inference; no coldcache/isolated latency claim',
+        'extra dev sample is not independenttest; no selection on test',
+        'all-in includes fingerprints and largerterminaldev diagnostics; excludes reporting gaps/readback/archive/replay',
+        'logical I/O versus process OS versus device-wide counters are distinct; no exclusive wire/NAND count',
+        'developer Mac executes stdlib only; model work fleet only',
+    ],
+}
 summary['pooled_primary']={}
 for mode in ['ram','nvme']:
     runs=[r for r in conditions.values() if r['placement']==mode]
@@ -106,4 +125,4 @@ for mode in ['ram','nvme']:
     tokens=sum(r['global_tokens_counted_once'] for r in runs)
     summary['pooled_primary'][mode]={'completed_seeds':len(runs),'primary_processed_tokens_counted_once':tokens,'all_in_tok_s':tokens/sum(r['all_in_supervisor_seconds'] for r in runs),'dev_inclusive_tok_s':tokens/sum(r['phase_dev_inclusive_seconds'] for r in runs),'update_only_tok_s':tokens/sum(r['update_seconds'] for r in runs),'max_footprint_gib':max(r['max_learner_footprint_gib'] for r in runs),'process_disk_read_bytes':sum(r['process_disk_read_bytes_all_ranks'] for r in runs),'process_disk_write_bytes':sum(r['process_disk_write_bytes_all_ranks'] for r in runs),'terminal_primary_dev_ce':descriptive([r['final_dev_ce'] for r in runs]),'terminal_secondary_dev_ce':descriptive([r['final_secondary_dev_ce'] for r in runs])}
 write(HERE/'summary.json',summary)
-print(json.dumps({'conditions':len(conditions),'pairs':pairs,'primary':summary['primary_delta_ram_minus_nvme'],'replay':summary['within_placement_replay_delta']},indent=2))
+print(json.dumps({'conditions':len(conditions),'pairs':summary['pairs'],'primary':summary['primary_delta_ram_minus_nvme'],'replay':summary['within_placement_replay_delta']},indent=2))
