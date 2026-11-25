@@ -21,3 +21,5 @@ MCP exposes the same workflow as `murakumo.image_model_add` with `{manifest: {..
 The manifest contains an opaque model id, display label, target sites (`murakumo`, `oppai`), Hugging Face repository and immutable 40-character revision, weight filenames and full SHA-256 hashes, and an execution profile. Profile keys `execution-ms` and `job-ms` match the queue contract. Reusing an id with different weights or an execution profile is refused: choose a new id. Failed qualification leaves a draft hidden from site catalogs, without publishing an unverified model.
 
 This command automates registration, generation qualification and publication; it does not download arbitrary architectures or silently grant GPU credentials broader permissions. Deployment and installation of a new runtime remain explicit prerequisites.
+
+For candidate open-license models that fit a 16 GB Apple silicon Mac, see [image-models-mac16gb.md](image-models-mac16gb.md).
