@@ -12,6 +12,8 @@ that produced it.
   [Long-running agent benchmarks, 2026-11-25](agent-benchmarks-2026-11-25.md).
 - Published CLI resource and performance data for 45 Orca catalog entries:
   [Orca agent CLI comparison, 2026-11-25](orca-agent-cli-comparison-2026-11-25.md).
+- Published quality, memory, and inference results for two open-weight models:
+  [Inkling 2 Mini and Ternary Bonsai 2.5 27B, 2026-11-25](inkling-bonsai-comparison-2026-11-25.md).
 
 ## How we measure
 
