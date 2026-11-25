@@ -8,6 +8,8 @@ that produced it.
 - Runs, one directory each with raw files: [bench/results](../bench/results/), indexed in [bench/README.md](../bench/README.md).
 - What has to change for murakumo's own engine to lead: [inference-roadmap.md](inference-roadmap.md).
 - Numbers other projects publish, which we have not run: [Other engines, as published](#other-engines-as-published).
+- External agent results, including task runtime, API cost, and provider throughput:
+  [Long-running agent benchmarks, 2026-11-25](agent-benchmarks-2026-11-25.md).
 
 ## How we measure
 
