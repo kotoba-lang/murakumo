@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,readFile,rm,symlink,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {randomBytes} from 'node:crypto';
+import {randomBytes,generateKeyPairSync,randomUUID} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const root=resolve('.');
 async function port(){const s=createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p;}
@@ -131,4 +132,64 @@ test('gateway withdraws unhealthy image ingress after inflight work finishes, an
  up=true;await wait(async()=>(await events()).filter(x=>x==='start').length===2);
  await writeFile(drain,'maintenance');await wait(async()=>(await health()).draining===true);const denied=await fetch(url+'/v1/images/generations',{method:'POST',headers,body:'{}'});assert.equal(denied.status,503);assert.equal((await denied.json()).executed,false);await wait(async()=>(await events()).filter(x=>x==='stop').length===2);
  await rm(drain);await wait(async()=>(await events()).filter(x=>x==='start').length===3);assert.equal((await health()).inflight,0);
+});
+
+test('gateway supports separate inbound-token-file while keeping peer-token for residents and topology',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'murakumo-inbound-token-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const peerToken=randomBytes(32).toString('hex'),inboundToken=randomBytes(32).toString('hex');
+ const peerTokenFile=join(dir,'peer-token'),inboundTokenFile=join(dir,'gateway-token');
+ await writeFile(peerTokenFile,peerToken,{mode:0o600});
+ await writeFile(inboundTokenFile,inboundToken,{mode:0o600});
+ const peerHeaders={authorization:'Bearer '+peerToken,'content-type':'application/json'};
+ const inboundHeaders={authorization:'Bearer '+inboundToken,'content-type':'application/json'};
+ const {privateKey,publicKey}=generateKeyPairSync('ed25519');
+ const opKey=join(dir,'op.pem'),opPub=join(dir,'op.pub');
+ await writeFile(opKey,privateKey.export({type:'pkcs8',format:'pem'}),{mode:0o600});
+ await writeFile(opPub,publicKey.export({type:'spki',format:'pem'}));
+ const backend=createServer((req,res)=>{
+  if(req.url==='/slots')return res.end('[{"is_processing":false}]');
+  let data='';req.on('data',b=>data+=b);req.on('end',()=>{
+   const b=JSON.parse(data);
+   res.end(JSON.stringify({choices:[{message:{content:b.messages?.[0]?.content?.startsWith('2+3')?'5':'OK'}}]}));
+  });
+ });
+ backend.listen(0,'127.0.0.1');await once(backend,'listening');t.after(()=>{backend.closeAllConnections();backend.close();});
+ const rp=await port(),gp=await port(),ru=`http://127.0.0.1:${rp}`,gu=`http://127.0.0.1:${gp}`;
+ const ownerId=randomUUID(),topoIn=join(dir,'topo-in.json'),topoOut=join(dir,'topo.json');
+ await writeFile(topoIn,JSON.stringify({schema:1,revision:1,nodes:[{node:'n0',url:ru,'owner-id':ownerId,enabled:true,roles:[{kind:'text',model:'mishima'}]}],gateways:[{node:'g0',url:gu,enabled:true}],policies:{'minimum-replicas':{mishima:1}}}));
+ execFileSync(process.execPath,[join(root,'release/node.mjs'),'topology','sign','--input',topoIn,'--output',topoOut,'--private-key-file',opKey,'--allow-loopback','true'],{stdio:'pipe'});
+ const stateFile=join(dir,'receipts.json');await writeFile(stateFile+'.owner-id',ownerId,{mode:0o600});
+ const source=process.env.MURAKUMO_TEST_SOURCE==='1';
+ const procs=[];t.after(()=>{for(const p of procs)p.kill('SIGTERM');});
+ async function spawnSvc(kind,cfg,name){
+  const f=join(dir,name+'.json');await writeFile(f,JSON.stringify(cfg));
+  const script=kind==='resident'?'resident.cljk':'fleet-gateway.cljk';
+  const p=spawn(source?'kbb':process.execPath,source?['--backend','sci','--classpath',join(root,'src'),join(root,'scripts',script),'serve','--config',f]:[join(root,'release/node.mjs'),kind,'serve','--config',f],{cwd:dir,stdio:['ignore','pipe','pipe']});
+  procs.push(p);return p;
+ }
+ await spawnSvc('resident',{node:'n0',bind:'127.0.0.1',port:rp,'token-file':peerTokenFile,'state-file':stateFile,'legacy-empty-ledger-owner-id':ownerId,'topology-file':topoOut,'topology-public-key-file':opPub,'allow-loopback-topology?':true,'probe-interval-ms':50,'topology-poll-ms':60000,lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:`http://127.0.0.1:${backend.address().port}`,path:'/v1/chat/completions'}}},'r0');
+ await spawnSvc('gateway',{node:'g0',bind:'127.0.0.1',port:gp,'token-file':peerTokenFile,'inbound-token-file':inboundTokenFile,'topology-file':topoOut,'topology-public-key-file':opPub,'allow-loopback-topology?':true,'probe-interval-ms':50,'topology-poll-ms':60000},'g0');
+ await wait(async()=>{const r=await fetch(gu+'/health',{headers:inboundHeaders});return r.status===200&&(await r.json()).peers?.n0?.lanes?.text?.ready===true;});
+ // Gateway accepts inbound-token and rejects peer-token on caller routes.
+ assert.equal((await fetch(gu+'/health',{headers:peerHeaders})).status,401);
+ assert.equal((await fetch(gu+'/health')).status,401);
+ const body=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'hello'}]});
+ assert.equal((await fetch(gu+'/v1/chat/completions',{method:'POST',headers:peerHeaders,body})).status,401);
+ const ok=await fetch(gu+'/v1/chat/completions',{method:'POST',headers:inboundHeaders,body});
+ assert.equal(ok.status,200);assert.equal((await ok.json()).choices[0].message.content,'OK');
+ // Resident rejects inbound-token and accepts peer-token.
+ assert.equal((await fetch(ru+'/health',{headers:inboundHeaders})).status,401);
+ assert.equal((await fetch(ru+'/execute/text',{method:'POST',headers:{...inboundHeaders,'x-murakumo-job-id':'inbound_rejected_123'},body})).status,401);
+ assert.equal((await fetch(ru+'/health',{headers:peerHeaders})).status,200);
+ // Gateway /topology stays scoped to peer-token so resident gossip works and inbound-token cannot access it.
+ assert.equal((await fetch(gu+'/topology',{headers:inboundHeaders})).status,401);
+ assert.equal((await fetch(gu+'/topology',{headers:peerHeaders})).status,200);
+ // Invalid inbound-token-file (non-0600, symlink, or <32 chars) fails startup closed.
+ const badMode=join(dir,'bad-mode');await writeFile(badMode,inboundToken,{mode:0o644});await chmod(badMode,0o644);
+ const badLink=join(dir,'bad-link');await symlink(inboundTokenFile,badLink);
+ const badShort=join(dir,'bad-short');await writeFile(badShort,'too-short',{mode:0o600});
+ for(const [label,badFile] of [['mode',badMode],['symlink',badLink],['short',badShort]]){
+  const p=await spawnSvc('gateway',{node:'gbad',bind:'127.0.0.1',port:await port(),'token-file':peerTokenFile,'inbound-token-file':badFile,peers:[{node:'n0',url:ru}]},'gbad-'+label);
+  const [code]=await once(p,'exit');assert.notEqual(code,0,`expected non-zero exit for ${label}`);
+ }
 });

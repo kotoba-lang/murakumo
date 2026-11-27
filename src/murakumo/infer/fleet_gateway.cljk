@@ -36,6 +36,9 @@
 
 (defn start! [config]
   (let [token (r/private-token (:token-file config))
+        inbound-token (if-some [file (:inbound-token-file config)]
+                        (r/private-token file)
+                        token)
         topology (topo/start! config token)
         reports (atom {})
         active (atom 0)
@@ -83,8 +86,10 @@
                                       (.catch (fn [_] (swap! reports dissoc node)))))))
                       (.finally (fn [] (reset! polling false) (sync-ingress!))))))
         handler (fn [req res compatibility?]
+                  (let [topology-route? (and topology (not compatibility?) (= "/topology" (.-url req)))]
                   (cond
-                    (and (not compatibility?) (not (r/authorized? req token))) (r/json! res 401 {:error "unauthorized"})
+                    (and topology-route? (not (r/authorized? req token))) (r/json! res 401 {:error "unauthorized"})
+                    (and (not compatibility?) (not topology-route?) (not (r/authorized? req inbound-token))) (r/json! res 401 {:error "unauthorized"})
                     (and (not compatibility?) (str/starts-with? (.-url req) "/jobs/"))
                     (let [id (subs (.-url req) 6) method (.-method req)
                           endpoints (for [[node report] @reports
@@ -208,7 +213,7 @@
                                (-> (js/Promise.resolve (attempt choices))
                                    (.finally #(js/clearTimeout timer)))))))
                         (.catch (fn [_] (when-not (.-headersSent res) (r/json! res 400 {:error "invalid_request"}))))))
-                    :else (r/json! res 404 {:error "not_found"})))
+                    :else (r/json! res 404 {:error "not_found"}))))
         server (.createServer http (fn [req res] (handler req res false)))
         compat-server (when (:compat-image-port config)
                         (when-not (contains? #{"127.0.0.1" "::1"} (:compat-image-bind config "127.0.0.1"))
