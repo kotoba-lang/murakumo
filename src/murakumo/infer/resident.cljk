@@ -125,10 +125,15 @@
 (defn zeroize-buffer! [buf]
   (when buf (.fill buf 0)))
 
+(def max-ram-replay-retention-ms 900000)
+
 (defn make-replay-ledger [config boot-id started-at]
-  (let [w (:replay-window-ms config 600000)
+  (let [w (:replay-window-ms config 300000)
         delta (:replay-clock-skew-ms config 60000)
         t-rot (:replay-rotation-ms config (+ w (* 2 delta)))
+        sweep-ms (or (:replay-sweep-interval-ms config)
+                     (:sweep-interval-ms config)
+                     (min t-rot 60000))
         max-receipts (:max-receipts config 100000)]
     (when-not (and (js/Number.isSafeInteger w) (pos? w))
       (throw (js/Error. "replay-window-ms must be a positive integer")))
@@ -136,6 +141,10 @@
       (throw (js/Error. "replay-clock-skew-ms must be a non-negative integer")))
     (when-not (and (js/Number.isSafeInteger t-rot) (>= t-rot (+ w (* 2 delta))))
       (throw (js/Error. "replay-rotation-ms must be >= replay-window-ms + 2 * replay-clock-skew-ms")))
+    (when (> (* 2 t-rot) max-ram-replay-retention-ms)
+      (throw (js/Error. "2 * replay-rotation-ms must be <= 900000 ms (15 min max RAM retention)")))
+    (when-not (and (js/Number.isSafeInteger sweep-ms) (pos? sweep-ms) (<= sweep-ms max-ram-replay-retention-ms))
+      (throw (js/Error. "replay-sweep-interval-ms must be a positive integer <= 900000 ms")))
     (when-not (and (js/Number.isSafeInteger max-receipts) (pos? max-receipts))
       (throw (js/Error. "max-receipts must be a positive integer")))
     (atom {:boot-id boot-id
@@ -143,6 +152,7 @@
            :window-ms w
            :clock-skew-ms delta
            :rotation-ms t-rot
+           :sweep-interval-ms sweep-ms
            :max-receipts max-receipts
            :allow-provisional-no-boot-id? (true? (:allow-provisional-no-boot-id? config))
            :k-curr (.randomBytes crypto 32)
@@ -152,11 +162,12 @@
            :rotated-at started-at
            :rotations 0})))
 
-(defn rotate-replay-ledger! [ledger-atom now]
+(defn maybe-rotate-kagishi-replay! [ledger-atom now]
   (let [{:keys [rotation-ms rotated-at k-curr k-prev curr-set prev-set rotations]} @ledger-atom
         elapsed (- now rotated-at)]
     (when (>= elapsed rotation-ms)
-      (let [steps (js/Math.floor (/ elapsed rotation-ms))]
+      (let [steps (js/Math.floor (/ elapsed rotation-ms))
+            next-rotated-at (+ rotated-at (* steps rotation-ms))]
         (if (>= steps 2)
           (do (zeroize-buffer! k-prev)
               (zeroize-buffer! k-curr)
@@ -167,7 +178,7 @@
                       :k-prev nil
                       :curr-set (js/Set.)
                       :prev-set (js/Set.)
-                      :rotated-at now
+                      :rotated-at next-rotated-at
                       :rotations (+ rotations steps)}))
           (do (zeroize-buffer! k-prev)
               (.clear prev-set)
@@ -176,8 +187,10 @@
                       :k-prev k-curr
                       :curr-set (js/Set.)
                       :prev-set curr-set
-                      :rotated-at now
+                      :rotated-at next-rotated-at
                       :rotations (inc rotations)})))))))
+
+(def rotate-replay-ledger! maybe-rotate-kagishi-replay!)
 
 (defn destroy-replay-ledger! [ledger-atom]
   (when ledger-atom
@@ -235,14 +248,14 @@
       {:ok false :status 400 :error "boot_id_required"})))
 
 (defn replay-seen? [ledger-atom replay-nonce now]
-  (rotate-replay-ledger! ledger-atom now)
+  (maybe-rotate-kagishi-replay! ledger-atom now)
   (let [{:keys [boot-id k-curr k-prev curr-set prev-set]} @ledger-atom
         curr-tag (replay-tag k-curr boot-id replay-nonce)]
     (or (.has curr-set curr-tag)
         (boolean (and k-prev (.has prev-set (replay-tag k-prev boot-id replay-nonce)))))))
 
 (defn admit-ram-replay! [state-atom ledger-atom lanes lane id replay-nonce now]
-  (rotate-replay-ledger! ledger-atom now)
+  (maybe-rotate-kagishi-replay! ledger-atom now)
   (let [{:keys [boot-id k-curr k-prev curr-set prev-set max-receipts]} @ledger-atom
         curr-tag (replay-tag k-curr boot-id replay-nonce)
         seen? (or (.has curr-set curr-tag)
@@ -429,6 +442,8 @@
 
 (defn start! [config]
   (let [ram-replay? (ram-replay-mode? config)
+        _ (when (and ram-replay? (:compat-port config))
+            (throw (js/Error. "compat-port cannot be enabled in kagishi-ram mode: anonymous compatibility entrypoint is disabled")))
         resident-boot-id (.toString (.randomBytes crypto 16) "hex")
         resident-started-at (js/Date.now)
         replay-ledger (when ram-replay? (make-replay-ledger config resident-boot-id resident-started-at))
@@ -439,6 +454,8 @@
                  (assoc :drain-file (str (:state-file config) ".draining")))
         token (private-token (:token-file config))
         file (:state-file config)
+        _ (when (and ram-replay? file (.existsSync fs file))
+            (throw (js/Error. "legacy receipts.json must be archived/removed with owner approval before starting kagishi-ram mode")))
         owner-file (or (:owner-id-file config) (when file (str file ".owner-id")))
         existing-owner? (boolean (and owner-file (.existsSync fs owner-file)))
         owner-id (if owner-file (topo/owner-id! owner-file) (.randomUUID crypto))
@@ -550,6 +567,7 @@
                                 (if ram-replay?
                                   (let [id (aget (.-headers req) "x-murakumo-job-id")
                                         now (js/Date.now)
+                                        _ (maybe-rotate-kagishi-replay! replay-ledger now)
                                         v (validate-replay-headers replay-ledger (.-headers req) id now)]
                                     (cond
                                       (not (:ok v))
@@ -610,6 +628,7 @@
                                       admission
                                       (if ram-replay?
                                         (let [now (js/Date.now)
+                                              _ (maybe-rotate-kagishi-replay! replay-ledger now)
                                               v (validate-replay-headers replay-ledger (.-headers req) id now)]
                                           (if-not (:ok v)
                                             {:status (:status v) :reason (keyword (:error v)) :executed false :raw-error (:error v)}
@@ -722,22 +741,26 @@
                                   (json! res 401 {:error "unauthorized"})
                                   :else
                                   (cond
+                                    (and (= "GET" (.-method req)) (str/starts-with? (.-url req) "/poi/receipts"))
+                                    (json! res 404 {:error "poi_receipts_disabled"})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/estimate/"))
-                                    (let [lane-id (subs (.-url req) 10)
-                                          lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))]
-                                      (if-not (and lane (= "llama-template" (:input-tokenizer lane))
-                                                   (topo/role-allowed? topology (:node config) lane))
-                                        (json! res 404 {:error "tokenizer_not_available"})
-                                        (-> (read-body! req (:max-body-bytes config 2097152))
-                                            (.then (fn [bytes]
-                                                     (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)]
-                                                       (when-not (= (:model lane) (:model body))
-                                                         (throw (js/Error. "model mismatch")))
-                                                       (-> (input-tokens! lane body (.-length bytes))
-                                                           (.then (fn [estimate]
-                                                                    (json! res 200 (assoc estimate :model (:model lane)
-                                                                      :digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")))))))))
-                                            (.catch (fn [_] (json! res 400 {:error "invalid_tokenizer_request"}))))))
+                                    (if ram-replay?
+                                      (json! res 403 {:error "estimate_disabled_in_privacy_mode"})
+                                      (let [lane-id (subs (.-url req) 10)
+                                            lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))]
+                                        (if-not (and lane (= "llama-template" (:input-tokenizer lane))
+                                                     (topo/role-allowed? topology (:node config) lane))
+                                          (json! res 404 {:error "tokenizer_not_available"})
+                                          (-> (read-body! req (:max-body-bytes config 2097152))
+                                              (.then (fn [bytes]
+                                                       (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)]
+                                                         (when-not (= (:model lane) (:model body))
+                                                           (throw (js/Error. "model mismatch")))
+                                                         (-> (input-tokens! lane body (.-length bytes))
+                                                             (.then (fn [estimate]
+                                                                      (json! res 200 (assoc estimate :model (:model lane)
+                                                                        :digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")))))))))
+                                              (.catch (fn [_] (json! res 400 {:error "invalid_tokenizer_request"})))))))
                                     (and job-service (str/starts-with? (.-url req) "/jobs/"))
                                     (let [[id op extra] (str/split (subs (.-url req) 6) #"/")]
                                       (if (or extra (not (jobs/valid-id? id)))
@@ -811,12 +834,6 @@
                     (when-not (aget (.-headers req) "x-murakumo-job-id")
                       (aset (.-headers req) "x-murakumo-job-id"
                             (str (:node config) "_text_" (.toString (.randomBytes crypto 16) "hex"))))
-                    (when (and ram-replay? (not (aget (.-headers req) "x-murakumo-replay-nonce")))
-                      (aset (.-headers req) "x-murakumo-replay-nonce" (.toString (.randomBytes crypto 16) "hex"))
-                      (when-not (aget (.-headers req) "x-murakumo-issued-at")
-                        (aset (.-headers req) "x-murakumo-issued-at" (str (js/Date.now))))
-                      (when-not (aget (.-headers req) "x-murakumo-boot-id")
-                        (aset (.-headers req) "x-murakumo-boot-id" resident-boot-id)))
                     (execute! req res "text" true))
                   :else (json! res 404 {:error "not_found"})))))))]
     (doseq [[id l] @lanes]
@@ -827,8 +844,10 @@
     (tick!)
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))
           rotation-timer (when ram-replay?
-                           (let [check-ms (max 10 (min 60000 (js/Math.floor (/ (:rotation-ms @replay-ledger) 2))))]
-                             (js/setInterval #(rotate-replay-ledger! replay-ledger (js/Date.now)) check-ms)))
+                           (let [t (js/setInterval #(maybe-rotate-kagishi-replay! replay-ledger (js/Date.now))
+                                                   (:sweep-interval-ms @replay-ledger))]
+                             (when (.-unref t) (.unref t))
+                             t))
           stop-watchdog! (service-watchdog! config #(.-listening server))]
       {:server server :state state :lanes lanes :boot-id resident-boot-id :replay-ledger replay-ledger
        :close (fn [] (stop-watchdog!) (when @converger ((:close @converger))) (when @roller ((:close @roller))) (when observations ((:close observations)))

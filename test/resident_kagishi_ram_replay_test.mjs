@@ -7,7 +7,7 @@ import {mkdtemp,writeFile,readFile,rm,readdir,stat} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {randomBytes,randomUUID,createHash,createHmac} from 'node:crypto';
+import {randomBytes,randomUUID,createHash} from 'node:crypto';
 
 const root=resolve('.');
 const cli=join(root,'release/node.mjs');
@@ -58,18 +58,18 @@ function makeBackend(){
 function replayHeaders(token,bootId,{jobId,nonce,issuedAt}={}){
  const h={
   authorization:`Bearer ${token}`,
-  'content-type':'application/json',
-  'x-murakumo-job-id':jobId??`job_${randomBytes(12).toString('hex')}`,
-  'x-murakumo-replay-nonce':nonce??randomBytes(16).toString('hex'),
-  'x-murakumo-issued-at':String(issuedAt??Date.now())
+  'content-type':'application/json'
  };
+ if(jobId!==null)h['x-murakumo-job-id']=jobId??`job_${randomBytes(12).toString('hex')}`;
+ if(nonce!==null)h['x-murakumo-replay-nonce']=nonce??randomBytes(16).toString('hex');
+ if(issuedAt!==null)h['x-murakumo-issued-at']=String(issuedAt??Date.now());
  if(bootId!==undefined&&bootId!==null)h['x-murakumo-boot-id']=bootId;
  return h;
 }
 
 const sampleBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'hello kagishi'}]});
 
-test('kagishi-ram: zero disk writes, owner-id/bound-owner checks, duplicate 409, window 403, boot_id 410, nonce independence 400',async t=>{
+test('kagishi-ram: startup refusals (legacy receipts.json untouched, bound-owner mismatch, compat-port, TTL > 900s), strict headers, /estimate disabled, PoI disabled, and restart boot_id rotation',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'murakumo-kagishi-ram-'));
  t.after(()=>rm(dir,{recursive:true,force:true}));
  const token=randomBytes(32).toString('hex');
@@ -89,23 +89,17 @@ test('kagishi-ram: zero disk writes, owner-id/bound-owner checks, duplicate 409,
   const cfgPath=join(dir,`${name}.json`);
   await writeFile(cfgPath,JSON.stringify(config));
   const p=spawn(process.execPath,[cli,'resident','serve','--config',cfgPath],{cwd:dir,stdio:['ignore','pipe','pipe']});
-  let err='';
-  p.stderr.on('data',b=>err+=b);
+  let out='';
+  p.stdout.on('data',b=>out+=b);
+  p.stderr.on('data',b=>out+=b);
   processes.push(p);
-  return {p,err:()=>err};
+  return {p,err:()=>out};
  }
 
- // Pre-seed .owner-id WITHOUT receipts.json (durable mode would refuse; kagishi-ram must succeed)
  const ownerId=randomUUID();
  const stateFile=join(dir,'receipts.json');
- await writeFile(stateFile+'.owner-id',ownerId,{mode:0o600});
-
- // Mismatched .bound-owner must still fail closed even in kagishi-ram mode
- const badOwner=randomUUID();
- await writeFile(stateFile+'.bound-owner',badOwner,{mode:0o600});
- const badPort=await port();
  const baseConfig={
-  node:'kagishi0',bind:'127.0.0.1',port:badPort,
+  node:'kagishi0',bind:'127.0.0.1',port:await port(),
   'token-file':tokenFile,'state-file':stateFile,
   'receipt-mode':'kagishi-ram','observations?':false,
   'replay-window-ms':5000,'replay-clock-skew-ms':500,'replay-rotation-ms':6000,
@@ -113,12 +107,58 @@ test('kagishi-ram: zero disk writes, owner-id/bound-owner checks, duplicate 409,
   lanes:{text:{kind:'text',model:'mishima',context:32768,'input-tokenizer':'llama-template',group:'gpu',
     backend:`http://127.0.0.1:${backend.server.address().port}`,path:'/v1/chat/completions'}}
  };
- const mismatch=await launch(baseConfig,'mismatch');
- const [mismatchCode]=await once(mismatch.p,'exit');
+
+ // Negative Test 1: Existing receipts.json on disk causes fail-closed startup refusal WITHOUT deleting or modifying it
+ const sentinel='{"jobs":{"legacy_job":{"status":"completed"}}}';
+ await writeFile(stateFile,sentinel,{mode:0o600});
+ const beforeStat=await stat(stateFile);
+ await sleep(20);
+ for(const mode of ['kagishi-ram','ram-hmac']){
+  const refuse=await launch({...baseConfig,'receipt-mode':mode,port:await port()},`legacy-${mode}`);
+  const [code]=await once(refuse.p,'close');
+  assert.notEqual(code,0,`existing receipts.json must refuse startup in ${mode} mode`);
+  assert.match(refuse.err(),/legacy receipts\.json/i);
+  assert.equal(existsSync(stateFile),true,'legacy receipts.json must NOT be deleted');
+  assert.equal(await readFile(stateFile,'utf8'),sentinel,'legacy receipts.json content must NOT be modified');
+  const afterStat=await stat(stateFile);
+  assert.equal(afterStat.mtimeMs,beforeStat.mtimeMs,'legacy receipts.json mtime must remain untouched');
+ }
+ // Remove legacy receipts.json (simulating owner-approved archival/removal)
+ await rm(stateFile);
+
+ // Negative Test: Invalid TTL / retention / sweep bounds must fail closed at startup
+ {
+  const tooLong=await launch({...baseConfig,port:await port(),'replay-window-ms':600000,'replay-clock-skew-ms':60000,'replay-rotation-ms':720000},'ttl-too-long');
+  const [c1]=await once(tooLong.p,'close');
+  assert.notEqual(c1,0,'2 * T_rot > 900000 ms must refuse startup');
+  assert.match(tooLong.err(),/900000/);
+
+  const tooShortRot=await launch({...baseConfig,port:await port(),'replay-window-ms':5000,'replay-clock-skew-ms':500,'replay-rotation-ms':5500},'rot-too-short');
+  const [c2]=await once(tooShortRot.p,'close');
+  assert.notEqual(c2,0,'T_rot < W + 2*delta must refuse startup');
+
+  const badSweep=await launch({...baseConfig,port:await port(),'replay-sweep-interval-ms':900001},'sweep-too-long');
+  const [c3]=await once(badSweep.p,'close');
+  assert.notEqual(c3,0,'sweep-interval-ms > 900000 ms must refuse startup');
+ }
+
+ // Negative Test 5b: Enabling anonymous :compat-port under kagishi-ram must fail closed at startup
+ {
+  const withCompat=await launch({...baseConfig,port:await port(),'compat-port':await port(),'compat-bind':'127.0.0.1'},'compat-refused');
+  const [cCompat]=await once(withCompat.p,'close');
+  assert.notEqual(cCompat,0,'compat-port must refuse startup in kagishi-ram mode');
+  assert.match(withCompat.err(),/compat-port/i);
+ }
+
+ // Pre-seed .owner-id WITHOUT receipts.json; mismatched .bound-owner must still fail closed
+ await writeFile(stateFile+'.owner-id',ownerId,{mode:0o600});
+ await writeFile(stateFile+'.bound-owner',randomUUID(),{mode:0o600});
+ const mismatch=await launch({...baseConfig,port:await port()},'mismatch');
+ const [mismatchCode]=await once(mismatch.p,'close');
  assert.notEqual(mismatchCode,0,'mismatched .bound-owner must refuse startup');
  assert.equal(existsSync(stateFile),false,'receipts.json must not be created');
 
- // Matching .bound-owner without receipts.json must succeed
+ // Matching .bound-owner without receipts.json must succeed (also check compliant defaults)
  await writeFile(stateFile+'.bound-owner',ownerId,{mode:0o600});
  const p1=await port();
  const cfg1={...baseConfig,port:p1};
@@ -133,49 +173,41 @@ test('kagishi-ram: zero disk writes, owner-id/bound-owner checks, duplicate 409,
  assert.equal(existsSync(stateFile),false,'receipts.json never created on startup');
  assert.equal(existsSync(stateFile+'.poi-receipts.jsonl'),false,'poi-receipts defaults off in kagishi-ram');
 
- // 1. Valid request succeeds once
- const nonce1=randomBytes(16).toString('hex');
- const resOk=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{nonce:nonce1}),body:sampleBody});
- assert.equal(resOk.status,200);
- await resOk.json();
- assert.equal(backend.state.calls,1);
- assert.equal(existsSync(stateFile),false,'receipts.json never created after execution');
- assert.equal(existsSync(stateFile+'.poi-receipts.jsonl'),false);
+ // Negative Test 5a: PoI receipts endpoint is disabled when poi-receipts? is off
+ const poiUnauth=await fetch(url1+'/poi/receipts');
+ assert.equal(poiUnauth.status,401,'unauthenticated /poi/receipts rejected when disabled');
+ const poiAuth=await fetch(url1+'/poi/receipts',{headers:auth});
+ assert.equal(poiAuth.status,404,'authenticated /poi/receipts disabled when poi-receipts? is off');
+ assert.equal((await poiAuth.json()).error,'poi_receipts_disabled');
 
- // 2. Duplicate replay_nonce rejected 409 (even with new job-id and different body), zero re-execution
- const beforeTok=backend.state.tokenizes;
- const dup=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{nonce:nonce1}),body:sampleBody.replace('hello kagishi','changed payload')});
- assert.equal(dup.status,409);
- assert.equal((await dup.json()).executed,'unknown');
- assert.equal(backend.state.calls,1);
- assert.equal(backend.state.tokenizes,beforeTok,'duplicate replay_nonce rejected before tokenizer');
+ // Negative Test 7: POST /estimate/<lane> is disabled under kagishi-ram (zero unsalted body sha256)
+ const tokBeforeEst=backend.state.tokenizes;
+ const estRes=await fetch(url1+'/estimate/text',{method:'POST',headers:auth,body:sampleBody});
+ assert.equal(estRes.status,403,'/estimate/<lane> must be disabled in kagishi-ram mode');
+ const estBody=await estRes.json();
+ assert.equal(estBody.error,'estimate_disabled_in_privacy_mode');
+ assert.equal('digest' in estBody,false,'/estimate/<lane> must never emit unsalted body digest');
+ assert.equal(backend.state.tokenizes,tokBeforeEst,'/estimate/<lane> must not touch tokenizer in kagishi-ram');
 
- // 3. Expired and future issued_at rejected before admission
- const expired=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{issuedAt:Date.now()-6000}),body:sampleBody});
- assert.equal(expired.status,403);
- assert.deepEqual(await expired.json(),{error:'replay_issued_at_expired',executed:false});
-
- const future=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{issuedAt:Date.now()+1000}),body:sampleBody});
- assert.equal(future.status,403);
- assert.deepEqual(await future.json(),{error:'replay_issued_at_future',executed:false});
-
- const badIssued=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{issuedAt:'not-a-timestamp'}),body:sampleBody});
- assert.equal(badIssued.status,400);
- assert.equal((await badIssued.json()).error,'invalid_issued_at');
-
- assert.equal(backend.state.calls,1);
- assert.equal(backend.state.tokenizes,beforeTok,'expired/future rejected before tokenizer');
-
- // 4. Missing or mismatched boot_id rejected
+ // Negative Test 3: Strict mode without x-murakumo-boot-id rejected with calls === 0
  const noBoot=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,null),body:sampleBody});
  assert.equal(noBoot.status,400);
- assert.equal((await noBoot.json()).error,'boot_id_required');
+ assert.deepEqual(await noBoot.json(),{error:'boot_id_required',executed:false});
+ assert.equal(backend.state.calls,0);
 
- const wrongBoot=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,randomBytes(16).toString('hex')),body:sampleBody});
- assert.equal(wrongBoot.status,410);
- assert.equal((await wrongBoot.json()).error,'boot_id_mismatch');
+ // Negative Test 4: Missing/partial headers & nonce === job-id all rejected with calls === 0
+ const noNonce=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{nonce:null}),body:sampleBody});
+ assert.equal(noNonce.status,400);
+ assert.equal((await noNonce.json()).error,'invalid_replay_nonce');
 
- // 5. replay_nonce == job-id and deterministic derivations rejected
+ const noIssued=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{issuedAt:null}),body:sampleBody});
+ assert.equal(noIssued.status,400);
+ assert.equal((await noIssued.json()).error,'invalid_issued_at');
+
+ const noJobId=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{jobId:null}),body:sampleBody});
+ assert.equal(noJobId.status,400);
+ assert.equal((await noJobId.json()).error,'job_id_required');
+
  const shared=randomBytes(16).toString('hex');
  const sameAsJob=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{jobId:shared,nonce:shared}),body:sampleBody});
  assert.equal(sameAsJob.status,400);
@@ -196,19 +228,53 @@ test('kagishi-ram: zero disk writes, owner-id/bound-owner checks, duplicate 409,
  assert.equal(shortNonce.status,400);
  assert.equal((await shortNonce.json()).error,'invalid_replay_nonce');
 
- assert.equal(backend.state.calls,1);
+ const wrongBoot=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,randomBytes(16).toString('hex')),body:sampleBody});
+ assert.equal(wrongBoot.status,410);
+ assert.equal((await wrongBoot.json()).error,'boot_id_mismatch');
 
- // 6. Restart generates fresh boot_id; old boot_id rejected (410) and existing receipts.json untouched
+ const badIssued=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{issuedAt:'not-a-timestamp'}),body:sampleBody});
+ assert.equal(badIssued.status,400);
+ assert.equal((await badIssued.json()).error,'invalid_issued_at');
+
+ const expired=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{issuedAt:Date.now()-6000}),body:sampleBody});
+ assert.equal(expired.status,403);
+ assert.deepEqual(await expired.json(),{error:'replay_issued_at_expired',executed:false});
+
+ const future=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{issuedAt:Date.now()+1000}),body:sampleBody});
+ assert.equal(future.status,403);
+ assert.deepEqual(await future.json(),{error:'replay_issued_at_future',executed:false});
+
+ assert.equal(backend.state.calls,0,'all rejected requests must execute zero backend calls');
+ assert.equal(backend.state.tokenizes,tokBeforeEst,'all rejected requests must fail before tokenizer');
+
+ // Positive: Valid request succeeds once
+ const nonce1=randomBytes(16).toString('hex');
+ const resOk=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{nonce:nonce1}),body:sampleBody});
+ assert.equal(resOk.status,200);
+ await resOk.json();
+ assert.equal(backend.state.calls,1);
+ assert.equal(existsSync(stateFile),false,'receipts.json never created after execution');
+ assert.equal(existsSync(stateFile+'.poi-receipts.jsonl'),false,'poi-receipts.jsonl never written when disabled');
+
+ // Duplicate replay_nonce rejected 409 (even with new job-id and different body), zero re-execution
+ const beforeTok=backend.state.tokenizes;
+ const dup=await fetch(url1+'/execute/text',{method:'POST',headers:replayHeaders(token,h1.boot_id,{nonce:nonce1}),body:sampleBody.replace('hello kagishi','changed payload')});
+ assert.equal(dup.status,409);
+ assert.equal((await dup.json()).executed,'unknown');
+ assert.equal(backend.state.calls,1);
+ assert.equal(backend.state.tokenizes,beforeTok,'duplicate replay_nonce rejected before tokenizer');
+
+ // Restart rotates boot_id (with ram-hmac alias and default compliant TTL parameters); old boot_id rejected 410
  r1.p.kill('SIGTERM');
  await once(r1.p,'exit');
 
- // Place a sentinel receipts.json on disk and verify ram-hmac alias never reads, modifies, or deletes it
- const sentinel='SENTINEL_UNTOUCHED_NOT_JSON';
- await writeFile(stateFile,sentinel,{mode:0o600});
- const beforeStat=await stat(stateFile);
- await sleep(20);
-
- const cfg2={...cfg1,'receipt-mode':'ram-hmac'};
+ const cfg2={
+  node:'kagishi0',bind:'127.0.0.1',port:p1,
+  'token-file':tokenFile,'state-file':stateFile,
+  'receipt-mode':'ram-hmac','observations?':false,
+  'probe-interval-ms':30000,
+  lanes:baseConfig.lanes
+ };
  const r2=await launch(cfg2,'r2');
  await wait(async()=>(await health1()).lanes?.text?.ready);
  const h2=await health1();
@@ -225,10 +291,8 @@ test('kagishi-ram: zero disk writes, owner-id/bound-owner checks, duplicate 409,
  assert.equal(freshAfterRestart.status,200);
  await freshAfterRestart.json();
  assert.equal(backend.state.calls,2);
-
- const afterStat=await stat(stateFile);
- assert.equal(await readFile(stateFile,'utf8'),sentinel,'pre-existing receipts.json must not be modified or deleted');
- assert.equal(afterStat.mtimeMs,beforeStat.mtimeMs,'pre-existing receipts.json mtime must be unchanged');
+ assert.equal(existsSync(stateFile),false);
+ assert.equal(existsSync(stateFile+'.poi-receipts.jsonl'),false);
 });
 
 test('kagishi-ram: provisional omitted boot_id rejects pre-boot window and accepts after started_at + delta',async t=>{
@@ -284,11 +348,20 @@ test('kagishi-ram: provisional omitted boot_id rejects pre-boot window and accep
  assert.equal(backend.state.calls,1);
 });
 
-test('kagishi-ram: 2-generation rotation across T_rot, exact HMAC vector, and K_prev zeroization',async t=>{
- // Part A: Direct cryptographic vector + Buffer.fill(0) zeroization verification against resident.cljk
+test('kagishi-ram: TTL <= 900s defaults, pre-admit rotation, exact HMAC vector, K_prev zeroization, and purge-after-reuse rejection',async t=>{
+ // Part A: Direct cryptographic vector, defaults <= 900s, pre-admit rotation, Buffer.fill(0) zeroization, and post-purge replay rejection
  const verifyClj=`
  (require '[murakumo.infer.resident :as r] '["node:crypto" :as crypto])
- (let [key (.from js/Buffer "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" "hex")
+ (let [;; Verify compliant default TTL & sweep <= 900000 ms
+       def-ledger (r/make-replay-ledger {} "00112233445566778899aabbccddeeff" 1000)
+       _ (when-not (<= (* 2 (:rotation-ms @def-ledger)) 900000)
+           (throw (js/Error. (str "default 2*T_rot exceeds 900000ms: " (* 2 (:rotation-ms @def-ledger))))))
+       _ (when-not (>= (:rotation-ms @def-ledger) (+ (:window-ms @def-ledger) (* 2 (:clock-skew-ms @def-ledger))))
+           (throw (js/Error. "default T_rot < W + 2*delta")))
+       _ (when-not (<= (:sweep-interval-ms @def-ledger) 900000)
+           (throw (js/Error. "default sweep-interval-ms > 900000ms")))
+       _ (r/destroy-replay-ledger! def-ledger)
+       key (.from js/Buffer "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" "hex")
        boot-id "00112233445566778899aabbccddeeff"
        nonce "fedcba9876543210fedcba9876543210"
        tag (r/replay-tag key boot-id nonce)
@@ -308,22 +381,28 @@ test('kagishi-ram: 2-generation rotation across T_rot, exact HMAC vector, and K_
        s0 (:curr-set @ledger)
        state (atom {:groups {}})
        lane {:group "gpu" :ready true}
-       ;; Admit in gen 0 (t=1400)
+       r1-issued 1400
+       ;; Admit R1 in gen 0 (t=1400)
        a1 (r/admit-ram-replay! state ledger {} lane "job_00000001" nonce 1400)
        _ (when-not (= 200 (:status a1)) (throw (js/Error. "expected 200")))
        _ (swap! state assoc :groups {})
-       ;; Rotation 1 at t=1650: k0 -> k-prev, s0 -> prev-set; nonce still rejected
-       _ (r/rotate-replay-ledger! ledger 1650)
-       _ (when-not (identical? k0 (:k-prev @ledger)) (throw (js/Error. "k0 must move to k-prev")))
-       _ (when-not (r/replay-seen? ledger nonce 1700) (throw (js/Error. "nonce must survive 1st rotation in prev-set")))
-       a2 (r/admit-ram-replay! state ledger {} lane "job_00000002" nonce 1700)
-       _ (when-not (= 409 (:status a2)) (throw (js/Error. "expected 409 after 1st rotation")))
+       ;; Pre-admit rotation triggers synchronously on next admit at t=1650 (>= 1000 + 600)
+       a2 (r/admit-ram-replay! state ledger {} lane "job_00000002" nonce 1650)
+       _ (when-not (= 409 (:status a2)) (throw (js/Error. "expected 409 after pre-admit 1st rotation")))
+       _ (when-not (identical? k0 (:k-prev @ledger)) (throw (js/Error. "k0 must move to k-prev via pre-admit rotation")))
        k1 (:k-curr @ledger)
-       ;; Rotation 2 at t=2300: k0 (old k-prev) MUST be zeroized and s0 cleared!
-       _ (r/rotate-replay-ledger! ledger 2300)
+       ;; Rotation 2 at t=2300 (> 2 * T_rot): k0 (old k-prev) MUST be zeroized and s0 purged!
+       _ (r/maybe-rotate-kagishi-replay! ledger 2300)
        _ (when-not (.every k0 #(= 0 %)) (throw (js/Error. "k0 was NOT zeroized on 2nd rotation")))
        _ (when-not (= 0 (.-size s0)) (throw (js/Error. "s0 was NOT cleared on 2nd rotation")))
        _ (when-not (identical? k1 (:k-prev @ledger)) (throw (js/Error. "k1 must move to k-prev")))
+       ;; Purge-after-reuse: exact same R1 replayed at t=2300 MUST still be rejected by issued_at expiry!
+       v-post-purge (r/validate-replay-headers ledger #js {"x-murakumo-replay-nonce" nonce
+                                                           "x-murakumo-issued-at" (str r1-issued)
+                                                           "x-murakumo-boot-id" boot-id}
+                                               "job_00000003" 2300)
+       _ (when-not (and (false? (:ok v-post-purge)) (= 403 (:status v-post-purge)) (= "replay_issued_at_expired" (:error v-post-purge)))
+           (throw (js/Error. (str "expected post-purge 403 replay_issued_at_expired, got: " (pr-str v-post-purge)))))
        ;; Destroy zeroizes remaining keys
        k2 (:k-curr @ledger)
        _ (r/destroy-replay-ledger! ledger)
@@ -337,7 +416,7 @@ test('kagishi-ram: 2-generation rotation across T_rot, exact HMAC vector, and K_
  const cljOut=execFileSync('kbb',['--backend','sci','--classpath',join(root,'src'),'-e',verifyClj],{cwd:cljDir,encoding:'utf8'});
  assert.match(cljOut,/CRYPTO_ROTATION_OK/);
 
- // Part B: Live HTTP rotation across T_rot via release/node.mjs
+ // Part B: Live HTTP rotation & Negative Test 2 (purge-after-reuse rejection across 2 * T_rot <= 900s)
  const dir=await mkdtemp(join(tmpdir(),'murakumo-kagishi-rot-'));
  t.after(()=>rm(dir,{recursive:true,force:true}));
  const token=randomBytes(32).toString('hex');
@@ -351,12 +430,13 @@ test('kagishi-ram: 2-generation rotation across T_rot, exact HMAC vector, and K_
  t.after(()=>{backend.server.closeAllConnections();backend.server.close();});
 
  const p=await port();
- // W=500, delta=100, T_rot=700 (700 >= 500 + 2*100)
+ // W=500, delta=100, T_rot=700 (2*T_rot = 1400 <= 900000), periodic sweep every 200ms
  const cfg={
   node:'rot0',bind:'127.0.0.1',port:p,
   'token-file':tokenFile,'state-file':join(dir,'receipts.json'),
   'receipt-mode':'kagishi-ram','observations?':false,
   'replay-window-ms':500,'replay-clock-skew-ms':100,'replay-rotation-ms':700,
+  'replay-sweep-interval-ms':200,
   'probe-interval-ms':30000,
   lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',
     backend:`http://127.0.0.1:${backend.server.address().port}`,path:'/v1/chat/completions'}}
@@ -388,16 +468,17 @@ test('kagishi-ram: 2-generation rotation across T_rot, exact HMAC vector, and K_
  assert.equal(afterRot1.status,409,'entry must survive 1st rotation in prev_set');
  assert.equal(backend.state.calls,1);
 
- // Wait past 2nd rotation (~1550ms after startup); old issued_at is expired (403)
- const wait3=Math.max(0,started+1550-Date.now());
+ // Wait idle past 2 * T_rot (~1650ms after startup) so periodic sweep purges bucket & zeroizes K_prev;
+ // exact same R1 MUST STILL be rejected by issued_at expiry with calls === 1
+ const wait3=Math.max(0,started+1650-Date.now());
  if(wait3>0)await sleep(wait3);
- const afterRot2=await fetch(url+'/execute/text',{method:'POST',headers:replayHeaders(token,bootId,{nonce:r1Nonce,issuedAt:r1Issued}),body:sampleBody});
- assert.equal(afterRot2.status,403,'old issued_at must be expired by 2nd rotation');
- assert.equal((await afterRot2.json()).error,'replay_issued_at_expired');
+ const afterPurge=await fetch(url+'/execute/text',{method:'POST',headers:replayHeaders(token,bootId,{nonce:r1Nonce,issuedAt:r1Issued}),body:sampleBody});
+ assert.equal(afterPurge.status,403,'exact same R1 replayed after 2*T_rot purge must still be rejected');
+ assert.equal((await afterPurge.json()).error,'replay_issued_at_expired');
  assert.equal(backend.state.calls,1);
 });
 
-test('kagishi-ram: capacity overflow returns 503 replay_ledger_full with zero LRU eviction, and gateway forwards replay headers',async t=>{
+test('kagishi-ram: capacity 503 no-LRU, gateway verbatim forwarding with NO upstream re-issuance, and gateway skips /estimate',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'murakumo-kagishi-cap-'));
  t.after(()=>rm(dir,{recursive:true,force:true}));
  const token=randomBytes(32).toString('hex');
@@ -419,9 +500,26 @@ test('kagishi-ram: capacity overflow returns 503 replay_ledger_full with zero LR
   'max-receipts':2,
   'replay-window-ms':10000,'replay-clock-skew-ms':1000,'replay-rotation-ms':12000,
   'probe-interval-ms':30000,
-  lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',
+  lanes:{text:{kind:'text',model:'mishima',context:32768,'input-tokenizer':'llama-template',group:'gpu',
     backend:`http://127.0.0.1:${backend.server.address().port}`,path:'/v1/chat/completions'}}
  };
+
+ // Negative Test 6a: Gateway refuses startup if mint-replay-headers? is enabled (upstream re-issuance prohibited)
+ const badGwPath=join(dir,'g-bad.json');
+ await writeFile(badGwPath,JSON.stringify({
+  node:'gw-bad',bind:'127.0.0.1',port:await port(),
+  'token-file':tokenFile,'probe-interval-ms':50,
+  'mint-replay-headers?':true,
+  peers:[{node:'cap0',url:rUrl}]
+ }));
+ const badGw=spawn(process.execPath,[cli,'gateway','serve','--config',badGwPath],{cwd:dir,stdio:['ignore','pipe','pipe']});
+ let badGwErr='';
+ badGw.stdout.on('data',b=>badGwErr+=b);
+ badGw.stderr.on('data',b=>badGwErr+=b);
+ const [badGwCode]=await once(badGw,'close');
+ assert.notEqual(badGwCode,0,'gateway must refuse startup when mint-replay-headers? is configured');
+ assert.match(badGwErr,/mint-replay-headers/i);
+
  const gCfg={
   node:'gw0',bind:'127.0.0.1',port:gp,
   'token-file':tokenFile,'probe-interval-ms':50,
@@ -444,12 +542,31 @@ test('kagishi-ram: capacity overflow returns 503 replay_ledger_full with zero LR
  assert.equal(gwHealth.peers.cap0.replay_mode,'kagishi-ram');
  assert.match(bootId,/^[a-f0-9]{32}$/);
 
- // 1st entry through gateway (preserving caller replay headers)
- const n1=randomBytes(16).toString('hex');
- const gwReq1=await fetch(gUrl+'/v1/chat/completions',{method:'POST',headers:replayHeaders(token,bootId,{nonce:n1,jobId:undefined}),body:sampleBody});
- // Remove x-murakumo-job-id on gateway call so gateway assigns node_lane_nonce while forwarding replay headers
- assert.equal(gwReq1.status,400,'gateway rejects non-node_lane_hex incoming job-id as expected');
+ // Negative Test 6b: Calling gateway with missing or partial replay headers MUST NOT synthesize them (calls === 0)
+ const gwMissingAll=await fetch(gUrl+'/v1/chat/completions',{
+  method:'POST',
+  headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},
+  body:sampleBody
+ });
+ assert.equal(gwMissingAll.status,400,'gateway must not synthesize missing replay headers');
+ assert.equal((await gwMissingAll.json()).error,'invalid_replay_nonce');
+ assert.equal(backend.state.calls,0);
 
+ const gwMissingBoot=await fetch(gUrl+'/v1/chat/completions',{
+  method:'POST',
+  headers:{
+   authorization:`Bearer ${token}`,'content-type':'application/json',
+   'x-murakumo-replay-nonce':randomBytes(16).toString('hex'),
+   'x-murakumo-issued-at':String(Date.now())
+  },
+  body:sampleBody
+ });
+ assert.equal(gwMissingBoot.status,400,'gateway must not synthesize missing boot_id');
+ assert.equal((await gwMissingBoot.json()).error,'boot_id_required');
+ assert.equal(backend.state.calls,0);
+
+ // 1st entry through gateway (preserving caller replay headers verbatim, skipping /estimate)
+ const n1=randomBytes(16).toString('hex');
  const gwHeaders1={
   authorization:`Bearer ${token}`,'content-type':'application/json',
   'x-murakumo-replay-nonce':n1,
@@ -461,10 +578,10 @@ test('kagishi-ram: capacity overflow returns 503 replay_ledger_full with zero LR
  await ok1.json();
  assert.equal(backend.state.calls,1);
 
- // Replay of n1 through gateway returns 409
+ // Negative Test 6c: Replaying the exact same used replay headers through gateway MUST NOT re-issue new headers -> 409, calls === 1
  await wait(async()=>(await(await fetch(gUrl+'/health',{headers:auth})).json()).peers?.cap0?.lanes?.text?.busy===false);
  const dupGw=await fetch(gUrl+'/v1/chat/completions',{method:'POST',headers:gwHeaders1,body:sampleBody});
- assert.equal(dupGw.status,409);
+ assert.equal(dupGw.status,409,'gateway must not re-issue replay headers on replay');
  assert.equal(backend.state.calls,1);
 
  // 2nd entry directly to resident fills capacity (max-receipts = 2)
