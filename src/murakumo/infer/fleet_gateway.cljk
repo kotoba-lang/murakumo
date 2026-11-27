@@ -76,6 +76,58 @@
       (str method " /jobs/*")
       (str method " " url))))
 
+(defn inspect-wire-v1-headers [req]
+  (if (r/duplicate-raw-header? req r/protected-admit-header-names)
+    {:ok false :status 400 :error "duplicate_header" :executed false}
+    (let [env-hdr (aget (.-headers req) "x-murakumo-admit-envelope")
+          sig-hdr (aget (.-headers req) "x-murakumo-admit-sig")
+          env-res (r/parse-admit-envelope env-hdr)
+          sig-res (r/parse-admit-sig-header sig-hdr)
+          req-route (str (.-method req) " " (.-url req))]
+      (cond
+        (not (:ok env-res)) env-res
+        (not (:ok sig-res)) sig-res
+        :else
+        (let [env (:envelope env-res)
+              alg (:alg env)
+              kid (:kid env)
+              route (:route env)
+              owner (:owner env)
+              lane (:lane env)
+              boot (:boot env)
+              iat (:iat env)
+              nonce (:nonce env)
+              hdr-boot (aget (.-headers req) "x-murakumo-boot-id")
+              hdr-iat (aget (.-headers req) "x-murakumo-issued-at")
+              hdr-nonce (aget (.-headers req) "x-murakumo-replay-nonce")]
+          (cond
+            (not= 1 (:v env))
+            {:ok false :status 400 :error "invalid_admit_version" :executed false}
+            (not= "ed25519" alg)
+            {:ok false :status 403 :error "unsupported_admit_alg" :executed false}
+            (not (and (string? kid) (re-matches #"[A-Za-z0-9_-]{1,64}" kid)))
+            {:ok false :status 400 :error "invalid_admit_kid" :executed false}
+            (and (:header-kid sig-res) (not= (:header-kid sig-res) kid))
+            {:ok false :status 403 :error "admit_kid_mismatch" :executed false}
+            (not= route req-route)
+            {:ok false :status 403 :error "route_mismatch" :executed false}
+            (not (and (string? owner) (re-matches #"[A-Za-z0-9-]+" owner)))
+            {:ok false :status 400 :error "invalid_admit_owner" :executed false}
+            (not (and (string? lane) (re-matches #"[A-Za-z0-9-]+" lane)))
+            {:ok false :status 400 :error "invalid_admit_lane" :executed false}
+            (not (and (number? iat) (js/Number.isFinite iat) (js/Number.isSafeInteger iat) (pos? iat)))
+            {:ok false :status 400 :error "invalid_issued_at" :executed false}
+            (not (r/valid-replay-nonce-format? nonce))
+            {:ok false :status 400 :error "invalid_replay_nonce" :executed false}
+            (and (some? hdr-boot) (not= hdr-boot (or boot "")))
+            {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+            (and (some? hdr-iat) (not= hdr-iat (str iat)))
+            {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+            (and (some? hdr-nonce) (not= hdr-nonce nonce))
+            {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+            :else
+            {:ok true :owner owner :lane lane :boot boot :route route :kid kid :envelope env}))))))
+
 (defn start! [config]
   (when (:mint-replay-headers? config)
     (throw (js/Error. "mint-replay-headers? is prohibited: gateway must not synthesize or re-issue caller replay headers")))
@@ -189,138 +241,140 @@
                     (r/json! res 503 {:error "topology_gateway_unavailable" :executed false})
                     (and (= "POST" (.-method req))
                          (contains? (if compatibility? #{"/v1/images/generations"} #{"/v1/chat/completions" "/v1/images/generations"}) (.-url req)))
-                    (if (and (true? (:require-caller-replay-headers? config))
-                             (not (and (aget (.-headers req) "x-murakumo-replay-nonce")
-                                       (aget (.-headers req) "x-murakumo-issued-at")
-                                       (aget (.-headers req) "x-murakumo-boot-id")
-                                       (or (aget (.-headers req) "x-murakumo-replay-auth")
-                                           (aget (.-headers req) "x-murakumo-replay-sig")))))
-                      (r/json! res 400 {:error "replay_headers_required" :executed false})
-                      (do
-                        (swap! active inc)
-                        (let [released? (atom false) release! #(when (compare-and-set! released? false true) (swap! active dec))]
-                          (.once res "finish" release!) (.once res "close" release!))
-                      (-> (r/read-body! req (:max-body-bytes config 2097152))
-                          (.then (fn [bytes]
-                                   (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
-                                         kind (if (= "/v1/chat/completions" (.-url req)) "text" "image")
-                                         elig (eligible-reports @reports topology privacy-mode?)
-                                         choices (candidates elig (:model body) kind (js/Date.now) 15000)]
-                                     (-> (if (= kind "text")
-                                           (gateway-input-tokens! choices @peers body bytes token)
-                                           (js/Promise.resolve nil))
-                                         (.then (fn [input] {:bytes bytes :input-tokens input}))))))
-                        (.then
-                         (fn [{:keys [bytes input-tokens]}]
-                           (let [_ (when (.-destroyed res) (throw (js/Error. "caller disconnected")))
-                                 body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
-                                 kind (if (= "/v1/chat/completions" (.-url req)) "text" "image")
-                                 _ (when (and (= kind "text") (not (r/valid-output-budget? body)))
-                                     (throw (js/Error. "invalid output budget")))
-                                 elig (eligible-reports @reports topology privacy-mode?)
-                                 choices (candidates elig (:model body) kind (js/Date.now) 15000)
-                                 choices (filterv #(or (= kind "image")
-                                                      (when-let [input (or (when (= "llama-template" (:input-tokenizer %)) input-tokens) (r/request-input-tokens % body (.-length bytes)))]
-                                                        (>= (:context %) (+ input (r/output-reservation % (:max_tokens body 1024)))))) choices)
-                                 privacy-req? (or privacy-mode? (boolean (some :privacy-peer? choices)))
-                                 ;; In privacy mode (INFER-PRIV-05), never accept or propagate external x-murakumo-job-id.
-                                 incoming-id (when-not privacy-req? (aget (.-headers req) "x-murakumo-job-id"))
-                                 caller-boot (aget (.-headers req) "x-murakumo-boot-id")
-                                 nonce (str/replace (.randomUUID crypto) #"-" "")
-                                 ;; Random first peer spreads simultaneous arrivals across gateways.
-                                 choices (if (seq choices)
-                                           (let [n (.randomInt crypto (count choices))]
-                                             (vec (concat (subvec choices n) (subvec choices 0 n)))) [])
-                                 ;; If caller pinned x-murakumo-boot-id, prefer matching boot_id peers first.
-                                 choices (if (and (string? caller-boot) (pos? (count caller-boot)) (seq choices))
-                                           (let [matched (filterv #(= caller-boot (:boot-id %)) choices)
-                                                 others (filterv #(not= caller-boot (:boot-id %)) choices)]
-                                             (vec (concat matched others)))
-                                           choices)
-                                 ;; A durable-mode retry is pinned to its original owner, even if health changed.
-                                 [owner lane suffix] (when incoming-id (str/split incoming-id #"_" 3))
-                                 choices (if incoming-id [{:node owner :lane lane}] choices)
-                                 controller (js/AbortController.)
-                                 timer (js/setTimeout #(.abort controller)
-                                                      (:request-timeout-ms config (if privacy-mode? 190000 490000)))]
-                             (.on res "close" #(when-not (.-writableEnded res) (.abort controller)))
-                             (letfn [(attempt [remaining last-refusal]
-                                       (if-let [{:keys [node lane boot-id privacy-peer?]} (first remaining)]
-                                         (if-let [p (or (get @peers node) (when incoming-id (topo/node-entry topology node)))]
-                                           (let [peer-privacy? (or privacy-mode? privacy-peer? (privacy-peer-report? (get @reports node)))
-                                                 id (when-not peer-privacy? (or incoming-id (str node "_" lane "_" nonce)))]
-                                             (when-not (and (re-matches #"[A-Za-z0-9-]+" node)
-                                                            (re-matches #"[A-Za-z0-9-]+" lane)
-                                                            (or (nil? incoming-id) (re-matches #"[a-f0-9]{32}" (or suffix ""))))
-                                               (throw (js/Error. "invalid job id")))
-                                             (let [exec-headers
-                                                   (let [h #js {"authorization" (str "Bearer " token)
-                                                                "content-type" "application/json"}
-                                                         caller-nonce (aget (.-headers req) "x-murakumo-replay-nonce")
-                                                         caller-issued (aget (.-headers req) "x-murakumo-issued-at")
-                                                         caller-auth (aget (.-headers req) "x-murakumo-replay-auth")
-                                                         caller-sig (aget (.-headers req) "x-murakumo-replay-sig")]
-                                                     ;; Only durable mode carries x-murakumo-job-id.
-                                                     ;; Correlation headers (cf-ray, traceparent, tracestate, x-request-id,
-                                                     ;; x-correlation-id) are intentionally never copied into exec-headers.
-                                                     (when id (aset h "x-murakumo-job-id" id))
-                                                     ;; Never synthesize, re-issue, re-sign, or overwrite caller replay headers.
-                                                     (when caller-nonce (aset h "x-murakumo-replay-nonce" caller-nonce))
-                                                     (when caller-issued (aset h "x-murakumo-issued-at" caller-issued))
-                                                     (when caller-boot (aset h "x-murakumo-boot-id" caller-boot))
-                                                     (when caller-auth (aset h "x-murakumo-replay-auth" caller-auth))
-                                                     (when caller-sig (aset h "x-murakumo-replay-sig" caller-sig))
-                                                     h)]
-                                             (-> (js/fetch (str (.-origin (js/URL. (:url p))) "/execute/" lane)
-                                                           #js {:method "POST" :signal (.-signal controller)
-                                                                :headers exec-headers
-                                                                :body bytes})
-                                                 (.then (fn [resp]
-                                                          ;; Retry ONLY an explicit pre-admission 429/503 refusal with executed === false.
-                                                          ;; In privacy mode (INFER-PRIV-07), auto-retry is restricted to same-boot_id
-                                                          ;; peers when x-murakumo-boot-id is pinned. 502, 409, and 410 NEVER retry or re-sign.
-                                                          (if (and (nil? incoming-id) (contains? #{429 503} (.-status resp)))
-                                                            (-> (.json resp)
-                                                                (.then (fn [refusal]
-                                                                         (if (false? (.-executed refusal))
-                                                                           (let [next-rem (if (and peer-privacy? (string? caller-boot) (pos? (count caller-boot)))
-                                                                                            (filterv #(= boot-id (:boot-id %)) (rest remaining))
-                                                                                            (rest remaining))]
-                                                                             (attempt next-rem {:status (.-status resp)
-                                                                                                :error (or (.-error refusal) "no_ready_capacity")}))
-                                                                           (r/json! res 502
-                                                                                    (if peer-privacy?
-                                                                                      {:error "execution_unknown" :retryable false}
-                                                                                      {:error "execution_unknown" :job-id id :retryable false}))))))
-                                                            (do
-                                                              (let [ct (or (.get (.-headers resp) "content-type") "application/json")
-                                                                    resp-headers (if peer-privacy?
-                                                                                   #js {"content-type" ct "cache-control" "no-store"}
-                                                                                   #js {"content-type" ct "x-murakumo-job-id" id "x-murakumo-node" node})]
-                                                                (.writeHead res (.-status resp) resp-headers))
-                                                              (let [reader (.getReader (.-body resp))]
-                                                                (letfn [(pump []
-                                                                          (-> (.read reader)
-                                                                              (.then (fn [part]
-                                                                                       (if (.-done part) (.end res)
-                                                                                           (do (.write res (.from js/Buffer (.-value part))) (pump)))))))]
-                                                                  (pump)))))))
-                                                 (.catch (fn [_]
-                                                           (when-not (.-headersSent res)
-                                                             (r/json! res 502
-                                                                      (if peer-privacy?
-                                                                        {:error "execution_unknown" :retryable false}
-                                                                        {:error "execution_unknown" :job-id id :retryable false})))
-                                                           (when-not (.-writableEnded res) (.end res)))))))
-                                           (r/json! res 400 {:error "unknown_job_owner"}))
-                                         (if last-refusal
-                                           (r/json! res (:status last-refusal) {:error (:error last-refusal) :executed false})
-                                           (if privacy-mode?
-                                             (r/json! res 503 {:error "no_privacy_peer_available" :executed false})
-                                             (r/json! res 429 {:error "no_ready_capacity" :executed false})))))]
-                               (-> (js/Promise.resolve (attempt choices nil))
-                                   (.finally #(js/clearTimeout timer)))))))
-                        (.catch (fn [_] (when-not (.-headersSent res) (r/json! res 400 {:error "invalid_request"})))))))
+                    (let [has-admit-envelope? (some? (aget (.-headers req) "x-murakumo-admit-envelope"))
+                          wire-v1? (or privacy-mode? has-admit-envelope? (true? (:require-caller-replay-headers? config)))
+                          wire-check (when wire-v1? (inspect-wire-v1-headers req))]
+                      (if (and wire-v1? (not (:ok wire-check)))
+                        (r/json! res (:status wire-check) {:error (:error wire-check) :executed false})
+                        (do
+                          (swap! active inc)
+                          (let [released? (atom false) release! #(when (compare-and-set! released? false true) (swap! active dec))]
+                            (.once res "finish" release!) (.once res "close" release!))
+                          (-> (r/read-body! req (:max-body-bytes config 2097152))
+                              (.then (fn [bytes]
+                                       (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                                             kind (if (= "/v1/chat/completions" (.-url req)) "text" "image")
+                                             elig (eligible-reports @reports topology (or privacy-mode? wire-v1?))
+                                             all-choices (candidates elig (:model body) kind (js/Date.now) 15000)
+                                             ;; In Wire v1 privacy mode, restrict estimation strictly to the envelope's single (owner, lane).
+                                             est-choices (if wire-v1?
+                                                           (filterv #(and (= (:owner wire-check) (:node %))
+                                                                          (= (:lane wire-check) (:lane %)))
+                                                                    all-choices)
+                                                           all-choices)]
+                                         (-> (if (= kind "text")
+                                               (gateway-input-tokens! est-choices @peers body bytes token)
+                                               (js/Promise.resolve nil))
+                                             (.then (fn [input] {:bytes bytes :input-tokens input}))))))
+                              (.then
+                               (fn [{:keys [bytes input-tokens]}]
+                                 (let [_ (when (.-destroyed res) (throw (js/Error. "caller disconnected")))
+                                       body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                                       kind (if (= "/v1/chat/completions" (.-url req)) "text" "image")
+                                       _ (when (and (= kind "text") (not (r/valid-output-budget? body)))
+                                           (throw (js/Error. "invalid output budget")))
+                                       elig (eligible-reports @reports topology (or privacy-mode? wire-v1?))
+                                       choices (candidates elig (:model body) kind (js/Date.now) 15000)
+                                       choices (if wire-v1?
+                                                 ;; Single (owner, lane) routing: NEVER fail over to a different peer!
+                                                 (filterv #(and (= (:owner wire-check) (:node %))
+                                                                (= (:lane wire-check) (:lane %)))
+                                                          choices)
+                                                 choices)
+                                       choices (filterv #(or (= kind "image")
+                                                            (when-let [input (or (when (= "llama-template" (:input-tokenizer %)) input-tokens) (r/request-input-tokens % body (.-length bytes)))]
+                                                              (>= (:context %) (+ input (r/output-reservation % (:max_tokens body 1024)))))) choices)
+                                       privacy-req? (or privacy-mode? wire-v1? (boolean (some :privacy-peer? choices)))
+                                       ;; In privacy mode (INFER-PRIV-05), never accept or propagate external x-murakumo-job-id.
+                                       incoming-id (when-not privacy-req? (aget (.-headers req) "x-murakumo-job-id"))
+                                       nonce (str/replace (.randomUUID crypto) #"-" "")
+                                       ;; Random first peer spreads simultaneous arrivals across gateways (durable mode).
+                                       choices (if (and (not wire-v1?) (seq choices))
+                                                 (let [n (.randomInt crypto (count choices))]
+                                                   (vec (concat (subvec choices n) (subvec choices 0 n))))
+                                                 choices)
+                                       ;; A durable-mode retry is pinned to its original owner, even if health changed.
+                                       [owner lane suffix] (when incoming-id (str/split incoming-id #"_" 3))
+                                       choices (if incoming-id [{:node owner :lane lane}] choices)
+                                       controller (js/AbortController.)
+                                       timer (js/setTimeout #(.abort controller)
+                                                            (:request-timeout-ms config (if privacy-req? 190000 490000)))]
+                                   (.on res "close" #(when-not (.-writableEnded res) (.abort controller)))
+                                   (letfn [(attempt [remaining last-refusal]
+                                             (if-let [{:keys [node lane privacy-peer?]} (first remaining)]
+                                               (if-let [p (or (get @peers node) (when incoming-id (topo/node-entry topology node)))]
+                                                 (let [peer-privacy? (or privacy-req? privacy-peer? (privacy-peer-report? (get @reports node)))
+                                                       id (when-not peer-privacy? (or incoming-id (str node "_" lane "_" nonce)))]
+                                                   (when-not (and (re-matches #"[A-Za-z0-9-]+" node)
+                                                                  (re-matches #"[A-Za-z0-9-]+" lane)
+                                                                  (or (nil? incoming-id) (re-matches #"[a-f0-9]{32}" (or suffix ""))))
+                                                     (throw (js/Error. "invalid job id")))
+                                                   (let [exec-headers
+                                                         (let [h #js {"authorization" (str "Bearer " token)
+                                                                      "content-type" "application/json"}
+                                                               env-hdr (aget (.-headers req) "x-murakumo-admit-envelope")
+                                                               sig-hdr (aget (.-headers req) "x-murakumo-admit-sig")
+                                                               caller-nonce (aget (.-headers req) "x-murakumo-replay-nonce")
+                                                               caller-issued (aget (.-headers req) "x-murakumo-issued-at")
+                                                               caller-boot (aget (.-headers req) "x-murakumo-boot-id")]
+                                                           ;; Only durable mode carries x-murakumo-job-id.
+                                                           ;; Correlation headers (cf-ray, traceparent, tracestate, x-request-id,
+                                                           ;; x-correlation-id) are intentionally never copied into exec-headers.
+                                                           (when id (aset h "x-murakumo-job-id" id))
+                                                           ;; Never synthesize, re-issue, re-sign, or overwrite caller admit/replay headers.
+                                                           (when env-hdr (aset h "x-murakumo-admit-envelope" env-hdr))
+                                                           (when sig-hdr (aset h "x-murakumo-admit-sig" sig-hdr))
+                                                           (when caller-nonce (aset h "x-murakumo-replay-nonce" caller-nonce))
+                                                           (when caller-issued (aset h "x-murakumo-issued-at" caller-issued))
+                                                           (when caller-boot (aset h "x-murakumo-boot-id" caller-boot))
+                                                           h)]
+                                                   (-> (js/fetch (str (.-origin (js/URL. (:url p))) "/execute/" lane)
+                                                                 #js {:method "POST" :signal (.-signal controller)
+                                                                      :headers exec-headers
+                                                                      :body bytes})
+                                                       (.then (fn [resp]
+                                                                ;; Durable mode retries explicit pre-admission 429/503 with executed === false.
+                                                                ;; Wire v1 privacy envelopes are single-(owner,lane)-bound and NEVER fail over
+                                                                ;; to a different peer; 502, 409, and 410 NEVER retry or re-sign.
+                                                                (if (and (nil? incoming-id) (not wire-v1?) (contains? #{429 503} (.-status resp)))
+                                                                  (-> (.json resp)
+                                                                      (.then (fn [refusal]
+                                                                               (if (false? (.-executed refusal))
+                                                                                 (attempt (rest remaining) {:status (.-status resp)
+                                                                                                            :error (or (.-error refusal) "no_ready_capacity")})
+                                                                                 (r/json! res 502
+                                                                                          (if peer-privacy?
+                                                                                            {:error "execution_unknown" :retryable false}
+                                                                                            {:error "execution_unknown" :job-id id :retryable false}))))))
+                                                                  (do
+                                                                    (let [ct (or (.get (.-headers resp) "content-type") "application/json")
+                                                                          resp-headers (if peer-privacy?
+                                                                                         #js {"content-type" ct "cache-control" "no-store"}
+                                                                                         #js {"content-type" ct "x-murakumo-job-id" id "x-murakumo-node" node})]
+                                                                      (.writeHead res (.-status resp) resp-headers))
+                                                                    (let [reader (.getReader (.-body resp))]
+                                                                      (letfn [(pump []
+                                                                                (-> (.read reader)
+                                                                                    (.then (fn [part]
+                                                                                             (if (.-done part) (.end res)
+                                                                                                 (do (.write res (.from js/Buffer (.-value part))) (pump)))))))]
+                                                                        (pump)))))))
+                                                       (.catch (fn [_]
+                                                                 (when-not (.-headersSent res)
+                                                                   (r/json! res 502
+                                                                            (if peer-privacy?
+                                                                              {:error "execution_unknown" :retryable false}
+                                                                              {:error "execution_unknown" :job-id id :retryable false})))
+                                                                 (when-not (.-writableEnded res) (.end res)))))))
+                                                 (r/json! res 400 {:error "unknown_job_owner"}))
+                                               (if last-refusal
+                                                 (r/json! res (:status last-refusal) {:error (:error last-refusal) :executed false})
+                                                 (if (or privacy-mode? wire-v1?)
+                                                   (r/json! res 503 {:error "no_privacy_peer_available" :executed false})
+                                                   (r/json! res 429 {:error "no_ready_capacity" :executed false})))))]
+                                     (-> (js/Promise.resolve (attempt choices nil))
+                                         (.finally #(js/clearTimeout timer)))))))
+                              (.catch (fn [_] (when-not (.-headersSent res) (r/json! res 400 {:error "invalid_request"}))))))))
                     :else (r/json! res 404 {:error "not_found"}))))
         server (.createServer http (fn [req res] (handler req res false)))
         compat-server (when (:compat-image-port config)

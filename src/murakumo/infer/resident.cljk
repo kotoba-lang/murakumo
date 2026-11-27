@@ -97,15 +97,15 @@
   (let [n (:max_tokens body 1024)]
     (and (number? n) (js/Number.isSafeInteger n) (<= 1 n 32768))))
 
-;; AWAI-4154 v1.0 Kagishi hybrid replay standard: opt-in RAM-only 2-generation
+;; AWAI-4154 v1.0.2 Kagishi hybrid replay standard: opt-in RAM-only 2-generation
 ;; volatile HMAC replay ledger bound to per-boot resident_boot_id (no disk
-;; receipts, no unsalted body digest, authenticated replay bundle).
+;; receipts, no unsalted body digest, Wire v1 signed admit envelope).
 (def replay-hmac-prefix
   (.concat js/Buffer #js [(js/Buffer.from "awai/v1/murakumo-replay" "utf8")
                           (js/Buffer.from #js [0])]))
 
-(def replay-bundle-auth-prefix
-  (.concat js/Buffer #js [(js/Buffer.from "awai/v1/murakumo-replay-bundle" "utf8")
+(def admit-envelope-sig-prefix
+  (.concat js/Buffer #js [(js/Buffer.from "awai/v1/murakumo-admit-envelope" "utf8")
                           (js/Buffer.from #js [0])]))
 
 (def privacy-replay-modes #{"kagishi-ram" "ephemeral-memory" "ram-hmac"})
@@ -116,8 +116,24 @@
 (def default-replay-window-ms 300000)
 (def default-replay-clock-skew-ms 30000)
 (def default-replay-rotation-ms 360000)
+(def default-replay-sweep-interval-ms 10000)
+(def max-replay-sweep-interval-ms 30000)
 (def default-replay-max-entries 10000)
 (def max-ram-replay-retention-ms 900000)
+(def private-completion-id "chatcmpl-private")
+
+(defn mono-ms []
+  ;; Strictly monotonic clock from process.hrtime.bigint() floored to integer ms.
+  (let [s (.toString (.bigint (.-hrtime js/process)))]
+    (if (> (count s) 6)
+      (js/Number (subs s 0 (- (count s) 6)))
+      0)))
+
+(defn effective-now [ledger-map wall-now mono-now]
+  ;; Immune to wall-clock rollback: never moves behind started-at + monotonic elapsed.
+  (let [mono-elapsed (max 0 (- mono-now (:started-mono-ms ledger-map mono-now)))
+        anchored (+ (:started-at ledger-map wall-now) mono-elapsed)]
+    (max wall-now anchored)))
 
 (defn normalized-replay-mode [mode]
   (cond
@@ -153,52 +169,286 @@
                                     (u32-be (.-length nonce-buf)) nonce-buf])]
     (.digest (.update (.createHmac crypto "sha256" key) msg) "hex")))
 
-(defn compute-replay-bundle-auth [key-buf boot-id replay-nonce issued-at-raw body-bytes]
-  (let [boot-buf (js/Buffer.from (or boot-id "") "utf8")
-        nonce-buf (js/Buffer.from (or replay-nonce "") "utf8")
-        issued-buf (js/Buffer.from (str (or issued-at-raw "")) "utf8")
-        body-buf (if (js/Buffer.isBuffer body-bytes)
-                   body-bytes
-                   (js/Buffer.from (or body-bytes "") "utf8"))
-        h (.createHmac crypto "sha256" key-buf)]
-    (.update h replay-bundle-auth-prefix)
-    (.update h (u32-be (.-length boot-buf)))
-    (.update h boot-buf)
-    (.update h (u32-be (.-length nonce-buf)))
-    (.update h nonce-buf)
-    (.update h (u32-be (.-length issued-buf)))
-    (.update h issued-buf)
-    (.update h body-buf)
-    (.digest h)))
-
-(defn verify-replay-bundle-auth [key-buf headers body-bytes]
-  (let [auth1 (aget headers "x-murakumo-replay-auth")
-        auth2 (aget headers "x-murakumo-replay-sig")]
-    (cond
-      (and auth1 auth2 (not= auth1 auth2))
-      {:ok false :status 400 :error "conflicting_replay_auth" :executed false}
-      :else
-      (let [provided (or auth1 auth2)]
-        (cond
-          (or (nil? provided) (= "" provided))
-          {:ok false :status 401 :error "replay_auth_required" :executed false}
-          (not (and (string? provided) (re-matches #"[0-9a-f]{64}" provided)))
-          {:ok false :status 400 :error "invalid_replay_auth" :executed false}
-          :else
-          (let [expected-buf (compute-replay-bundle-auth
-                              key-buf
-                              (aget headers "x-murakumo-boot-id")
-                              (aget headers "x-murakumo-replay-nonce")
-                              (aget headers "x-murakumo-issued-at")
-                              body-bytes)
-                provided-buf (js/Buffer.from provided "hex")]
-            (if (and (= (.-length expected-buf) (.-length provided-buf))
-                     (.timingSafeEqual crypto expected-buf provided-buf))
-              {:ok true}
-              {:ok false :status 403 :error "invalid_replay_auth" :executed false})))))))
-
 (defn zeroize-buffer! [buf]
   (when buf (.fill buf 0)))
+
+(defn valid-replay-nonce-format? [nonce]
+  (boolean (and (string? nonce) (re-matches #"[A-Za-z0-9_-]{32,256}" nonce))))
+
+(defn valid-estimate-nonce? [nonce]
+  (boolean (and (string? nonce) (re-matches #"[A-Za-z0-9_-]{32,256}" nonce))))
+
+(defn replay-nonce-independent? [nonce other-id]
+  (let [ln (str/lower-case nonce)
+        lj (str/lower-case other-id)
+        other-sha (.digest (.update (.createHash crypto "sha256") other-id) "hex")]
+    (and (not= ln lj)
+         (not (str/includes? lj ln))
+         (not (and (>= (count lj) 16) (str/includes? ln lj)))
+         (not= ln other-sha))))
+
+(def max-admit-envelope-bytes 2048)
+(def max-u32-bytes 4294967295)
+(def allowed-admit-envelope-keys #{"v" "alg" "kid" "route" "owner" "lane" "boot" "iat" "nonce"})
+
+(defn js-plain-object? [x]
+  (= "[object Object]" (.call (.-toString (.-prototype js/Object)) x)))
+
+(defn duplicate-raw-header? [req header-names]
+  (let [raw (.-rawHeaders req)
+        hdrs (.-headers req)]
+    (or (boolean (some #(js/Array.isArray (aget hdrs %)) header-names))
+        (boolean
+         (when (js/Array.isArray raw)
+           (let [counts (atom {})]
+             (loop [i 0]
+               (if (>= i (.-length raw))
+                 false
+                 (let [k (str/lower-case (aget raw i))]
+                   (if (contains? header-names k)
+                     (let [c (inc (get @counts k 0))]
+                       (swap! counts assoc k c)
+                       (if (> c 1) true (recur (+ i 2))))
+                     (recur (+ i 2))))))))))))
+
+(defn strict-json-no-dup-keys? [s]
+  ;; RFC 8259 scanner that rejects duplicate object keys (including Unicode-escaped
+  ;; duplicates) and trailing garbage before JSON.parse.
+  (let [n (count s)
+        idx (atom 0)
+        ws? (fn [c] (or (= c " ") (= c "\t") (= c "\n") (= c "\r")))
+        skip-ws! (fn []
+                   (while (and (< @idx n) (ws? (.charAt s @idx)))
+                     (swap! idx inc)))
+        read-string! (fn []
+                       (when (or (>= @idx n) (not= "\"" (.charAt s @idx)))
+                         (throw (js/Error. "expected string")))
+                       (let [start @idx]
+                         (swap! idx inc)
+                         (loop []
+                           (when (>= @idx n) (throw (js/Error. "unterminated string")))
+                           (let [ch (.charAt s @idx)]
+                             (cond
+                               (= ch "\\") (do (swap! idx + 2) (recur))
+                               (= ch "\"") (do (swap! idx inc)
+                                               (js/JSON.parse (subs s start @idx)))
+                               :else (do (swap! idx inc) (recur)))))))]
+    (letfn [(parse-val! []
+              (skip-ws!)
+              (when (>= @idx n) (throw (js/Error. "unexpected eof")))
+              (let [ch (.charAt s @idx)]
+                (cond
+                  (= ch "\"") (read-string!)
+                  (= ch "{")
+                  (do
+                    (swap! idx inc)
+                    (skip-ws!)
+                    (let [seen (js/Set.)]
+                      (if (and (< @idx n) (= "}" (.charAt s @idx)))
+                        (swap! idx inc)
+                        (loop []
+                          (skip-ws!)
+                          (let [k (read-string!)]
+                            (when (.has seen k)
+                              (throw (js/Error. "duplicate_json_key")))
+                            (.add seen k)
+                            (skip-ws!)
+                            (when (or (>= @idx n) (not= ":" (.charAt s @idx)))
+                              (throw (js/Error. "expected colon")))
+                            (swap! idx inc)
+                            (parse-val!)
+                            (skip-ws!)
+                            (when (>= @idx n) (throw (js/Error. "unterminated object")))
+                            (let [sep (.charAt s @idx)]
+                              (cond
+                                (= sep ",") (do (swap! idx inc) (recur))
+                                (= sep "}") (swap! idx inc)
+                                :else (throw (js/Error. "expected comma or brace")))))))))
+                  (= ch "[")
+                  (do
+                    (swap! idx inc)
+                    (skip-ws!)
+                    (if (and (< @idx n) (= "]" (.charAt s @idx)))
+                      (swap! idx inc)
+                      (loop []
+                        (parse-val!)
+                        (skip-ws!)
+                        (when (>= @idx n) (throw (js/Error. "unterminated array")))
+                        (let [sep (.charAt s @idx)]
+                          (cond
+                            (= sep ",") (do (swap! idx inc) (recur))
+                            (= sep "]") (swap! idx inc)
+                            :else (throw (js/Error. "expected comma or bracket")))))))
+                  (or (= ch "t") (= ch "f") (= ch "n"))
+                  (let [tok (cond
+                              (str/starts-with? (subs s @idx) "true") "true"
+                              (str/starts-with? (subs s @idx) "false") "false"
+                              (str/starts-with? (subs s @idx) "null") "null"
+                              :else (throw (js/Error. "invalid literal")))]
+                    (swap! idx + (count tok)))
+                  :else
+                  (let [m (re-find #"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?" (subs s @idx))]
+                    (when-not m (throw (js/Error. "invalid token")))
+                    (swap! idx + (count m))))))]
+      (try
+        (parse-val!)
+        (skip-ws!)
+        (= @idx n)
+        (catch :default _ false)))))
+
+(defn unpadded-base64url? [s]
+  (boolean (and (string? s)
+                (pos? (count s))
+                (not (str/includes? s "="))
+                (re-matches #"[A-Za-z0-9_-]+" s)
+                (not= 1 (mod (count s) 4)))))
+
+(defn parse-admit-envelope [raw-b64u]
+  (cond
+    (or (nil? raw-b64u) (not (string? raw-b64u)) (= "" raw-b64u))
+    {:ok false :status 401 :error "admit_envelope_required" :executed false}
+    (or (str/includes? raw-b64u "=") (not (unpadded-base64url? raw-b64u)))
+    {:ok false :status 400 :error "invalid_admit_envelope" :executed false}
+    (> (count raw-b64u) 2732)
+    {:ok false :status 400 :error "admit_envelope_too_large" :executed false}
+    :else
+    (try
+      (let [env-raw (js/Buffer.from raw-b64u "base64url")]
+        (cond
+          (or (zero? (.-length env-raw)) (> (.-length env-raw) max-admit-envelope-bytes))
+          {:ok false :status 400 :error "admit_envelope_too_large" :executed false}
+          (not= raw-b64u (.toString env-raw "base64url"))
+          {:ok false :status 400 :error "invalid_admit_envelope" :executed false}
+          :else
+          (let [utf8 (.toString env-raw "utf8")]
+            (if-not (strict-json-no-dup-keys? utf8)
+              {:ok false :status 400 :error "invalid_admit_envelope_json" :executed false}
+              (let [parsed (js/JSON.parse utf8)]
+                (if-not (js-plain-object? parsed)
+                  {:ok false :status 400 :error "invalid_admit_envelope" :executed false}
+                  (let [raw-keys (vec (js/Object.keys parsed))]
+                    (cond
+                      (some #(= "op" %) raw-keys)
+                      {:ok false :status 400 :error "forbidden_admit_field_op" :executed false}
+                      (some #(not (contains? allowed-admit-envelope-keys %)) raw-keys)
+                      {:ok false :status 400 :error "unknown_admit_envelope_field" :executed false}
+                      :else
+                      {:ok true
+                       :envelope-raw env-raw
+                       :envelope (js->clj parsed :keywordize-keys true)}))))))))
+      (catch :default _
+        {:ok false :status 400 :error "invalid_admit_envelope" :executed false}))))
+
+(defn admit-sig-message [envelope-raw body-bytes]
+  (let [env-buf (if (js/Buffer.isBuffer envelope-raw) envelope-raw (js/Buffer.from (or envelope-raw "") "utf8"))
+        body-buf (if (js/Buffer.isBuffer body-bytes) body-bytes (js/Buffer.from (or body-bytes "") "utf8"))]
+    (when (> (.-length env-buf) max-admit-envelope-bytes)
+      (throw (js/Error. "admit envelope exceeds max length")))
+    (when (> (.-length body-buf) max-u32-bytes)
+      (throw (js/Error. "body exceeds u32_be length bound")))
+    (.concat js/Buffer #js [admit-envelope-sig-prefix
+                            (u32-be (.-length env-buf)) env-buf
+                            (u32-be (.-length body-buf)) body-buf])))
+
+(declare assert-not-symlink! private-token)
+
+(defn load-ed25519-pubkey [spec kid-str]
+  (let [pem (cond
+              (string? spec)
+              (if (str/starts-with? (str/trim spec) "-----BEGIN")
+                spec
+                (do (assert-not-symlink! spec (str "admit-public-keys." kid-str))
+                    (.readFileSync fs spec "utf8")))
+              (map? spec)
+              (do
+                (when (and (some? (:type spec)) (not= "ed25519" (:type spec)))
+                  (throw (js/Error. (str "only ed25519 admit keys are permitted (INFER-PRIV-08): " kid-str))))
+                (cond
+                  (:public-key-file spec)
+                  (do (assert-not-symlink! (:public-key-file spec) (str "admit-public-keys." kid-str))
+                      (.readFileSync fs (:public-key-file spec) "utf8"))
+                  (string? (:public-key spec))
+                  (:public-key spec)
+                  :else (throw (js/Error. (str "ed25519 admit key requires :public-key or :public-key-file for " kid-str)))))
+              :else (throw (js/Error. (str "invalid admit-public-keys entry for " kid-str))))
+        state (if (map? spec) (or (:state spec) "active") "active")
+        _ (when-not (contains? #{"active" "staged" "revoked"} state)
+            (throw (js/Error. (str "invalid admit key state for " kid-str ": " state))))
+        pub (.createPublicKey crypto pem)]
+    (when-not (= "ed25519" (.-asymmetricKeyType pub))
+      (throw (js/Error. (str "admit public key must be Ed25519 for " kid-str))))
+    {:type :ed25519 :key pub :state state}))
+
+(defn load-admit-keys! [config]
+  ;; AWAI-4154 v1.0.3 (INFER-PRIV-08): Ed25519 PureEdDSA key pinning with
+  ;; active/staged/revoked states (>= 2 keys supported for stage -> activate -> revoke).
+  ;; Zero fallback to symmetric/plaintext modes.
+  (let [raw-keys (or (:admit-public-keys config) (:admit-keys config))
+        revoked-set (set (map name (:revoked-admit-kids config)))]
+    (when-not (and (map? raw-keys) (seq raw-keys))
+      (throw (js/Error. "privacy mode requires non-empty admit-public-keys (Ed25519) per AWAI-4154 v1.0.3")))
+    (let [loaded (into {}
+                       (for [[kid spec] raw-keys
+                             :let [kid-str (name kid)]]
+                         (do
+                           (when-not (re-matches #"[A-Za-z0-9_-]{1,64}" kid-str)
+                             (throw (js/Error. (str "invalid admit-public-keys kid: " kid-str))))
+                           (let [entry (load-ed25519-pubkey spec kid-str)
+                                 entry (if (contains? revoked-set kid-str) (assoc entry :state "revoked") entry)]
+                             [kid-str entry]))))]
+      (when-not (some #(contains? #{"active" "staged"} (:state %)) (vals loaded))
+        (throw (js/Error. "admit-public-keys must contain at least one active or staged Ed25519 key")))
+      loaded)))
+
+(defn zeroize-admit-keys! [_admit-keys]
+  ;; Ed25519 verification holds only public keys; no symmetric secrets retained.
+  nil)
+
+(defn parse-admit-sig-header [sig-header]
+  (cond
+    (or (nil? sig-header) (not (string? sig-header)) (= "" sig-header))
+    {:ok false :status 401 :error "admit_sig_required" :executed false}
+    (str/includes? sig-header "=")
+    {:ok false :status 400 :error "invalid_admit_sig_padding" :executed false}
+    (str/includes? sig-header ".")
+    (let [parts (str/split sig-header #"\." -1)]
+      (if (and (= 2 (count parts))
+               (re-matches #"[A-Za-z0-9_-]{1,64}" (first parts))
+               (unpadded-base64url? (second parts)))
+        {:ok true :header-kid (first parts) :sig-b64u (second parts)}
+        {:ok false :status 400 :error "invalid_admit_sig_format" :executed false}))
+    (unpadded-base64url? sig-header)
+    {:ok true :header-kid nil :sig-b64u sig-header}
+    :else
+    {:ok false :status 400 :error "invalid_admit_sig_format" :executed false}))
+
+(defn verify-admit-sig [admit-keys sig-header env-kid envelope-raw body-bytes max-body-bytes]
+  (let [parsed (parse-admit-sig-header sig-header)]
+    (cond
+      (not (:ok parsed)) parsed
+      (> (.-length body-bytes) max-body-bytes)
+      {:ok false :status 413 :error "body_too_large" :executed false}
+      (and (:header-kid parsed) (not= (:header-kid parsed) env-kid))
+      {:ok false :status 403 :error "admit_kid_mismatch" :executed false}
+      :else
+      (let [entry (get admit-keys env-kid)]
+        (cond
+          (nil? entry)
+          {:ok false :status 403 :error "unknown_admit_kid" :executed false}
+          (= "revoked" (:state entry))
+          {:ok false :status 403 :error "revoked_admit_kid" :executed false}
+          :else
+          (let [sig-b64u (:sig-b64u parsed)
+                sig-buf (js/Buffer.from sig-b64u "base64url")]
+            (if-not (and (= 64 (.-length sig-buf))
+                         (= sig-b64u (.toString sig-buf "base64url")))
+              {:ok false :status 400 :error "invalid_admit_sig_format" :executed false}
+              (let [msg (admit-sig-message envelope-raw body-bytes)
+                    ok? (try (.verify crypto nil msg (:key entry) sig-buf)
+                             (catch :default _ false))]
+                (if ok?
+                  {:ok true :kid env-kid}
+                  {:ok false :status 403 :error "invalid_admit_sig" :executed false})))))))))
 
 (defn harden-process-boundary! []
   ;; Best-effort RLIMIT_CORE=0 when the Node runtime exposes process.setrlimit.
@@ -270,71 +520,76 @@
                   (re-matches #".*\.(tmp|bak|lock)$" entry)
                   (throw (js/Error. (str "residual temp/backup/lock file refused in privacy mode: " entry))))))))))))
 
-(defn make-replay-ledger [config boot-id started-at]
-  (let [w (:replay-window-ms config default-replay-window-ms)
-        delta (:replay-clock-skew-ms config default-replay-clock-skew-ms)
-        t-rot (:replay-rotation-ms config default-replay-rotation-ms)
-        jitter (:rotation-jitter-ms config 0)
-        sweep-ms (or (:replay-sweep-interval-ms config)
-                     (:sweep-interval-ms config)
-                     (min t-rot 60000))
-        max-entries (or (:replay-max-entries config)
-                        (:max-receipts config)
-                        default-replay-max-entries)
-        cfg-job-timeout (:job-timeout-ms config default-privacy-job-timeout-ms)
-        lane-timeouts (map #(or (:job-timeout-ms %) cfg-job-timeout) (vals (:lanes config)))
-        max-job-timeout (if (seq lane-timeouts) (apply max cfg-job-timeout lane-timeouts) cfg-job-timeout)
-        max-inflight-ms (:max-inflight-ms config max-job-timeout)]
-    (when-not (and (js/Number.isSafeInteger w) (pos? w))
-      (throw (js/Error. "replay-window-ms must be a positive integer")))
-    (when-not (and (js/Number.isSafeInteger delta) (>= delta 0))
-      (throw (js/Error. "replay-clock-skew-ms must be a non-negative integer")))
-    (when-not (and (js/Number.isSafeInteger t-rot) (pos? t-rot))
-      (throw (js/Error. "replay-rotation-ms must be a positive integer")))
-    (when-not (and (js/Number.isSafeInteger jitter) (>= jitter 0))
-      (throw (js/Error. "rotation-jitter-ms must be a non-negative integer")))
-    (when-not (and (js/Number.isSafeInteger cfg-job-timeout) (pos? cfg-job-timeout))
-      (throw (js/Error. "job-timeout-ms must be a positive integer")))
-    (doseq [lt lane-timeouts]
-      (when-not (and (js/Number.isSafeInteger lt) (pos? lt))
-        (throw (js/Error. "lane job-timeout-ms must be a positive integer"))))
-    (when (> max-job-timeout w)
-      (throw (js/Error. (str "job-timeout-ms (" max-job-timeout ") must be <= replay-window-ms (" w ")"))))
-    (when-not (and (js/Number.isSafeInteger max-inflight-ms) (pos? max-inflight-ms) (<= max-inflight-ms w))
-      (throw (js/Error. "max-inflight-ms must be a positive integer <= replay-window-ms")))
-    (when (< t-rot (+ w (* 2 delta)))
-      (throw (js/Error. "replay-rotation-ms must be >= replay-window-ms + 2 * replay-clock-skew-ms")))
-    (when (> (+ (* 2 t-rot) jitter) max-ram-replay-retention-ms)
-      (throw (js/Error. "2 * replay-rotation-ms + rotation-jitter-ms must be <= 900000 ms (15 min max RAM retention)")))
-    (when-not (and (js/Number.isSafeInteger sweep-ms) (pos? sweep-ms) (<= sweep-ms max-ram-replay-retention-ms))
-      (throw (js/Error. "replay-sweep-interval-ms must be a positive integer <= 900000 ms")))
-    (when-not (and (js/Number.isSafeInteger max-entries) (pos? max-entries))
-      (throw (js/Error. "replay-max-entries must be a positive integer")))
-    (atom {:boot-id boot-id
-           :started-at started-at
-           :window-ms w
-           :clock-skew-ms delta
-           :rotation-ms t-rot
-           :rotation-jitter-ms jitter
-           :sweep-interval-ms sweep-ms
-           :max-entries max-entries
-           :max-receipts max-entries
-           :job-timeout-ms cfg-job-timeout
-           :max-inflight-ms max-inflight-ms
-           :allow-provisional-no-boot-id? (true? (:allow-provisional-no-boot-id? config))
-           :k-curr (.randomBytes crypto 32)
-           :k-prev nil
-           :curr-set (js/Set.)
-           :prev-set (js/Set.)
-           :inflight {}
-           :rotated-at started-at
-           :rotations 0})))
+(defn make-replay-ledger
+  ([config boot-id started-at]
+   (make-replay-ledger config boot-id started-at (mono-ms)))
+  ([config boot-id started-at started-mono-ms]
+   (let [w (:replay-window-ms config default-replay-window-ms)
+         delta (:replay-clock-skew-ms config default-replay-clock-skew-ms)
+         t-rot (:replay-rotation-ms config default-replay-rotation-ms)
+         jitter (:rotation-jitter-ms config 0)
+         t-tick (or (:replay-sweep-interval-ms config)
+                    (:sweep-interval-ms config)
+                    (min t-rot default-replay-sweep-interval-ms))
+         max-entries (or (:replay-max-entries config)
+                         (:max-receipts config)
+                         default-replay-max-entries)
+         cfg-job-timeout (:job-timeout-ms config default-privacy-job-timeout-ms)
+         lane-timeouts (map #(or (:job-timeout-ms %) cfg-job-timeout) (vals (:lanes config)))
+         max-job-timeout (if (seq lane-timeouts) (apply max cfg-job-timeout lane-timeouts) cfg-job-timeout)
+         max-inflight-ms (:max-inflight-ms config max-job-timeout)]
+     (when-not (and (js/Number.isSafeInteger w) (pos? w))
+       (throw (js/Error. "replay-window-ms must be a positive integer")))
+     (when-not (and (js/Number.isSafeInteger delta) (>= delta 0))
+       (throw (js/Error. "replay-clock-skew-ms must be a non-negative integer")))
+     (when-not (and (js/Number.isSafeInteger t-rot) (pos? t-rot))
+       (throw (js/Error. "replay-rotation-ms must be a positive integer")))
+     (when-not (and (js/Number.isSafeInteger jitter) (>= jitter 0))
+       (throw (js/Error. "rotation-jitter-ms must be a non-negative integer")))
+     (when-not (and (js/Number.isSafeInteger t-tick) (pos? t-tick) (<= t-tick max-replay-sweep-interval-ms))
+       (throw (js/Error. "replay-sweep-interval-ms (T_tick) must be a positive integer <= 30000 ms")))
+     (when-not (and (js/Number.isSafeInteger cfg-job-timeout) (pos? cfg-job-timeout))
+       (throw (js/Error. "job-timeout-ms must be a positive integer")))
+     (doseq [lt lane-timeouts]
+       (when-not (and (js/Number.isSafeInteger lt) (pos? lt))
+         (throw (js/Error. "lane job-timeout-ms must be a positive integer"))))
+     (when (> max-job-timeout w)
+       (throw (js/Error. (str "job-timeout-ms (" max-job-timeout ") must be <= replay-window-ms (" w ")"))))
+     (when-not (and (js/Number.isSafeInteger max-inflight-ms) (pos? max-inflight-ms) (<= max-inflight-ms w))
+       (throw (js/Error. "max-inflight-ms must be a positive integer <= replay-window-ms")))
+     (when (< t-rot (+ w (* 2 delta)))
+       (throw (js/Error. "replay-rotation-ms must be >= replay-window-ms + 2 * replay-clock-skew-ms")))
+     (when (> (+ (* 2 t-rot) t-tick jitter) max-ram-replay-retention-ms)
+       (throw (js/Error. "2 * replay-rotation-ms + T_tick + rotation-jitter-ms must be <= 900000 ms (15 min max RAM retention)")))
+     (when-not (and (js/Number.isSafeInteger max-entries) (pos? max-entries))
+       (throw (js/Error. "replay-max-entries must be a positive integer")))
+     (atom {:node (:node config)
+            :boot-id boot-id
+            :started-at started-at
+            :started-mono-ms started-mono-ms
+            :window-ms w
+            :clock-skew-ms delta
+            :rotation-ms t-rot
+            :rotation-jitter-ms jitter
+            :sweep-interval-ms t-tick
+            :max-entries max-entries
+            :max-receipts max-entries
+            :job-timeout-ms cfg-job-timeout
+            :max-inflight-ms max-inflight-ms
+            :allow-provisional-no-boot-id? (true? (:allow-provisional-no-boot-id? config))
+            :k-curr (.randomBytes crypto 32)
+            :k-prev nil
+            :curr-set (js/Set.)
+            :prev-set (js/Set.)
+            :inflight {}
+            :rotated-mono-ms started-mono-ms
+            :rotations 0}))))
 
-(defn sweep-stuck-inflight! [ledger-atom now state-atom controllers-atom]
+(defn sweep-stuck-inflight! [ledger-atom mono-now state-atom controllers-atom]
   (let [{:keys [inflight max-inflight-ms rotation-ms]} @ledger-atom
         cap (+ max-inflight-ms rotation-ms)]
-    (doseq [[id {:keys [admitted-at group]}] inflight]
-      (when (> (- now admitted-at) cap)
+    (doseq [[id {:keys [admitted-mono-ms group]}] inflight]
+      (when (> (- mono-now admitted-mono-ms) cap)
         (when controllers-atom
           (when-let [c (get @controllers-atom id)] (.abort c))
           (swap! controllers-atom dissoc id))
@@ -343,15 +598,18 @@
         (swap! ledger-atom update :inflight dissoc id)))))
 
 (defn maybe-rotate-kagishi-replay!
-  ([ledger-atom now] (maybe-rotate-kagishi-replay! ledger-atom now nil nil))
-  ([ledger-atom now state-atom controllers-atom]
-   (sweep-stuck-inflight! ledger-atom now state-atom controllers-atom)
-   (let [{:keys [rotation-ms rotated-at k-curr k-prev curr-set prev-set rotations]} @ledger-atom
-         elapsed (- now rotated-at)]
+  ([ledger-atom] (maybe-rotate-kagishi-replay! ledger-atom (mono-ms) nil nil))
+  ([ledger-atom mono-now] (maybe-rotate-kagishi-replay! ledger-atom mono-now nil nil))
+  ([ledger-atom mono-now state-atom controllers-atom]
+   (sweep-stuck-inflight! ledger-atom mono-now state-atom controllers-atom)
+   (let [{:keys [rotation-ms rotated-mono-ms k-curr k-prev curr-set prev-set rotations]} @ledger-atom
+         elapsed (- mono-now rotated-mono-ms)]
+     ;; Strictly driven by monotonic clock: never rotate early on wall-clock jumps.
      (when (>= elapsed rotation-ms)
        (let [steps (js/Math.floor (/ elapsed rotation-ms))
-             next-rotated-at (+ rotated-at (* steps rotation-ms))]
-         (if (>= steps 2)
+             next-rotated-mono (+ rotated-mono-ms (* steps rotation-ms))]
+         (if (>= elapsed (* 2 rotation-ms))
+           ;; >= 2*T_rot stall/wake double-wipe: clear BOTH sets and zeroize BOTH keys!
            (do (zeroize-buffer! k-prev)
                (zeroize-buffer! k-curr)
                (.clear prev-set)
@@ -361,8 +619,9 @@
                        :k-prev nil
                        :curr-set (js/Set.)
                        :prev-set (js/Set.)
-                       :rotated-at next-rotated-at
+                       :rotated-mono-ms next-rotated-mono
                        :rotations (+ rotations steps)}))
+           ;; T_rot <= elapsed < 2*T_rot: normal 1-step rotation
            (do (zeroize-buffer! k-prev)
                (.clear prev-set)
                (swap! ledger-atom merge
@@ -370,7 +629,7 @@
                        :k-prev k-curr
                        :curr-set (js/Set.)
                        :prev-set curr-set
-                       :rotated-at next-rotated-at
+                       :rotated-mono-ms next-rotated-mono
                        :rotations (inc rotations)}))))))))
 
 (def rotate-replay-ledger! maybe-rotate-kagishi-replay!)
@@ -384,84 +643,138 @@
       (when prev-set (.clear prev-set))
       (swap! ledger-atom merge {:k-curr nil :k-prev nil :curr-set (js/Set.) :prev-set (js/Set.) :inflight {}}))))
 
-(defn valid-replay-nonce-format? [nonce]
-  (boolean (and (string? nonce) (re-matches #"[A-Za-z0-9_-]{32,256}" nonce))))
+(def protected-admit-header-names
+  #{"x-murakumo-admit-envelope" "x-murakumo-admit-sig"
+    "x-murakumo-boot-id" "x-murakumo-issued-at" "x-murakumo-replay-nonce"})
 
-(defn valid-estimate-nonce? [nonce]
-  (boolean (and (string? nonce) (re-matches #"[A-Za-z0-9_-]{32,256}" nonce))))
+(defn expected-lane-route [lane]
+  (when lane
+    (if (= "image" (:kind lane))
+      "POST /v1/images/generations"
+      "POST /v1/chat/completions")))
 
-(defn replay-nonce-independent? [nonce job-id]
-  (let [ln (str/lower-case nonce)
-        lj (str/lower-case job-id)
-        job-sha (.digest (.update (.createHash crypto "sha256") job-id) "hex")]
-    (and (not= ln lj)
-         (not (str/includes? lj ln))
-         (not (and (>= (count lj) 16) (str/includes? ln lj)))
-         (not= ln job-sha))))
+(defn validate-admit-request
+  ([ledger-atom headers lane-id expected-route ext-job-id wall-now admit-keys body-bytes]
+   (validate-admit-request ledger-atom headers lane-id expected-route ext-job-id wall-now (mono-ms) admit-keys body-bytes 2097152))
+  ([ledger-atom headers lane-id expected-route ext-job-id wall-now mono-now admit-keys body-bytes max-body-bytes]
+   (let [lmap @ledger-atom
+         {:keys [node boot-id started-at window-ms clock-skew-ms allow-provisional-no-boot-id?]} lmap
+         eff-now (effective-now lmap wall-now mono-now)
+         env-res (parse-admit-envelope (aget headers "x-murakumo-admit-envelope"))]
+     (if-not (:ok env-res)
+       env-res
+       (let [env-raw (:envelope-raw env-res)
+             env (:envelope env-res)
+             v (:v env)
+             alg (:alg env)
+             kid (:kid env)
+             route (:route env)
+             owner (:owner env)
+             env-lane (:lane env)
+             env-boot (:boot env)
+             iat (:iat env)
+             nonce (:nonce env)
+             hdr-boot (aget headers "x-murakumo-boot-id")
+             hdr-iat (aget headers "x-murakumo-issued-at")
+             hdr-nonce (aget headers "x-murakumo-replay-nonce")]
+         (cond
+           (not= 1 v)
+           {:ok false :status 400 :error "invalid_admit_version" :executed false}
+           (not= "ed25519" alg)
+           {:ok false :status 403 :error "unsupported_admit_alg" :executed false}
+           (not (and (string? kid) (re-matches #"[A-Za-z0-9_-]{1,64}" kid)))
+           {:ok false :status 400 :error "invalid_admit_kid" :executed false}
+           (not (and (string? route) (pos? (count route))))
+           {:ok false :status 400 :error "invalid_admit_route" :executed false}
+           (not (and (string? owner) (re-matches #"[A-Za-z0-9-]+" owner)))
+           {:ok false :status 400 :error "invalid_admit_owner" :executed false}
+           (not (and (string? env-lane) (re-matches #"[A-Za-z0-9-]+" env-lane)))
+           {:ok false :status 400 :error "invalid_admit_lane" :executed false}
+           (not (valid-replay-nonce-format? nonce))
+           {:ok false :status 400 :error "invalid_replay_nonce" :executed false}
+           (and (string? ext-job-id) (pos? (count ext-job-id)) (not (replay-nonce-independent? nonce ext-job-id)))
+           {:ok false :status 400 :error "replay_nonce_not_independent" :executed false}
+           (not (and (number? iat) (js/Number.isFinite iat) (js/Number.isSafeInteger iat) (pos? iat)))
+           {:ok false :status 400 :error "invalid_issued_at" :executed false}
+           :else
+           (let [sig-res (verify-admit-sig admit-keys (aget headers "x-murakumo-admit-sig") kid env-raw body-bytes max-body-bytes)]
+             (cond
+               (not (:ok sig-res)) sig-res
+               ;; Transitional header consistency check (exact equality when present; fail closed on mismatch)
+               (and (some? hdr-boot) (not= hdr-boot (or env-boot "")))
+               {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+               (and (some? hdr-iat) (not= hdr-iat (str iat)))
+               {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+               (and (some? hdr-nonce) (not= hdr-nonce nonce))
+               {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+               ;; Route, owner, and lane bindings
+               (and (some? expected-route) (not= route expected-route))
+               {:ok false :status 403 :error "route_mismatch" :executed false}
+               (and (some? node) (not= owner node))
+               {:ok false :status 403 :error "owner_mismatch" :executed false}
+               (and (some? lane-id) (not= env-lane lane-id))
+               {:ok false :status 403 :error "lane_mismatch" :executed false}
+               ;; Per-boot resident_boot_id verification
+               (and (string? env-boot) (pos? (count env-boot)) (not= env-boot boot-id))
+               {:ok false :status 410 :error "boot_id_mismatch" :executed "unknown" :retryable false}
+               (and (not (and (string? env-boot) (pos? (count env-boot))))
+                    (not allow-provisional-no-boot-id?))
+               {:ok false :status 400 :error "boot_id_required" :executed false}
+               (and (not (and (string? env-boot) (pos? (count env-boot))))
+                    allow-provisional-no-boot-id?
+                    (< iat (+ started-at clock-skew-ms)))
+               {:ok false :status 409 :error "provisional_pre_boot_window" :executed "unknown" :retryable false}
+               ;; Freshness window against rollback-immune effective-now
+               (> eff-now (+ iat window-ms clock-skew-ms))
+               {:ok false :status 403 :error "replay_issued_at_expired" :executed false}
+               (> iat (+ eff-now clock-skew-ms))
+               {:ok false :status 403 :error "replay_issued_at_future" :executed false}
+               :else
+               {:ok true :replay-nonce nonce :issued-at iat :owner owner :lane env-lane :route route :kid kid}))))))))
 
-(defn parse-issued-at [raw]
-  (when (and (string? raw) (re-matches #"[0-9]{1,16}" raw))
-    (let [n (js/Number raw)]
-      (when (and (js/Number.isSafeInteger n) (pos? n)) n))))
+(defn replay-seen?
+  ([ledger-atom replay-nonce] (replay-seen? ledger-atom replay-nonce (mono-ms)))
+  ([ledger-atom replay-nonce mono-now]
+   (maybe-rotate-kagishi-replay! ledger-atom mono-now)
+   (let [{:keys [boot-id k-curr k-prev curr-set prev-set]} @ledger-atom
+         curr-tag (replay-tag k-curr boot-id replay-nonce)]
+     (or (.has curr-set curr-tag)
+         (boolean (and k-prev (.has prev-set (replay-tag k-prev boot-id replay-nonce))))))))
 
-(defn validate-replay-headers
-  ([ledger-atom headers job-id now]
-   (validate-replay-headers ledger-atom headers job-id now nil nil))
-  ([ledger-atom headers job-id now auth-key-buf body-bytes]
-   (let [{:keys [boot-id started-at window-ms clock-skew-ms allow-provisional-no-boot-id?]} @ledger-atom
-         nonce (aget headers "x-murakumo-replay-nonce")
-         issued-at (parse-issued-at (aget headers "x-murakumo-issued-at"))
-         provided-boot-id (aget headers "x-murakumo-boot-id")
-         auth-check (when auth-key-buf (verify-replay-bundle-auth auth-key-buf headers body-bytes))]
+(defn admit-ram-replay!
+  ([state-atom ledger-atom lanes lane id replay-nonce]
+   (admit-ram-replay! state-atom ledger-atom lanes lane id replay-nonce (mono-ms)))
+  ([state-atom ledger-atom lanes lane id replay-nonce mono-now]
+   (maybe-rotate-kagishi-replay! ledger-atom mono-now state-atom nil)
+   (let [{:keys [boot-id k-curr k-prev curr-set prev-set max-entries]} @ledger-atom
+         curr-tag (replay-tag k-curr boot-id replay-nonce)
+         seen? (or (.has curr-set curr-tag)
+                   (boolean (and k-prev (.has prev-set (replay-tag k-prev boot-id replay-nonce)))))
+         total (+ (.-size curr-set) (.-size prev-set))]
      (cond
-       (not (valid-replay-nonce-format? nonce))
-       {:ok false :status 400 :error "invalid_replay_nonce" :executed false}
-       (and (string? job-id) (pos? (count job-id)) (not (replay-nonce-independent? nonce job-id)))
-       {:ok false :status 400 :error "replay_nonce_not_independent" :executed false}
-       (nil? issued-at)
-       {:ok false :status 400 :error "invalid_issued_at" :executed false}
-       (and auth-check (not (:ok auth-check)))
-       auth-check
-       (and (string? provided-boot-id) (pos? (count provided-boot-id)) (not= provided-boot-id boot-id))
-       {:ok false :status 410 :error "boot_id_mismatch" :executed "unknown" :retryable false}
-       (and (not (and (string? provided-boot-id) (pos? (count provided-boot-id))))
-            (not allow-provisional-no-boot-id?))
-       {:ok false :status 400 :error "boot_id_required" :executed false}
-       (and (not (and (string? provided-boot-id) (pos? (count provided-boot-id))))
-            allow-provisional-no-boot-id?
-            (< issued-at (+ started-at clock-skew-ms)))
-       {:ok false :status 409 :error "provisional_pre_boot_window" :executed "unknown" :retryable false}
-       (> now (+ issued-at window-ms clock-skew-ms))
-       {:ok false :status 403 :error "replay_issued_at_expired" :executed false}
-       (> issued-at (+ now clock-skew-ms))
-       {:ok false :status 403 :error "replay_issued_at_future" :executed false}
-       :else
-       {:ok true :replay-nonce nonce :issued-at issued-at}))))
+       seen? {:status 409 :reason :already-seen :executed "unknown" :retryable false}
+       (not (:ready lane)) {:status 503 :reason :not-ready :executed false}
+       (>= total max-entries) {:status 503 :reason :replay_capacity :executed false}
+       (or (external-group-busy? lanes lane) (get-in @state-atom [:groups (:group lane)]))
+       {:status 429 :reason :busy :executed false}
+       :else (do (.add curr-set curr-tag)
+                 (swap! ledger-atom assoc-in [:inflight id] {:admitted-mono-ms mono-now :group (:group lane)})
+                 (swap! state-atom assoc-in [:groups (:group lane)] id)
+                 {:status 200})))))
 
-(defn replay-seen? [ledger-atom replay-nonce now]
-  (maybe-rotate-kagishi-replay! ledger-atom now)
-  (let [{:keys [boot-id k-curr k-prev curr-set prev-set]} @ledger-atom
-        curr-tag (replay-tag k-curr boot-id replay-nonce)]
-    (or (.has curr-set curr-tag)
-        (boolean (and k-prev (.has prev-set (replay-tag k-prev boot-id replay-nonce)))))))
+(defn sanitize-private-json [text]
+  (try
+    (let [obj (js/JSON.parse text)]
+      (if (js-plain-object? obj)
+        (do (aset obj "id" private-completion-id)
+            (js/JSON.stringify obj))
+        text))
+    (catch :default _ text)))
 
-(defn admit-ram-replay! [state-atom ledger-atom lanes lane id replay-nonce now]
-  (maybe-rotate-kagishi-replay! ledger-atom now state-atom nil)
-  (let [{:keys [boot-id k-curr k-prev curr-set prev-set max-entries]} @ledger-atom
-        curr-tag (replay-tag k-curr boot-id replay-nonce)
-        seen? (or (.has curr-set curr-tag)
-                  (boolean (and k-prev (.has prev-set (replay-tag k-prev boot-id replay-nonce)))))
-        total (+ (.-size curr-set) (.-size prev-set))]
-    (cond
-      seen? {:status 409 :reason :already-seen :executed "unknown" :retryable false}
-      (not (:ready lane)) {:status 503 :reason :not-ready :executed false}
-      (>= total max-entries) {:status 503 :reason :replay_capacity :executed false}
-      (or (external-group-busy? lanes lane) (get-in @state-atom [:groups (:group lane)]))
-      {:status 429 :reason :busy :executed false}
-      :else (do (.add curr-set curr-tag)
-                (swap! ledger-atom assoc-in [:inflight id] {:admitted-at now :group (:group lane)})
-                (swap! state-atom assoc-in [:groups (:group lane)] id)
-                {:status 200}))))
+(defn sanitize-private-sse-line [line]
+  (if (and (str/starts-with? line "data: ") (not= "data: [DONE]" (str/trim line)))
+    (str "data: " (sanitize-private-json (subs line 6)))
+    line))
 
 (defn admit [state lane id digest now ttl]
   (cond
@@ -641,19 +954,15 @@
             (scan-privacy-state-dir! config))
         resident-boot-id (.toString (.randomBytes crypto 16) "hex")
         resident-started-at (js/Date.now)
-        replay-ledger (when ram-replay? (make-replay-ledger config resident-boot-id resident-started-at))
+        resident-started-mono (mono-ms)
+        replay-ledger (when ram-replay? (make-replay-ledger config resident-boot-id resident-started-at resident-started-mono))
         ;; one drain file for admission, health and the self-update (P5a), even
         ;; when the config does not name one
         config (cond-> config
                  (and (:state-file config) (not (:drain-file config)))
                  (assoc :drain-file (str (:state-file config) ".draining")))
         token (private-token (:token-file config))
-        replay-auth-key-buf (when ram-replay?
-                              (js/Buffer.from
-                               (if-some [auth-file (:replay-auth-token-file config)]
-                                 (private-token auth-file)
-                                 token)
-                               "utf8"))
+        admit-keys (when ram-replay? (load-admit-keys! config))
         file (:state-file config)
         owner-file (or (:owner-id-file config) (when file (str file ".owner-id")))
         existing-owner? (boolean (and owner-file (some? (lstat-or-nil owner-file))))
@@ -768,17 +1077,22 @@
                        (.then (fn [bytes]
                                 (if ram-replay?
                                   (let [ext-id (aget (.-headers req) "x-murakumo-job-id")
-                                        now (js/Date.now)
-                                        _ (maybe-rotate-kagishi-replay! replay-ledger now state controllers)
-                                        v (validate-replay-headers replay-ledger (.-headers req) ext-id now replay-auth-key-buf bytes)]
-                                    (cond
-                                      (not (:ok v))
-                                      (js/Promise.resolve {:early-reject v})
-                                      (replay-seen? replay-ledger (:replay-nonce v) now)
-                                      (js/Promise.resolve {:early-reject {:status 409 :error "already-seen" :executed "unknown" :retryable false}})
-                                      :else
-                                      (-> (check-shared-images! @lanes (get @lanes lane-id))
-                                          (.then (fn [_] {:bytes bytes :replay-nonce (:replay-nonce v)})))))
+                                        wall-now (js/Date.now)
+                                        m-now (mono-ms)
+                                        max-body (:max-body-bytes config 2097152)
+                                        exp-route (expected-lane-route (get @lanes lane-id))
+                                        _ (maybe-rotate-kagishi-replay! replay-ledger m-now state controllers)]
+                                    (if (duplicate-raw-header? req protected-admit-header-names)
+                                      (js/Promise.resolve {:early-reject {:status 400 :error "duplicate_header" :executed false}})
+                                      (let [v (validate-admit-request replay-ledger (.-headers req) lane-id exp-route ext-id wall-now m-now admit-keys bytes max-body)]
+                                        (cond
+                                          (not (:ok v))
+                                          (js/Promise.resolve {:early-reject v})
+                                          (replay-seen? replay-ledger (:replay-nonce v) m-now)
+                                          (js/Promise.resolve {:early-reject {:status 409 :error "already-seen" :executed "unknown" :retryable false}})
+                                          :else
+                                          (-> (check-shared-images! @lanes (get @lanes lane-id))
+                                              (.then (fn [_] {:bytes bytes :replay-nonce (:replay-nonce v)})))))))
                                   (if (get-in @state [:jobs (aget (.-headers req) "x-murakumo-job-id")])
                                     {:bytes bytes}
                                     (-> (check-shared-images! @lanes (get @lanes lane-id))
@@ -835,14 +1149,17 @@
                                             (:job-timeout-ms lane default-durable-job-timeout-ms))
                                       admission
                                       (if ram-replay?
-                                        (let [now (js/Date.now)
-                                              _ (maybe-rotate-kagishi-replay! replay-ledger now state controllers)
-                                              v (validate-replay-headers replay-ledger (.-headers req) ext-id now replay-auth-key-buf bytes)]
+                                        (let [wall-now (js/Date.now)
+                                              m-now (mono-ms)
+                                              max-body (:max-body-bytes config 2097152)
+                                              exp-route (expected-lane-route lane)
+                                              _ (maybe-rotate-kagishi-replay! replay-ledger m-now state controllers)
+                                              v (validate-admit-request replay-ledger (.-headers req) lane-id exp-route ext-id wall-now m-now admit-keys bytes max-body)]
                                           (if-not (:ok v)
                                             (cond-> {:status (:status v) :reason (keyword (:error v))
                                                      :executed (:executed v false) :raw-error (:error v)}
                                               (contains? v :retryable) (assoc :retryable (:retryable v)))
-                                            (admit-ram-replay! state replay-ledger @lanes lane id (:replay-nonce v) now)))
+                                            (admit-ram-replay! state replay-ledger @lanes lane id (:replay-nonce v) m-now)))
                                         (if (and (not (get-in @state [:jobs id])) (external-group-busy? @lanes lane))
                                           {:status 429 :reason :busy :state @state}
                                           (admit @state lane id digest (js/Date.now) ttl)))]
@@ -884,24 +1201,33 @@
                                                                  bytes)})
                                           (.then (fn [r]
                                                    (let [ct (or (.get (.-headers r) "content-type") "application/json")
+                                                         sse? (str/includes? ct "text/event-stream")
+                                                         json-resp? (str/includes? ct "application/json")
                                                          resp-headers (if ram-replay?
                                                                         #js {"content-type" ct "cache-control" "no-store"}
                                                                         #js {"content-type" ct "x-murakumo-job-id" id "x-murakumo-node" (:node config)})]
-                                                     (.writeHead res (.-status r) resp-headers))
-                                                   (let [stop-heartbeat! (if (and (= "text" (:kind lane)) (true? (:stream body))
-                                                                                 (str/includes? (or (.get (.-headers r) "content-type") "") "text/event-stream")
-                                                                                 (.-ok r))
-                                                                           (prefill-heartbeat! res (:model body) (if ram-replay? "0" id) (:heartbeat-ms config 15000))
-                                                                           (fn [] nil))
-                                                         reader (.getReader (.-body r))
-                                                         seen (atom "")
-                                                         record? (and poi-key (= "text" (:kind lane)))]
-                                                     (letfn [(pump []
-                                                               (-> (.read reader)
-                                                                   (.then (fn [chunk]
-                                                                            (stop-heartbeat!)
-                                                                            (if (.-done chunk)
-                                                                              (do (settle! (if (.-ok r) :completed :failed))
+                                                     (.writeHead res (.-status r) resp-headers)
+                                                     (let [stop-heartbeat! (if (and (= "text" (:kind lane)) (true? (:stream body)) sse? (.-ok r))
+                                                                             (prefill-heartbeat! res (:model body) (if ram-replay? private-completion-id id) (:heartbeat-ms config 15000))
+                                                                             (fn [] nil))
+                                                           reader (.getReader (.-body r))
+                                                           seen (atom "")
+                                                           json-parts (atom [])
+                                                           sse-buf (atom "")
+                                                           record? (and poi-key (= "text" (:kind lane)))]
+                                                       (letfn [(pump []
+                                                                 (-> (.read reader)
+                                                                     (.then (fn [chunk]
+                                                                              (stop-heartbeat!)
+                                                                              (if (.-done chunk)
+                                                                                (do
+                                                                                  (when ram-replay?
+                                                                                    (cond
+                                                                                      (and (= "text" (:kind lane)) sse? (pos? (count @sse-buf)))
+                                                                                      (.write res (sanitize-private-sse-line @sse-buf))
+                                                                                      (and (= "text" (:kind lane)) json-resp? (not sse?))
+                                                                                      (.write res (sanitize-private-json (.toString (.concat js/Buffer (clj->js @json-parts)) "utf8")))))
+                                                                                  (settle! (if (.-ok r) :completed :failed))
                                                                                   (.end res)
                                                                                   (when (and record? (.-ok r))
                                                                                     (when-let [u (poi-receipt/usage-of @seen)]
@@ -910,11 +1236,23 @@
                                                                                                                                  :job id :lane lane-id :model (:model body)
                                                                                                                                  :at (js/Date.now)}
                                                                                                                                 u)))))
-                                                                              (let [b (.from js/Buffer (.-value chunk))]
-                                                                                (when record? (swap! seen poi-receipt/tail (.toString b "utf8")))
-                                                                                (.write res b)
-                                                                                (pump)))))))]
-                                                       (pump)))))
+                                                                                (let [b (.from js/Buffer (.-value chunk))]
+                                                                                  (when record? (swap! seen poi-receipt/tail (.toString b "utf8")))
+                                                                                  (cond
+                                                                                    (and ram-replay? (= "text" (:kind lane)) sse?)
+                                                                                    (let [combined (str @sse-buf (.toString b "utf8"))
+                                                                                          lines (str/split combined #"\n" -1)
+                                                                                          complete (butlast lines)
+                                                                                          tail (last lines)]
+                                                                                      (reset! sse-buf (or tail ""))
+                                                                                      (when (seq complete)
+                                                                                        (.write res (str (str/join "\n" (map sanitize-private-sse-line complete)) "\n"))))
+                                                                                    (and ram-replay? (= "text" (:kind lane)) json-resp? (not sse?))
+                                                                                    (swap! json-parts conj b)
+                                                                                    :else
+                                                                                    (.write res b))
+                                                                                  (pump)))))))]
+                                                         (pump))))))
                                           (.catch (fn [_]
                                                     (swap! lanes assoc-in [lane-id :ready] false)
                                                     (settle! :unknown)
@@ -964,6 +1302,8 @@
                                           lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))
                                           estimate-nonce (aget (.-headers req) "x-murakumo-estimate-nonce")]
                                       (cond
+                                        (duplicate-raw-header? req #{"x-murakumo-estimate-nonce"})
+                                        (json! res 400 {:error "duplicate_header"})
                                         (and ram-replay? (not (valid-estimate-nonce? estimate-nonce)))
                                         (json! res 400 {:error "invalid_estimate_nonce"})
                                         (and (not ram-replay?) (some? estimate-nonce) (not (valid-estimate-nonce? estimate-nonce)))
@@ -1072,7 +1412,7 @@
     (tick!)
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))
           rotation-timer (when ram-replay?
-                           (let [t (js/setInterval #(maybe-rotate-kagishi-replay! replay-ledger (js/Date.now) state controllers)
+                           (let [t (js/setInterval #(maybe-rotate-kagishi-replay! replay-ledger (mono-ms) state controllers)
                                                    (:sweep-interval-ms @replay-ledger))]
                              (when (.-unref t) (.unref t))
                              t))
@@ -1093,14 +1433,14 @@
                      (js/clearInterval timer)
                      (when rotation-timer (js/clearInterval rotation-timer))
                      (destroy-replay-ledger! replay-ledger)
-                     (zeroize-buffer! replay-auth-key-buf)
+                     (zeroize-admit-keys! admit-keys)
                      (doseq [[_ c] @controllers] (.abort c))
                      (.close server)
                      (when compatibility-server (.close compatibility-server))))]
       (when ram-replay?
         (let [h (fn []
                   (destroy-replay-ledger! replay-ledger)
-                  (zeroize-buffer! replay-auth-key-buf))]
+                  (zeroize-admit-keys! admit-keys))]
           (reset! on-signal h)
           (.once js/process "SIGINT" h)
           (.once js/process "SIGTERM" h)))
