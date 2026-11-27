@@ -17,6 +17,11 @@ const here=path.dirname(fileURLToPath(import.meta.url));
 const cli=path.join(here,'..','release','node.mjs');
 const require=createRequire(path.join(here,'..','release','package.json'));
 const g=await require('ggwave')();
+// Emscripten's ggwave.js attaches process-level uncaughtException/unhandledRejection
+// rethrow listeners that turn ordinary test failures into Node exit code 7 while
+// dumping 65KB of minified wasm source. Remove them so errors surface cleanly.
+process.removeAllListeners('uncaughtException');
+process.removeAllListeners('unhandledRejection');
 const params=g.getDefaultParameters();params.sampleRateInp=48000;params.sampleRateOut=48000;
 const dec=g.init(params),enc=g.init(params);
 const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'murakumo-onboard-'));
@@ -60,12 +65,13 @@ function listenToSpeaker(){
     const fd=fs.openSync(spk,'r');const buf=Buffer.alloc(size-offset);fs.readSync(fd,buf,0,buf.length,offset);fs.closeSync(fd);
     offset=size;lastGrowth=Date.now();silenceFed=false;feed(buf);return;
   }
-  if(!silenceFed&&Date.now()-lastGrowth>500){silenceFed=true;feed(Buffer.alloc(48000*4));}
+  if(!silenceFed&&Date.now()-lastGrowth>1200){silenceFed=true;feed(Buffer.alloc(48000*4));}
 }
 const airStream=fs.createWriteStream(air);
 function sendToMicrophone(bytes){
   const w=g.encode(enc,Uint8Array.from(bytes),g.ProtocolId.GGWAVE_PROTOCOL_ULTRASOUND_FAST,55);
-  airStream.write(Buffer.from(w.buffer,w.byteOffset,w.byteLength));
+  // Copy out of ggwave's shared WASM linear memory before async WriteStream queuing.
+  airStream.write(Buffer.from(new Uint8Array(w.buffer,w.byteOffset,w.byteLength)));
   airStream.write(Buffer.alloc(48000*4));                 // a second of silence so the decoder finishes the frame
 }
 const until=async(what,test,ms=60000)=>{const t=Date.now();for(;;){listenToSpeaker();const v=test();if(v)return v;if(Date.now()-t>ms)throw new Error('timeout waiting for '+what+'; heard='+JSON.stringify(heard)+' cli-out='+out+' cli-err='+err);await new Promise(r=>setTimeout(r,150));}};

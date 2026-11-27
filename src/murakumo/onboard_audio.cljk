@@ -28,13 +28,14 @@
                  (let [params (.getDefaultParameters g)
                        _ (set! (.-sampleRateInp params) sample-rate)
                        _ (set! (.-sampleRateOut params) sample-rate)
-                       instance (.init g params)
+                       enc-instance (.init g params)
+                       dec-instance (.init g params)
                        proto (.-ProtocolId g)]
                    {:encode (fn [data mode]
                               (let [quiet? (= :quiet mode)
                                     pid (if quiet? (.-GGWAVE_PROTOCOL_ULTRASOUND_FAST proto)
                                             (.-GGWAVE_PROTOCOL_AUDIBLE_NORMAL proto))
-                                    w (.encode g instance data pid (if quiet? 55 18))
+                                    w (.encode g enc-instance data pid (if quiet? 55 18))
                                     f (js/Float32Array. (.slice (.-buffer w) (.-byteOffset w)
                                                                 (+ (.-byteOffset w) (.-byteLength w))))
                                     fade (js/Math.floor (* sample-rate 0.04))]
@@ -44,7 +45,7 @@
                                     (aset f (- (.-length f) 1 i) (* (aget f (- (.-length f) 1 i)) k))))
                                 f))
                     :decode (fn [^js pcm]
-                              (let [out (.decode g instance
+                              (let [out (.decode g dec-instance
                                                  (js/Int8Array. (.-buffer pcm) (.-byteOffset pcm) (.-byteLength pcm)))]
                                 (when (and out (pos? (.-length out))) (js/Uint8Array. out))))}))))))
 

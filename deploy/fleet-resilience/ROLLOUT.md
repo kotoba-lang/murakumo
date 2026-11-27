@@ -1,7 +1,14 @@
 # Staged fleet rollout
 
 Run the packaged CLI after `npm ci --prefix release`. Both entrypoints require a
-private 0600 peer token file. The deployment examples bind loopback and do not
+private 0600 peer token file (`token-file`). Gateways may also set an optional
+0600 `inbound-token-file` to separate inbound caller authentication from the
+resident peer token (when omitted, inbound requests fall back to `token-file`;
+peer `/topology` sync always uses `token-file`), and an optional
+`inbound-allowed-routes` allowlist (for example
+`["GET /health", "POST /v1/chat/completions"]`) to block `/jobs/*`,
+`/v1/images/generations`, and `/topology` with HTTP 403 `route_not_allowed`
+(omitting it preserves full-route behavior). The deployment examples bind loopback and do not
 expose a public service. Replace example model/bind values using `murakumo fleet ps`
 and actual ComfyUI inventory. Declare a restart argv only after verifying it on
 that host. Keep old processes running until private qualification passes.

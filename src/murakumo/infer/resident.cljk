@@ -10,7 +10,7 @@
             [murakumo.infer.converge :as converge]
             [murakumo.infer.lease :as lease]
             [murakumo.infer.rollout :as rollout]
-            ["node:fs" :as fs] ["node:http" :as http]
+            ["node:fs" :as fs] ["node:path" :as path] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
 (defn output-reservation [lane maximum]
@@ -97,6 +97,962 @@
   (let [n (:max_tokens body 1024)]
     (and (number? n) (js/Number.isSafeInteger n) (<= 1 n 32768))))
 
+;; AWAI-4154 v1.0.2 Kagishi hybrid replay standard: opt-in RAM-only 2-generation
+;; volatile HMAC replay ledger bound to per-boot resident_boot_id (no disk
+;; receipts, no unsalted body digest, Wire v1 signed admit envelope).
+(def replay-hmac-prefix
+  (.concat js/Buffer #js [(js/Buffer.from "awai/v1/murakumo-replay" "utf8")
+                          (js/Buffer.from #js [0])]))
+
+(def admit-envelope-sig-prefix
+  (.concat js/Buffer #js [(js/Buffer.from "awai/v1/murakumo-admit-envelope" "utf8")
+                          (js/Buffer.from #js [0])]))
+
+(def privacy-replay-modes #{"kagishi-ram" "ephemeral-memory" "ram-hmac"})
+(def valid-replay-modes #{"durable" "kagishi-ram" "ephemeral-memory" "ram-hmac"})
+
+(def default-privacy-job-timeout-ms 180000)
+(def default-durable-job-timeout-ms 480000)
+(def default-replay-window-ms 300000)
+(def default-replay-clock-skew-ms 30000)
+(def default-replay-rotation-ms 360000)
+(def default-replay-sweep-interval-ms 10000)
+(def max-replay-sweep-interval-ms 30000)
+(def default-replay-max-entries 10000)
+(def max-ram-replay-retention-ms 900000)
+(def private-completion-id "chatcmpl-private")
+
+(defn mono-ms []
+  ;; Strictly monotonic clock from process.hrtime.bigint() floored to integer ms.
+  (let [s (.toString (.bigint (.-hrtime js/process)))]
+    (if (> (count s) 6)
+      (js/Number (subs s 0 (- (count s) 6)))
+      0)))
+
+(defn effective-now [ledger-map wall-now mono-now]
+  ;; Immune to wall-clock rollback: never moves behind started-at + monotonic elapsed.
+  (let [mono-elapsed (max 0 (- mono-now (:started-mono-ms ledger-map mono-now)))
+        anchored (+ (:started-at ledger-map wall-now) mono-elapsed)]
+    (max wall-now anchored)))
+
+(defn normalized-replay-mode [mode]
+  (cond
+    (= "ephemeral-memory" mode) "ephemeral-memory"
+    (contains? #{"kagishi-ram" "ram-hmac"} mode) "kagishi-ram"
+    :else "durable"))
+
+(defn resolve-replay-mode [config]
+  (let [m1 (:replay-ledger-mode config)
+        m2 (:receipt-mode config)]
+    (when (and (some? m1) (not (contains? valid-replay-modes m1)))
+      (throw (js/Error. (str "invalid replay-ledger-mode: " m1))))
+    (when (and (some? m2) (not (contains? valid-replay-modes m2)))
+      (throw (js/Error. (str "invalid receipt-mode: " m2))))
+    (when (and (some? m1) (some? m2)
+               (not= (contains? privacy-replay-modes m1) (contains? privacy-replay-modes m2)))
+      (throw (js/Error. (str "conflicting replay-ledger-mode (" m1 ") and receipt-mode (" m2 ")"))))
+    (or m1 m2 "durable")))
+
+(defn ram-replay-mode? [config]
+  (contains? privacy-replay-modes (resolve-replay-mode config)))
+
+(defn u32-be [n]
+  (let [b (.alloc js/Buffer 4)]
+    (.writeUInt32BE b n 0)
+    b))
+
+(defn zeroize-buffer! [buf]
+  (when (and buf (fn? (.-fill buf)))
+    (.fill buf 0)))
+
+(defn replay-tag [key boot-id replay-nonce]
+  (let [boot-buf (js/Buffer.from boot-id "utf8")
+        nonce-buf (js/Buffer.from replay-nonce "utf8")
+        len1 (u32-be (.-length boot-buf))
+        len2 (u32-be (.-length nonce-buf))
+        msg (.concat js/Buffer #js [replay-hmac-prefix len1 boot-buf len2 nonce-buf])]
+    (try
+      (.digest (.update (.createHmac crypto "sha256" key) msg) "hex")
+      (finally
+        (zeroize-buffer! msg)
+        (zeroize-buffer! len1)
+        (zeroize-buffer! len2)
+        (zeroize-buffer! boot-buf)
+        (zeroize-buffer! nonce-buf)))))
+
+(defn valid-replay-nonce-format? [nonce]
+  (boolean (and (string? nonce) (re-matches #"[A-Za-z0-9_-]{32,256}" nonce))))
+
+(defn valid-estimate-nonce? [nonce]
+  (boolean (and (string? nonce) (re-matches #"[A-Za-z0-9_-]{32,256}" nonce))))
+
+(defn replay-nonce-independent? [nonce other-id]
+  (let [ln (str/lower-case nonce)
+        lj (str/lower-case other-id)
+        other-sha (.digest (.update (.createHash crypto "sha256") other-id) "hex")]
+    (and (not= ln lj)
+         (not (str/includes? lj ln))
+         (not (and (>= (count lj) 16) (str/includes? ln lj)))
+         (not= ln other-sha))))
+
+(def max-admit-envelope-bytes 2048)
+(def max-u32-bytes 4294967295)
+(def allowed-admit-envelope-keys #{"v" "alg" "kid" "route" "owner" "lane" "boot" "iat" "nonce"})
+
+(defn js-plain-object? [x]
+  (= "[object Object]" (.call (.-toString (.-prototype js/Object)) x)))
+
+(defn duplicate-raw-header? [req header-names]
+  (let [raw (.-rawHeaders req)
+        hdrs (.-headers req)]
+    (or (boolean (some #(js/Array.isArray (aget hdrs %)) header-names))
+        (boolean
+         (when (js/Array.isArray raw)
+           (let [counts (atom {})]
+             (loop [i 0]
+               (if (>= i (.-length raw))
+                 false
+                 (let [k (str/lower-case (aget raw i))]
+                   (if (contains? header-names k)
+                     (let [c (inc (get @counts k 0))]
+                       (swap! counts assoc k c)
+                       (if (> c 1) true (recur (+ i 2))))
+                     (recur (+ i 2))))))))))))
+
+(defn strict-json-no-dup-keys? [s]
+  ;; RFC 8259 scanner that rejects duplicate object keys (including Unicode-escaped
+  ;; duplicates) and trailing garbage before JSON.parse.
+  (let [n (count s)
+        idx (atom 0)
+        ws? (fn [c] (or (= c " ") (= c "\t") (= c "\n") (= c "\r")))
+        skip-ws! (fn []
+                   (while (and (< @idx n) (ws? (.charAt s @idx)))
+                     (swap! idx inc)))
+        read-string! (fn []
+                       (when (or (>= @idx n) (not= "\"" (.charAt s @idx)))
+                         (throw (js/Error. "expected string")))
+                       (let [start @idx]
+                         (swap! idx inc)
+                         (loop []
+                           (when (>= @idx n) (throw (js/Error. "unterminated string")))
+                           (let [ch (.charAt s @idx)]
+                             (cond
+                               (= ch "\\") (do (swap! idx + 2) (recur))
+                               (= ch "\"") (do (swap! idx inc)
+                                               (js/JSON.parse (subs s start @idx)))
+                               :else (do (swap! idx inc) (recur)))))))]
+    (letfn [(parse-val! []
+              (skip-ws!)
+              (when (>= @idx n) (throw (js/Error. "unexpected eof")))
+              (let [ch (.charAt s @idx)]
+                (cond
+                  (= ch "\"") (read-string!)
+                  (= ch "{")
+                  (do
+                    (swap! idx inc)
+                    (skip-ws!)
+                    (let [seen (js/Set.)]
+                      (if (and (< @idx n) (= "}" (.charAt s @idx)))
+                        (swap! idx inc)
+                        (loop []
+                          (skip-ws!)
+                          (let [k (read-string!)]
+                            (when (.has seen k)
+                              (throw (js/Error. "duplicate_json_key")))
+                            (.add seen k)
+                            (skip-ws!)
+                            (when (or (>= @idx n) (not= ":" (.charAt s @idx)))
+                              (throw (js/Error. "expected colon")))
+                            (swap! idx inc)
+                            (parse-val!)
+                            (skip-ws!)
+                            (when (>= @idx n) (throw (js/Error. "unterminated object")))
+                            (let [sep (.charAt s @idx)]
+                              (cond
+                                (= sep ",") (do (swap! idx inc) (recur))
+                                (= sep "}") (swap! idx inc)
+                                :else (throw (js/Error. "expected comma or brace")))))))))
+                  (= ch "[")
+                  (do
+                    (swap! idx inc)
+                    (skip-ws!)
+                    (if (and (< @idx n) (= "]" (.charAt s @idx)))
+                      (swap! idx inc)
+                      (loop []
+                        (parse-val!)
+                        (skip-ws!)
+                        (when (>= @idx n) (throw (js/Error. "unterminated array")))
+                        (let [sep (.charAt s @idx)]
+                          (cond
+                            (= sep ",") (do (swap! idx inc) (recur))
+                            (= sep "]") (swap! idx inc)
+                            :else (throw (js/Error. "expected comma or bracket")))))))
+                  (or (= ch "t") (= ch "f") (= ch "n"))
+                  (let [tok (cond
+                              (str/starts-with? (subs s @idx) "true") "true"
+                              (str/starts-with? (subs s @idx) "false") "false"
+                              (str/starts-with? (subs s @idx) "null") "null"
+                              :else (throw (js/Error. "invalid literal")))]
+                    (swap! idx + (count tok)))
+                  :else
+                  (let [m (re-find #"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?" (subs s @idx))]
+                    (when-not m (throw (js/Error. "invalid token")))
+                    (swap! idx + (count m))))))]
+      (try
+        (parse-val!)
+        (skip-ws!)
+        (= @idx n)
+        (catch :default _ false)))))
+
+(defn unpadded-base64url? [s]
+  (boolean (and (string? s)
+                (pos? (count s))
+                (not (str/includes? s "="))
+                (re-matches #"[A-Za-z0-9_-]+" s)
+                (not= 1 (mod (count s) 4)))))
+
+(defn parse-admit-envelope [raw-b64u]
+  (cond
+    (or (nil? raw-b64u) (not (string? raw-b64u)) (= "" raw-b64u))
+    {:ok false :status 401 :error "admit_envelope_required" :executed false}
+    (or (str/includes? raw-b64u "=") (not (unpadded-base64url? raw-b64u)))
+    {:ok false :status 400 :error "invalid_admit_envelope" :executed false}
+    (> (count raw-b64u) 2732)
+    {:ok false :status 400 :error "admit_envelope_too_large" :executed false}
+    :else
+    (try
+      (let [env-raw (js/Buffer.from raw-b64u "base64url")]
+        (cond
+          (or (zero? (.-length env-raw)) (> (.-length env-raw) max-admit-envelope-bytes))
+          (do (zeroize-buffer! env-raw)
+              {:ok false :status 400 :error "admit_envelope_too_large" :executed false})
+          (not= raw-b64u (.toString env-raw "base64url"))
+          (do (zeroize-buffer! env-raw)
+              {:ok false :status 400 :error "invalid_admit_envelope" :executed false})
+          :else
+          (let [utf8 (.toString env-raw "utf8")]
+            (if-not (strict-json-no-dup-keys? utf8)
+              (do (zeroize-buffer! env-raw)
+                  {:ok false :status 400 :error "invalid_admit_envelope_json" :executed false})
+              (let [parsed (js/JSON.parse utf8)]
+                (if-not (js-plain-object? parsed)
+                  (do (zeroize-buffer! env-raw)
+                      {:ok false :status 400 :error "invalid_admit_envelope" :executed false})
+                  (let [raw-keys (vec (js/Object.keys parsed))]
+                    (cond
+                      (some #(= "op" %) raw-keys)
+                      (do (zeroize-buffer! env-raw)
+                          {:ok false :status 400 :error "forbidden_admit_field_op" :executed false})
+                      (some #(not (contains? allowed-admit-envelope-keys %)) raw-keys)
+                      (do (zeroize-buffer! env-raw)
+                          {:ok false :status 400 :error "unknown_admit_envelope_field" :executed false})
+                      :else
+                      {:ok true
+                       :envelope-raw env-raw
+                       :envelope (js->clj parsed :keywordize-keys true)}))))))))
+      (catch :default _
+        {:ok false :status 400 :error "invalid_admit_envelope" :executed false}))))
+
+(defn admit-sig-message [envelope-raw body-bytes]
+  (let [env-owned? (not (js/Buffer.isBuffer envelope-raw))
+        body-owned? (not (js/Buffer.isBuffer body-bytes))
+        env-buf (if env-owned? (js/Buffer.from (or envelope-raw "") "utf8") envelope-raw)
+        body-buf (if body-owned? (js/Buffer.from (or body-bytes "") "utf8") body-bytes)
+        env-len (u32-be (.-length env-buf))
+        body-len (u32-be (.-length body-buf))]
+    (try
+      (when (> (.-length env-buf) max-admit-envelope-bytes)
+        (throw (js/Error. "admit envelope exceeds max length")))
+      (when (> (.-length body-buf) max-u32-bytes)
+        (throw (js/Error. "body exceeds u32_be length bound")))
+      (.concat js/Buffer #js [admit-envelope-sig-prefix env-len env-buf body-len body-buf])
+      (finally
+        (zeroize-buffer! env-len)
+        (zeroize-buffer! body-len)
+        (when env-owned? (zeroize-buffer! env-buf))
+        (when body-owned? (zeroize-buffer! body-buf))))))
+
+(declare assert-not-symlink! private-token)
+
+(defn load-ed25519-pubkey [spec kid-str]
+  (let [pem (cond
+              (string? spec)
+              (if (str/starts-with? (str/trim spec) "-----BEGIN")
+                spec
+                (do (assert-not-symlink! spec (str "admit-public-keys." kid-str))
+                    (.readFileSync fs spec "utf8")))
+              (map? spec)
+              (do
+                (when (and (some? (:type spec)) (not= "ed25519" (:type spec)))
+                  (throw (js/Error. (str "only ed25519 admit keys are permitted (INFER-PRIV-08): " kid-str))))
+                (cond
+                  (:public-key-file spec)
+                  (do (assert-not-symlink! (:public-key-file spec) (str "admit-public-keys." kid-str))
+                      (.readFileSync fs (:public-key-file spec) "utf8"))
+                  (string? (:public-key spec))
+                  (:public-key spec)
+                  :else (throw (js/Error. (str "ed25519 admit key requires :public-key or :public-key-file for " kid-str)))))
+              :else (throw (js/Error. (str "invalid admit-public-keys entry for " kid-str))))
+        state (if (map? spec) (or (:state spec) "active") "active")
+        _ (when-not (contains? #{"active" "staged" "revoked"} state)
+            (throw (js/Error. (str "invalid admit key state for " kid-str ": " state))))
+        pub (.createPublicKey crypto pem)]
+    (when-not (= "ed25519" (.-asymmetricKeyType pub))
+      (throw (js/Error. (str "admit public key must be Ed25519 for " kid-str))))
+    {:type :ed25519 :key pub :state state}))
+
+(defn load-admit-keys! [config]
+  ;; AWAI-4154 v1.0.3 (INFER-PRIV-08): Ed25519 PureEdDSA key pinning with
+  ;; active/staged/revoked states (>= 2 keys supported for stage -> activate -> revoke).
+  ;; Zero fallback to symmetric/plaintext modes.
+  (let [raw-keys (or (:admit-public-keys config) (:admit-keys config))
+        revoked-set (set (map name (:revoked-admit-kids config)))]
+    (when-not (and (map? raw-keys) (seq raw-keys))
+      (throw (js/Error. "privacy mode requires non-empty admit-public-keys (Ed25519) per AWAI-4154 v1.0.3")))
+    (let [loaded (into {}
+                       (for [[kid spec] raw-keys
+                             :let [kid-str (name kid)]]
+                         (do
+                           (when-not (re-matches #"[A-Za-z0-9_-]{1,64}" kid-str)
+                             (throw (js/Error. (str "invalid admit-public-keys kid: " kid-str))))
+                           (let [entry (load-ed25519-pubkey spec kid-str)
+                                 entry (if (contains? revoked-set kid-str) (assoc entry :state "revoked") entry)]
+                             [kid-str entry]))))]
+      (let [states (set (map :state (vals loaded)))]
+        (when-not (contains? states "active")
+          (throw (js/Error. "admit-public-keys must contain at least one active Ed25519 key")))
+        (when-not (contains? states "staged")
+          (throw (js/Error. "admit-public-keys must contain at least one staged Ed25519 key"))))
+      loaded)))
+
+(defn zeroize-admit-keys! [_admit-keys]
+  ;; Ed25519 verification holds only public keys; no symmetric secrets retained.
+  nil)
+
+(defn parse-admit-sig-header [sig-header]
+  (cond
+    (or (nil? sig-header) (not (string? sig-header)) (= "" sig-header))
+    {:ok false :status 401 :error "admit_sig_required" :executed false}
+    (str/includes? sig-header "=")
+    {:ok false :status 400 :error "invalid_admit_sig_padding" :executed false}
+    (str/includes? sig-header ".")
+    (let [parts (str/split sig-header #"\." -1)]
+      (if (and (= 2 (count parts))
+               (re-matches #"[A-Za-z0-9_-]{1,64}" (first parts))
+               (unpadded-base64url? (second parts)))
+        {:ok true :header-kid (first parts) :sig-b64u (second parts)}
+        {:ok false :status 400 :error "invalid_admit_sig_format" :executed false}))
+    (unpadded-base64url? sig-header)
+    {:ok true :header-kid nil :sig-b64u sig-header}
+    :else
+    {:ok false :status 400 :error "invalid_admit_sig_format" :executed false}))
+
+(defn verify-admit-sig [admit-keys sig-header env-kid envelope-raw body-bytes max-body-bytes]
+  (let [parsed (parse-admit-sig-header sig-header)]
+    (cond
+      (not (:ok parsed)) parsed
+      (> (.-length body-bytes) max-body-bytes)
+      {:ok false :status 413 :error "body_too_large" :executed false}
+      (and (:header-kid parsed) (not= (:header-kid parsed) env-kid))
+      {:ok false :status 403 :error "admit_kid_mismatch" :executed false}
+      :else
+      (let [entry (get admit-keys env-kid)]
+        (cond
+          (nil? entry)
+          {:ok false :status 403 :error "unknown_admit_kid" :executed false}
+          (= "revoked" (:state entry))
+          {:ok false :status 403 :error "revoked_admit_kid" :executed false}
+          :else
+          (let [sig-b64u (:sig-b64u parsed)
+                sig-buf (js/Buffer.from sig-b64u "base64url")]
+            (try
+              (if-not (and (= 64 (.-length sig-buf))
+                           (= sig-b64u (.toString sig-buf "base64url")))
+                {:ok false :status 400 :error "invalid_admit_sig_format" :executed false}
+                (let [msg (admit-sig-message envelope-raw body-bytes)]
+                  (try
+                    (let [ok? (try (.verify crypto nil msg (:key entry) sig-buf)
+                                   (catch :default _ false))]
+                      (if ok?
+                        {:ok true :kid env-kid}
+                        {:ok false :status 403 :error "invalid_admit_sig" :executed false}))
+                    (finally
+                      (zeroize-buffer! msg)))))
+              (finally
+                (zeroize-buffer! sig-buf)))))))))
+
+(defn harden-process-boundary! []
+  ;; Best-effort RLIMIT_CORE=0 when the Node runtime exposes process.setrlimit.
+  ;; OS-level prerequisites (RLIMIT_CORE=0, PR_SET_DUMPABLE=0, swapoff/encrypted
+  ;; swap, mlock/MADV_DONTDUMP) are enforced by the host service wrapper.
+  (try
+    (when (fn? (.-setrlimit js/process))
+      (.setrlimit js/process "core" #js {:soft 0 :hard 0}))
+    (catch :default _ nil)))
+
+(defn lstat-or-nil [p]
+  (when p
+    (try (.lstatSync fs p)
+         (catch :default _ nil))))
+
+(defn assert-not-symlink! [p label]
+  (when-let [st (lstat-or-nil p)]
+    (when (.isSymbolicLink st)
+      (throw (js/Error. (str "refusing symlink in privacy mode for " label ": " p))))))
+
+(defn scan-privacy-state-dir! [config]
+  (when (true? (:poi-receipts? config))
+    (throw (js/Error. "poi-receipts? cannot be enabled in privacy mode (INFER-PRIV-06)")))
+  (when (:compat-port config)
+    (throw (js/Error. "compat-port cannot be enabled in kagishi-ram mode: anonymous compatibility entrypoint is disabled")))
+  (assert-not-symlink! (:token-file config) "token-file")
+  (assert-not-symlink! (:replay-auth-token-file config) "replay-auth-token-file")
+  (assert-not-symlink! (:owner-id-file config) "owner-id-file")
+  (assert-not-symlink! (:node-key-file config) "node-key-file")
+  (assert-not-symlink! (:drain-file config) "drain-file")
+  (when-let [file (:state-file config)]
+    (when-let [st (lstat-or-nil file)]
+      (if (.isSymbolicLink st)
+        (throw (js/Error. (str "refusing symlink state-file in privacy mode: " file)))
+        (throw (js/Error. "legacy receipts.json must be archived/removed with owner approval before starting kagishi-ram mode"))))
+    (let [dir (.dirname path file)
+          base (.basename path file)
+          allowed-sidecars (set [(str base ".owner-id")
+                                 (str base ".bound-owner")
+                                 (str base ".node-key")
+                                 (str base ".observation-pins.json")
+                                 (str base ".draining")
+                                 "receipts.json.owner-id"
+                                 "receipts.json.bound-owner"
+                                 "receipts.json.node-key"
+                                 "receipts.json.observation-pins.json"
+                                 "receipts.json.draining"])]
+      (doseq [sidecar [(str file ".owner-id") (str file ".bound-owner")
+                       (str file ".node-key") (str file ".observation-pins.json")
+                       (str file ".draining") (str file ".poi-receipts.jsonl")]]
+        (assert-not-symlink! sidecar "state sidecar"))
+      (when-let [dir-st (lstat-or-nil dir)]
+        (when (.isDirectory dir-st)
+          (doseq [entry (.readdirSync fs dir)]
+            (let [full (.join path dir entry)
+                  st (lstat-or-nil full)]
+              (if (contains? allowed-sidecars entry)
+                (when (and st (.isSymbolicLink st))
+                  (throw (js/Error. (str "refusing symlink sidecar in privacy mode: " entry))))
+                (cond
+                  (= entry base)
+                  (throw (js/Error. "legacy receipts.json must be archived/removed with owner approval before starting kagishi-ram mode"))
+                  (re-matches #".*\.poi-receipts\.jsonl.*" entry)
+                  (throw (js/Error. (str "residual poi-receipts.jsonl file refused in privacy mode: " entry)))
+                  (re-matches #"^receipts.*\.json.*" entry)
+                  (throw (js/Error. (str "residual receipts*.json* file refused in privacy mode: " entry)))
+                  (str/starts-with? entry (str base "."))
+                  (throw (js/Error. (str "residual state-file artifact refused in privacy mode: " entry)))
+                  (re-matches #".*\.(tmp|bak|lock)$" entry)
+                  (throw (js/Error. (str "residual temp/backup/lock file refused in privacy mode: " entry))))))))))))
+
+(defn make-replay-ledger
+  ([config boot-id started-at]
+   (make-replay-ledger config boot-id started-at (mono-ms)))
+  ([config boot-id started-at started-mono-ms]
+   (let [w (:replay-window-ms config default-replay-window-ms)
+         delta (:replay-clock-skew-ms config default-replay-clock-skew-ms)
+         t-rot (:replay-rotation-ms config default-replay-rotation-ms)
+         jitter (:rotation-jitter-ms config 0)
+         t-tick (or (:replay-sweep-interval-ms config)
+                    (:sweep-interval-ms config)
+                    (min t-rot default-replay-sweep-interval-ms))
+         max-entries (or (:replay-max-entries config)
+                         (:max-receipts config)
+                         default-replay-max-entries)
+         cfg-job-timeout (:job-timeout-ms config default-privacy-job-timeout-ms)
+         lane-timeouts (map #(or (:job-timeout-ms %) cfg-job-timeout) (vals (:lanes config)))
+         max-job-timeout (if (seq lane-timeouts) (apply max cfg-job-timeout lane-timeouts) cfg-job-timeout)
+         max-inflight-ms (:max-inflight-ms config max-job-timeout)]
+     (when-not (and (js/Number.isSafeInteger w) (pos? w))
+       (throw (js/Error. "replay-window-ms must be a positive integer")))
+     (when-not (and (js/Number.isSafeInteger delta) (>= delta 0))
+       (throw (js/Error. "replay-clock-skew-ms must be a non-negative integer")))
+     (when-not (and (js/Number.isSafeInteger t-rot) (pos? t-rot))
+       (throw (js/Error. "replay-rotation-ms must be a positive integer")))
+     (when-not (and (js/Number.isSafeInteger jitter) (>= jitter 0))
+       (throw (js/Error. "rotation-jitter-ms must be a non-negative integer")))
+     (when-not (and (js/Number.isSafeInteger t-tick) (pos? t-tick) (<= t-tick max-replay-sweep-interval-ms))
+       (throw (js/Error. "replay-sweep-interval-ms (T_tick) must be a positive integer <= 30000 ms")))
+     (when-not (and (js/Number.isSafeInteger cfg-job-timeout) (pos? cfg-job-timeout))
+       (throw (js/Error. "job-timeout-ms must be a positive integer")))
+     (doseq [lt lane-timeouts]
+       (when-not (and (js/Number.isSafeInteger lt) (pos? lt))
+         (throw (js/Error. "lane job-timeout-ms must be a positive integer"))))
+     (when (> max-job-timeout w)
+       (throw (js/Error. (str "job-timeout-ms (" max-job-timeout ") must be <= replay-window-ms (" w ")"))))
+     (when-not (and (js/Number.isSafeInteger max-inflight-ms) (pos? max-inflight-ms) (<= max-inflight-ms w))
+       (throw (js/Error. "max-inflight-ms must be a positive integer <= replay-window-ms")))
+     (when (< t-rot (+ w (* 2 delta)))
+       (throw (js/Error. "replay-rotation-ms must be >= replay-window-ms + 2 * replay-clock-skew-ms")))
+     (when (> (+ (* 2 t-rot) t-tick jitter) max-ram-replay-retention-ms)
+       (throw (js/Error. "2 * replay-rotation-ms + T_tick + rotation-jitter-ms must be <= 900000 ms (15 min max RAM retention)")))
+     (when-not (and (js/Number.isSafeInteger max-entries) (pos? max-entries))
+       (throw (js/Error. "replay-max-entries must be a positive integer")))
+     (atom {:node (:node config)
+            :boot-id boot-id
+            :started-at started-at
+            :started-mono-ms started-mono-ms
+            :window-ms w
+            :clock-skew-ms delta
+            :rotation-ms t-rot
+            :rotation-jitter-ms jitter
+            :sweep-interval-ms t-tick
+            :max-entries max-entries
+            :max-receipts max-entries
+            :job-timeout-ms cfg-job-timeout
+            :max-inflight-ms max-inflight-ms
+            :allow-provisional-no-boot-id? (true? (:allow-provisional-no-boot-id? config))
+            :k-curr (.randomBytes crypto 32)
+            :k-prev nil
+            :curr-set (js/Set.)
+            :prev-set (js/Set.)
+            :inflight {}
+            :rotated-mono-ms started-mono-ms
+            :rotations 0}))))
+
+(defn sweep-stuck-inflight! [ledger-atom mono-now state-atom controllers-atom]
+  (let [{:keys [inflight max-inflight-ms rotation-ms]} @ledger-atom
+        cap (+ max-inflight-ms rotation-ms)]
+    (doseq [[id {:keys [admitted-mono-ms group]}] inflight]
+      (when (> (- mono-now admitted-mono-ms) cap)
+        (when controllers-atom
+          (when-let [c (get @controllers-atom id)] (.abort c))
+          (swap! controllers-atom dissoc id))
+        (when state-atom
+          (swap! state-atom (fn [s] (if (= id (get-in s [:groups group])) (update s :groups dissoc group) s))))
+        (swap! ledger-atom update :inflight dissoc id)))))
+
+(defn maybe-rotate-kagishi-replay!
+  ([ledger-atom] (maybe-rotate-kagishi-replay! ledger-atom (mono-ms) nil nil))
+  ([ledger-atom mono-now] (maybe-rotate-kagishi-replay! ledger-atom mono-now nil nil))
+  ([ledger-atom mono-now state-atom controllers-atom]
+   (sweep-stuck-inflight! ledger-atom mono-now state-atom controllers-atom)
+   (let [{:keys [rotation-ms rotated-mono-ms k-curr k-prev curr-set prev-set rotations]} @ledger-atom
+         elapsed (- mono-now rotated-mono-ms)]
+     ;; Strictly driven by monotonic clock: never rotate early on wall-clock jumps.
+     (when (>= elapsed rotation-ms)
+       (let [steps (js/Math.floor (/ elapsed rotation-ms))
+             next-rotated-mono (+ rotated-mono-ms (* steps rotation-ms))]
+         (if (>= elapsed (* 2 rotation-ms))
+           ;; >= 2*T_rot stall/wake double-wipe: clear BOTH sets and zeroize BOTH keys!
+           (do (zeroize-buffer! k-prev)
+               (zeroize-buffer! k-curr)
+               (.clear prev-set)
+               (.clear curr-set)
+               (swap! ledger-atom merge
+                      {:k-curr (.randomBytes crypto 32)
+                       :k-prev nil
+                       :curr-set (js/Set.)
+                       :prev-set (js/Set.)
+                       :rotated-mono-ms next-rotated-mono
+                       :rotations (+ rotations steps)}))
+           ;; T_rot <= elapsed < 2*T_rot: normal 1-step rotation
+           (do (zeroize-buffer! k-prev)
+               (.clear prev-set)
+               (swap! ledger-atom merge
+                      {:k-curr (.randomBytes crypto 32)
+                       :k-prev k-curr
+                       :curr-set (js/Set.)
+                       :prev-set curr-set
+                       :rotated-mono-ms next-rotated-mono
+                       :rotations (inc rotations)}))))))))
+
+(def rotate-replay-ledger! maybe-rotate-kagishi-replay!)
+
+(defn destroy-replay-ledger! [ledger-atom]
+  (when ledger-atom
+    (let [{:keys [k-curr k-prev curr-set prev-set]} @ledger-atom]
+      (zeroize-buffer! k-curr)
+      (zeroize-buffer! k-prev)
+      (when curr-set (.clear curr-set))
+      (when prev-set (.clear prev-set))
+      (swap! ledger-atom merge {:k-curr nil :k-prev nil :curr-set (js/Set.) :prev-set (js/Set.) :inflight {}}))))
+
+(def protected-admit-header-names
+  #{"x-murakumo-admit-envelope" "x-murakumo-admit-sig"
+    "x-murakumo-boot-id" "x-murakumo-issued-at" "x-murakumo-replay-nonce"})
+
+(defn expected-lane-route [lane]
+  (when lane
+    (if (= "image" (:kind lane))
+      "POST /v1/images/generations"
+      "POST /v1/chat/completions")))
+
+(defn validate-admit-request
+  ([ledger-atom headers lane-id expected-route ext-job-id wall-now admit-keys body-bytes]
+   (validate-admit-request ledger-atom headers lane-id expected-route ext-job-id wall-now (mono-ms) admit-keys body-bytes 2097152))
+  ([ledger-atom headers lane-id expected-route ext-job-id wall-now mono-now admit-keys body-bytes max-body-bytes]
+   (let [lmap @ledger-atom
+         {:keys [node boot-id started-at window-ms clock-skew-ms allow-provisional-no-boot-id?]} lmap
+         eff-now (effective-now lmap wall-now mono-now)
+         env-res (parse-admit-envelope (aget headers "x-murakumo-admit-envelope"))]
+     (if-not (:ok env-res)
+       env-res
+       (let [env-raw (:envelope-raw env-res)]
+         (try
+           (let [env (:envelope env-res)
+                 v (:v env)
+                 alg (:alg env)
+                 kid (:kid env)
+                 route (:route env)
+                 owner (:owner env)
+                 env-lane (:lane env)
+                 env-boot (:boot env)
+                 iat (:iat env)
+                 nonce (:nonce env)
+                 hdr-boot (aget headers "x-murakumo-boot-id")
+                 hdr-iat (aget headers "x-murakumo-issued-at")
+                 hdr-nonce (aget headers "x-murakumo-replay-nonce")]
+             (cond
+               (not= 1 v)
+               {:ok false :status 400 :error "invalid_admit_version" :executed false}
+               (not= "ed25519" alg)
+               {:ok false :status 403 :error "unsupported_admit_alg" :executed false}
+               (not (and (string? kid) (re-matches #"[A-Za-z0-9_-]{1,64}" kid)))
+               {:ok false :status 400 :error "invalid_admit_kid" :executed false}
+               (not (and (string? route) (pos? (count route))))
+               {:ok false :status 400 :error "invalid_admit_route" :executed false}
+               (not (and (string? owner) (re-matches #"[A-Za-z0-9-]+" owner)))
+               {:ok false :status 400 :error "invalid_admit_owner" :executed false}
+               (not (and (string? env-lane) (re-matches #"[A-Za-z0-9-]+" env-lane)))
+               {:ok false :status 400 :error "invalid_admit_lane" :executed false}
+               (not (valid-replay-nonce-format? nonce))
+               {:ok false :status 400 :error "invalid_replay_nonce" :executed false}
+               (and (string? ext-job-id) (pos? (count ext-job-id)) (not (replay-nonce-independent? nonce ext-job-id)))
+               {:ok false :status 400 :error "replay_nonce_not_independent" :executed false}
+               (not (and (number? iat) (js/Number.isFinite iat) (js/Number.isSafeInteger iat) (pos? iat)))
+               {:ok false :status 400 :error "invalid_issued_at" :executed false}
+               :else
+               (let [sig-res (verify-admit-sig admit-keys (aget headers "x-murakumo-admit-sig") kid env-raw body-bytes max-body-bytes)]
+                 (cond
+                   (not (:ok sig-res)) sig-res
+                   ;; Transitional header consistency check (exact equality when present; fail closed on mismatch)
+                   (and (some? hdr-boot) (not= hdr-boot (or env-boot "")))
+                   {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+                   (and (some? hdr-iat) (not= hdr-iat (str iat)))
+                   {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+                   (and (some? hdr-nonce) (not= hdr-nonce nonce))
+                   {:ok false :status 403 :error "envelope_header_mismatch" :executed false}
+                   ;; Route, owner, and lane bindings
+                   (and (some? expected-route) (not= route expected-route))
+                   {:ok false :status 403 :error "route_mismatch" :executed false}
+                   (and (some? node) (not= owner node))
+                   {:ok false :status 403 :error "owner_mismatch" :executed false}
+                   (and (some? lane-id) (not= env-lane lane-id))
+                   {:ok false :status 403 :error "lane_mismatch" :executed false}
+                   ;; Per-boot resident_boot_id verification
+                   (and (string? env-boot) (pos? (count env-boot)) (not= env-boot boot-id))
+                   {:ok false :status 410 :error "boot_id_mismatch" :executed "unknown" :retryable false}
+                   (and (not (and (string? env-boot) (pos? (count env-boot))))
+                        (not allow-provisional-no-boot-id?))
+                   {:ok false :status 400 :error "boot_id_required" :executed false}
+                   (and (not (and (string? env-boot) (pos? (count env-boot))))
+                        allow-provisional-no-boot-id?
+                        (< iat (+ started-at clock-skew-ms)))
+                   {:ok false :status 409 :error "provisional_pre_boot_window" :executed "unknown" :retryable false}
+                   ;; Freshness window against rollback-immune effective-now
+                   (> eff-now (+ iat window-ms clock-skew-ms))
+                   {:ok false :status 403 :error "replay_issued_at_expired" :executed false}
+                   (> iat (+ eff-now clock-skew-ms))
+                   {:ok false :status 403 :error "replay_issued_at_future" :executed false}
+                   :else
+                   {:ok true :replay-nonce nonce :issued-at iat :owner owner :lane env-lane :route route :kid kid}))))
+           (finally
+             (zeroize-buffer! env-raw))))))))
+
+(defn replay-seen?
+  ([ledger-atom replay-nonce] (replay-seen? ledger-atom replay-nonce (mono-ms)))
+  ([ledger-atom replay-nonce mono-now]
+   (maybe-rotate-kagishi-replay! ledger-atom mono-now)
+   (let [{:keys [boot-id k-curr k-prev curr-set prev-set]} @ledger-atom
+         curr-tag (replay-tag k-curr boot-id replay-nonce)]
+     (or (.has curr-set curr-tag)
+         (boolean (and k-prev (.has prev-set (replay-tag k-prev boot-id replay-nonce))))))))
+
+(defn admit-ram-replay!
+  ([state-atom ledger-atom lanes lane id replay-nonce]
+   (admit-ram-replay! state-atom ledger-atom lanes lane id replay-nonce (mono-ms)))
+  ([state-atom ledger-atom lanes lane id replay-nonce mono-now]
+   (maybe-rotate-kagishi-replay! ledger-atom mono-now state-atom nil)
+   (let [{:keys [boot-id k-curr k-prev curr-set prev-set max-entries]} @ledger-atom
+         curr-tag (replay-tag k-curr boot-id replay-nonce)
+         seen? (or (.has curr-set curr-tag)
+                   (boolean (and k-prev (.has prev-set (replay-tag k-prev boot-id replay-nonce)))))
+         total (+ (.-size curr-set) (.-size prev-set))]
+     (cond
+       seen? {:status 409 :reason :already-seen :executed "unknown" :retryable false}
+       (not (:ready lane)) {:status 503 :reason :not-ready :executed false}
+       (>= total max-entries) {:status 503 :reason :replay_capacity :executed false}
+       (or (external-group-busy? lanes lane) (get-in @state-atom [:groups (:group lane)]))
+       {:status 429 :reason :busy :executed false}
+       :else (do (.add curr-set curr-tag)
+                 (swap! ledger-atom assoc-in [:inflight id] {:admitted-mono-ms mono-now :group (:group lane)})
+                 (swap! state-atom assoc-in [:groups (:group lane)] id)
+                 {:status 200})))))
+
+(defn- own-prop? [obj k]
+  (boolean (and obj (.call (.-hasOwnProperty (.-prototype js/Object)) obj k))))
+
+(defn- finite-int? [x]
+  (and (number? x) (js/Number.isSafeInteger x)))
+
+(defn- sanitize-private-usage [u]
+  (when (js-plain-object? u)
+    (let [out #js {}
+          pt (aget u "prompt_tokens")
+          ct (aget u "completion_tokens")
+          tt (aget u "total_tokens")
+          any? (atom false)]
+      (when (and (own-prop? u "prompt_tokens") (finite-int? pt)) (aset out "prompt_tokens" pt) (reset! any? true))
+      (when (and (own-prop? u "completion_tokens") (finite-int? ct)) (aset out "completion_tokens" ct) (reset! any? true))
+      (when (and (own-prop? u "total_tokens") (finite-int? tt)) (aset out "total_tokens" tt) (reset! any? true))
+      (when @any? out))))
+
+(defn- sanitize-private-tool-call [tc delta?]
+  (when (js-plain-object? tc)
+    (let [out #js {}
+          idx (aget tc "index")
+          id (aget tc "id")
+          typ (aget tc "type")
+          fn-obj (aget tc "function")]
+      (when (and delta? (own-prop? tc "index") (finite-int? idx)) (aset out "index" idx))
+      (when (and (own-prop? tc "id") (string? id)) (aset out "id" id))
+      (when (and (own-prop? tc "type") (string? typ)) (aset out "type" typ))
+      (when (and (own-prop? tc "function") (js-plain-object? fn-obj))
+        (let [f #js {}
+              nm (aget fn-obj "name")
+              args (aget fn-obj "arguments")]
+          (when (and (own-prop? fn-obj "name") (string? nm)) (aset f "name" nm))
+          (when (and (own-prop? fn-obj "arguments") (string? args)) (aset f "arguments" args))
+          (aset out "function" f)))
+      out)))
+
+(defn- sanitize-private-message [msg delta?]
+  (when (js-plain-object? msg)
+    (let [out #js {}
+          role (aget msg "role")
+          content (aget msg "content")
+          reasoning (aget msg "reasoning_content")
+          refusal (aget msg "refusal")
+          tcs (aget msg "tool_calls")]
+      (when (and (own-prop? msg "role") (string? role)) (aset out "role" role))
+      (when (and (own-prop? msg "content") (or (string? content) (nil? content)))
+        (aset out "content" content))
+      (when (and (own-prop? msg "reasoning_content") (or (string? reasoning) (nil? reasoning)))
+        (aset out "reasoning_content" reasoning))
+      (when (and (own-prop? msg "refusal") (or (string? refusal) (nil? refusal)))
+        (aset out "refusal" refusal))
+      (when (and (own-prop? msg "tool_calls") (js/Array.isArray tcs))
+        (let [arr #js []]
+          (doseq [tc (js/Array.from tcs)]
+            (when-let [clean (sanitize-private-tool-call tc delta?)]
+              (.push arr clean)))
+          (aset out "tool_calls" arr)))
+      out)))
+
+(defn- sanitize-private-choice [ch delta?]
+  (when (js-plain-object? ch)
+    (let [out #js {}
+          idx (aget ch "index")
+          fr (aget ch "finish_reason")
+          payload-key (if delta? "delta" "message")
+          payload (aget ch payload-key)]
+      (when (and (own-prop? ch "index") (finite-int? idx)) (aset out "index" idx))
+      (when (own-prop? ch payload-key)
+        (when-let [clean-msg (sanitize-private-message payload delta?)]
+          (aset out payload-key clean-msg)))
+      (when (and (own-prop? ch "finish_reason") (or (string? fr) (nil? fr)))
+        (aset out "finish_reason" fr))
+      (when (and (own-prop? ch "logprobs") (nil? (aget ch "logprobs")))
+        (aset out "logprobs" nil))
+      out)))
+
+(defn- reconstruct-private-completion [obj delta?]
+  (when (and (js-plain-object? obj) (not (own-prop? obj "error")))
+    (let [choices (aget obj "choices")
+          usage (aget obj "usage")
+          has-choices? (and (own-prop? obj "choices") (js/Array.isArray choices))
+          has-usage? (and (own-prop? obj "usage") (js-plain-object? usage))]
+      (when (or has-choices? (and delta? has-usage?))
+        (let [out #js {:id private-completion-id}
+              obj-type (aget obj "object")
+              created (aget obj "created")
+              model (aget obj "model")]
+          (when (and (own-prop? obj "object")
+                     (if delta? (= "chat.completion.chunk" obj-type) (= "chat.completion" obj-type)))
+            (aset out "object" obj-type))
+          (when (and (own-prop? obj "created") (finite-int? created))
+            (aset out "created" created))
+          (when (and (own-prop? obj "model") (string? model))
+            (aset out "model" model))
+          (when has-choices?
+            (let [arr #js []]
+              (doseq [ch (js/Array.from choices)]
+                (when-let [clean-ch (sanitize-private-choice ch delta?)]
+                  (.push arr clean-ch)))
+              (aset out "choices" arr)))
+          (when has-usage?
+            (when-let [clean-u (sanitize-private-usage usage)]
+              (aset out "usage" clean-u)))
+          (js/JSON.stringify out))))))
+
+(defn sanitize-private-json [text]
+  (try
+    (reconstruct-private-completion (js/JSON.parse text) false)
+    (catch :default _ nil)))
+
+(defn sanitize-private-image-json [text]
+  (try
+    (let [obj (js/JSON.parse text)]
+      (when (and (js-plain-object? obj)
+                 (not (own-prop? obj "error"))
+                 (own-prop? obj "data")
+                 (js/Array.isArray (aget obj "data")))
+        (let [out #js {}
+              created (aget obj "created")
+              data (aget obj "data")]
+          (when (and (own-prop? obj "created") (finite-int? created))
+            (aset out "created" created))
+          (let [arr #js []]
+            (doseq [item (js/Array.from data)]
+              (when (js-plain-object? item)
+                (let [clean #js {}]
+                  (when (and (own-prop? item "b64_json") (string? (aget item "b64_json")))
+                    (aset clean "b64_json" (aget item "b64_json")))
+                  (when (and (own-prop? item "url") (string? (aget item "url")))
+                    (aset clean "url" (aget item "url")))
+                  (when (and (own-prop? item "revised_prompt") (string? (aget item "revised_prompt")))
+                    (aset clean "revised_prompt" (aget item "revised_prompt")))
+                  (.push arr clean))))
+            (aset out "data" arr))
+          (js/JSON.stringify out))))
+    (catch :default _ nil)))
+
+(def private-backend-error-json
+  (js/JSON.stringify #js {:error "backend_error"}))
+
+(def private-backend-error-sse
+  (str "data: " private-backend-error-json "\n\n"))
+
+(def known-protocol-error-codes
+  #{"admit_envelope_required"
+    "invalid_admit_envelope"
+    "admit_envelope_too_large"
+    "invalid_admit_envelope_json"
+    "forbidden_admit_field_op"
+    "unknown_admit_envelope_field"
+    "admit_sig_required"
+    "invalid_admit_sig_padding"
+    "invalid_admit_sig_format"
+    "body_too_large"
+    "admit_kid_mismatch"
+    "unknown_admit_kid"
+    "revoked_admit_kid"
+    "invalid_admit_sig"
+    "invalid_admit_version"
+    "unsupported_admit_alg"
+    "invalid_admit_kid"
+    "invalid_admit_route"
+    "invalid_admit_owner"
+    "invalid_admit_lane"
+    "invalid_replay_nonce"
+    "replay_nonce_not_independent"
+    "invalid_issued_at"
+    "envelope_header_mismatch"
+    "route_mismatch"
+    "owner_mismatch"
+    "lane_mismatch"
+    "boot_id_mismatch"
+    "boot_id_required"
+    "provisional_pre_boot_window"
+    "replay_issued_at_expired"
+    "replay_issued_at_future"
+    "duplicate_header"
+    "already-seen"
+    "already_seen"
+    "not-ready"
+    "not_ready"
+    "replay_capacity"
+    "receipt-capacity"
+    "busy"
+    "resident_draining"
+    "invalid_output_budget"
+    "job_id_required"
+    "lane_unknown"
+    "topology_role_unavailable"
+    "topology_gateway_unavailable"
+    "model_or_context_mismatch"
+    "model_mismatch"
+    "no_privacy_peer_available"
+    "no_ready_capacity"
+    "unknown_job_owner"
+    "unauthorized"
+    "route_not_allowed"
+    "not_found"
+    "invalid_request"
+    "request_failed"
+    "invalid_estimate_nonce"
+    "tokenizer_not_available"
+    "invalid_tokenizer_request"
+    "poi_receipts_disabled"
+    "execution_unknown"
+    "invalid_backend_response"
+    "upstream_error"})
+
+(defn known-protocol-error-code [err-val fallback]
+  (if (and (string? err-val) (contains? known-protocol-error-codes err-val))
+    err-val
+    fallback))
+
+(defn project-private-backend-error-json [_text]
+  ;; Backend-originated errors are always projected onto a fixed static constant;
+  ;; never reflect arbitrary backend strings, nested error.* fields, or metadata.
+  private-backend-error-json)
+
+(defn sanitize-private-error-json [text]
+  ;; Inter-node / gateway privacy error projector: preserves ONLY known static
+  ;; Murakumo protocol error codes (and boolean/"unknown" executed + boolean
+  ;; retryable fields). Any unknown string, nested error.* object, or non-JSON
+  ;; body is projected onto the fixed static {"error":"backend_error"} constant.
+  (try
+    (let [obj (js/JSON.parse text)]
+      (if (and (js-plain-object? obj) (own-prop? obj "error"))
+        (let [err-val (aget obj "error")]
+          (if (and (string? err-val) (contains? known-protocol-error-codes err-val))
+            (let [out #js {:error err-val}]
+              (when (and (own-prop? obj "executed")
+                         (or (boolean? (aget obj "executed")) (= "unknown" (aget obj "executed"))))
+                (aset out "executed" (aget obj "executed")))
+              (when (and (own-prop? obj "retryable") (boolean? (aget obj "retryable")))
+                (aset out "retryable" (aget obj "retryable")))
+              (js/JSON.stringify out))
+            private-backend-error-json))
+        private-backend-error-json))
+    (catch :default _
+      private-backend-error-json)))
+
+(defn sanitize-private-sse-line [line]
+  (when (string? line)
+    (let [clean (if (str/ends-with? line "\r") (subs line 0 (dec (count line))) line)]
+      (cond
+        (or (= clean "data: [DONE]") (= clean "data:[DONE]"))
+        "data: [DONE]\n\n"
+        (str/starts-with? clean "data:")
+        (try
+          (let [parsed (js/JSON.parse (str/trim (subs clean 5)))]
+            (if (and (js-plain-object? parsed) (own-prop? parsed "error"))
+              private-backend-error-sse
+              (when-let [reconstructed (reconstruct-private-completion parsed true)]
+                (str "data: " reconstructed "\n\n"))))
+          (catch :default _ nil))
+        :else nil))))
+
 (defn admit [state lane id digest now ttl]
   (cond
     (get-in state [:jobs id])
@@ -143,13 +1099,25 @@
 (defn read-body! [req limit]
   (js/Promise.
    (fn [resolve reject]
-     (let [parts (atom []) size (atom 0)]
+     (let [parts (atom []) size (atom 0)
+           clear-parts! (fn []
+                          (let [chunks @parts]
+                            (reset! parts [])
+                            (doseq [c chunks] (zeroize-buffer! c))))]
        (.on req "data" (fn [chunk]
                          (if (> (swap! size + (.-length chunk)) limit)
-                           (do (reject (js/Error. "body too large")) (.destroy req))
+                           (do (zeroize-buffer! chunk)
+                               (clear-parts!)
+                               (reject (js/Error. "body too large"))
+                               (.destroy req))
                            (swap! parts conj chunk))))
-       (.on req "error" reject)
-       (.on req "end" #(resolve (.concat js/Buffer (clj->js @parts))))))))
+       (.on req "error" (fn [err] (clear-parts!) (reject err)))
+       (.on req "end" (fn []
+                        (let [chunks @parts
+                              joined (.concat js/Buffer (clj->js chunks))]
+                          (reset! parts [])
+                          (doseq [c chunks] (zeroize-buffer! c))
+                          (resolve joined))))))))
 
 (defn persist! [file state]
   ;; Receipts precede dispatch. Atomic replacement prevents partial JSON after crash.
@@ -267,24 +1235,39 @@
     (fn [] nil)))
 
 (defn start! [config]
-  (let [;; one drain file for admission, health and the self-update (P5a), even
+  (let [resolved-mode (resolve-replay-mode config)
+        replay-mode-label (normalized-replay-mode resolved-mode)
+        ram-replay? (contains? privacy-replay-modes resolved-mode)
+        _ (when ram-replay?
+            (harden-process-boundary!)
+            (scan-privacy-state-dir! config))
+        resident-boot-id (.toString (.randomBytes crypto 16) "hex")
+        resident-started-at (js/Date.now)
+        resident-started-mono (mono-ms)
+        replay-ledger (when ram-replay? (make-replay-ledger config resident-boot-id resident-started-at resident-started-mono))
+        ;; one drain file for admission, health and the self-update (P5a), even
         ;; when the config does not name one
         config (cond-> config
                  (and (:state-file config) (not (:drain-file config)))
                  (assoc :drain-file (str (:state-file config) ".draining")))
         token (private-token (:token-file config))
+        admit-keys (when ram-replay? (load-admit-keys! config))
         file (:state-file config)
-        owner-file (:owner-id-file config (str file ".owner-id"))
-        existing-owner? (.existsSync fs owner-file)
-        owner-id (topo/owner-id! owner-file)
-        binding-file (str file ".bound-owner")
-        bound? (.existsSync fs binding-file)
+        owner-file (or (:owner-id-file config) (when file (str file ".owner-id")))
+        existing-owner? (boolean (and owner-file (some? (lstat-or-nil owner-file))))
+        owner-id (cond
+                   (and ram-replay? (not existing-owner?) (nil? (:topology-file config)))
+                   (.randomUUID crypto)
+                   owner-file (topo/owner-id! owner-file)
+                   :else (.randomUUID crypto))
+        binding-file (when file (str file ".bound-owner"))
+        bound? (boolean (and binding-file (some? (lstat-or-nil binding-file))))
         _ (when (and bound? (not= owner-id (topo/owner-id! binding-file)))
             (throw (js/Error. "receipt ledger owner binding mismatch")))
-        _ (when (and existing-owner? (not (.existsSync fs file))
+        _ (when (and (not ram-replay?) existing-owner? (not (.existsSync fs file))
                      (or bound? (not= owner-id (:legacy-empty-ledger-owner-id config))))
             (throw (js/Error. "receipt ledger missing for retained owner; restore its ledger or explicitly prepare a confirmed empty legacy owner")))
-        previous (if (.existsSync fs file)
+        previous (if (and (not ram-replay?) (.existsSync fs file))
                    (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys false) {"jobs" {}})
         _ (when-not (map? (get previous "jobs"))
             (throw (js/Error. "invalid receipt ledger; refusing to reuse the retained owner")))
@@ -311,9 +1294,10 @@
                                                          @converger (assoc :converge ((:status @converger)))
                                                          @roller (assoc :rollout ((:status @roller))))}))
         ;; ADR-261010: node-signed usage receipts for completed text jobs, with the
-        ;; observation key (same did); off with {:poi-receipts? false}
-        poi-file (str file ".poi-receipts.jsonl")
-        poi-key (when-not (false? (:poi-receipts? config))
+        ;; observation key (same did); mandatory off in privacy mode (INFER-PRIV-06).
+        poi-file (when file (str file ".poi-receipts.jsonl"))
+        poi-enabled? (if ram-replay? false (not (false? (:poi-receipts? config))))
+        poi-key (when (and poi-enabled? poi-file)
                   (try (observation/node-key! (or (:node-key-file config) (str file ".node-key")))
                        (catch :default _ nil)))
         ;; P3a (ADR-2610071730): plan this node's share every interval; act only
@@ -322,7 +1306,7 @@
         lease-voters (get-in (topo/payload topology) [:policies :job-voters])
         lease-acceptor (when (and topology (some #(= (:node config) (:node %)) lease-voters))
                          (lease/start-acceptor! (or (:lease-directory config)
-                                                    (str (.dirname (js/require "node:path") (:state-file config)) "/leases"))
+                                                    (str (.dirname path (:state-file config)) "/leases"))
                                                 topology))
         lease-client (when (seq lease-voters) (lease/http-client lease-voters token))
         _ (when (and observations topology (not (false? (:converge? config))))
@@ -335,9 +1319,9 @@
                                                 [(topo/key-name n) (js->clj (js/JSON.parse (topo/encoded (:payload d))))]))
                                     #(boolean (or (some some? (vals (:groups @state)))
                                                   (and job-service (pos? (count @(:active job-service)))))))))
-        save! #(persist! file @state)
-        _ (when-not (.existsSync fs file) (save!))
-        _ (when-not bound?
+        save! (if ram-replay? (fn [] nil) #(persist! file @state))
+        _ (when (and (not ram-replay?) (not (.existsSync fs file))) (save!))
+        _ (when (and (not ram-replay?) (not bound?))
             (let [fd (.openSync fs binding-file "wx" 384)]
               (try (.writeFileSync fs fd owner-id) (.fsyncSync fs fd) (finally (.closeSync fs fd)))
               (topo/sync-parent! binding-file)))
@@ -378,118 +1362,245 @@
                                   (swap! lanes assoc-in [id :probing] false)
                                   (swap! state update :groups dissoc (:group lane))))))))
         execute! (fn [req res lane-id compatibility?]
-                   (-> (read-body! req (:max-body-bytes config 2097152))
-                       (.then (fn [bytes]
-                                (if (get-in @state [:jobs (aget (.-headers req) "x-murakumo-job-id")])
-                                  bytes
-                                  (-> (check-shared-images! @lanes (get @lanes lane-id))
-                                      (.then (fn [_] bytes))))))
-                       (.then (fn [bytes]
-                                (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
-                                      lane (get @lanes lane-id)]
-                                  (-> (if (get-in @state [:jobs (aget (.-headers req) "x-murakumo-job-id")])
-                                        (js/Promise.resolve {})
-                                        (input-tokens! lane body (.-length bytes)))
-                                      (.then (fn [estimate] {:bytes bytes :input-tokens (:input-tokens estimate)}))))))
-                       (.then
-                        (fn [{:keys [bytes input-tokens]}]
-                          (let [raw-body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
-                                body (if (and compatibility? (contains? #{"mishima" "murakumo/free"} (:model raw-body)))
-                                       (assoc raw-body :model "mishima") raw-body)
-                                id (aget (.-headers req) "x-murakumo-job-id")
-                                digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")
-                                lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))
-                                request {:model (:model body) :input-tokens input-tokens
-                                         :max-tokens (output-reservation lane (or (:max_tokens body) 1024))}]
-                            (cond
-                              (.-destroyed res) nil
-                              (and (:drain-file config) (.existsSync fs (:drain-file config)))
-                              (json! res 503 {:error "resident_draining" :executed false})
-                              (and (= "text" (:kind lane)) (not (valid-output-budget? body)))
-                              (json! res 400 {:error "invalid_output_budget"})
-                              (or (nil? id) (not (re-matches #"[A-Za-z0-9_-]{8,128}" id)))
-                              (json! res 400 {:error "job_id_required"})
-                              (nil? lane) (json! res 404 {:error "lane_unknown"})
-                              (get-in @state [:jobs id])
-                              (let [seen (admit @state lane id digest (js/Date.now) 0)]
-                                (json! res (:status seen) {:error "already-seen" :job-id id :executed "unknown"}))
-                              (not (topo/role-allowed? topology (:node config) lane))
-                              (json! res 503 {:error "topology_role_unavailable" :executed false})
-                              (and (= "text" (:kind lane)) (not (eligible? lane request)))
-                              (json! res 422 {:error "model_or_context_mismatch"})
-                              (and (= "image" (:kind lane)) (not= (:model lane) (:model body)))
-                              (json! res 422 {:error "model_mismatch"})
-                              :else
-                              (let [ttl (:job-timeout-ms lane 480000)
-                                    admission (if (and (not (get-in @state [:jobs id])) (external-group-busy? @lanes lane))
-                                                {:status 429 :reason :busy :state @state}
-                                                (admit @state lane id digest (js/Date.now) ttl))]
-                                (if (not= 200 (:status admission))
-                                  (json! res (:status admission) {:error (name (:reason admission))
-                                                                 :job-id id
-                                                                 :executed (if (= :already-seen (:reason admission)) "unknown" false)})
-                                  (let [controller (js/AbortController.) settled (atom false)
-                                        settle! (fn [status]
-                                                  (when (compare-and-set! settled false true)
-                                                    (swap! state finish id status)
-                                                    (swap! controllers dissoc id)
-                                                    (save!)))
-                                        timer (js/setTimeout #(.abort controller) ttl)]
-                                    (reset! state (:state admission))
-                                    (save!)
-                                    (swap! controllers assoc id controller)
-                                    (.on res "close" #(when-not (.-writableEnded res) (.abort controller)))
-                                    (-> (ka/fetch (str (:backend lane) (:path lane))
-                                                  #js {:method "POST" :signal (.-signal controller)
-                                                       :headers #js {"content-type" "application/json"}
-                                                       :body (if (= "text" (:kind lane))
-                                                               (js/JSON.stringify (clj->js (assoc body :max_tokens (if (= "llama-template" (:input-tokenizer lane))
-                                                                                         (min (:max_tokens body 1024) (- (:context lane) input-tokens))
-                                                                                         (:max_tokens body 1024)))))
-                                                               bytes)})
-                                        (.then (fn [r]
-                                                 (.writeHead res (.-status r)
-                                                             #js {"content-type" (or (.get (.-headers r) "content-type") "application/json")
-                                                                  "x-murakumo-job-id" id
-                                                                  "x-murakumo-node" (:node config)})
-                                                 (let [stop-heartbeat! (if (and (= "text" (:kind lane)) (true? (:stream body))
-                                                                               (str/includes? (or (.get (.-headers r) "content-type") "") "text/event-stream")
-                                                                               (.-ok r))
-                                                                         (prefill-heartbeat! res (:model body) id (:heartbeat-ms config 15000))
-                                                                         (fn [] nil))
-                                                       reader (.getReader (.-body r))
-                                                       seen (atom "")
-                                                       record? (and poi-key (= "text" (:kind lane)))]
-                                                   (letfn [(pump []
-                                                             (-> (.read reader)
-                                                                 (.then (fn [chunk]
-                                                                          (stop-heartbeat!)
-                                                                          (if (.-done chunk)
-                                                                            (do (settle! (if (.-ok r) :completed :failed))
-                                                                                (.end res)
-                                                                                (when (and record? (.-ok r))
-                                                                                  (when-let [u (poi-receipt/usage-of @seen)]
-                                                                                    (poi-receipt/append! poi-file poi-key
-                                                                                                         (poi-receipt/receipt {:node (:node config) :did (:did poi-key)
-                                                                                                                               :job id :lane lane-id :model (:model body)
-                                                                                                                               :at (js/Date.now)}
-                                                                                                                              u)))))
-                                                                            (let [b (.from js/Buffer (.-value chunk))]
-                                                                              (when record? (swap! seen poi-receipt/tail (.toString b "utf8")))
-                                                                              (.write res b)
-                                                                              (pump)))))))]
-                                                     (pump)))))
-                                        (.catch (fn [_]
-                                                  (swap! lanes assoc-in [lane-id :ready] false)
-                                                  (settle! :unknown)
-                                                  (when-not (.-headersSent res)
-                                                    (json! res 502 {:error "execution_unknown" :job-id id :retryable false}))
-                                                  (when-not (.-writableEnded res) (.end res))))
-                                        (.finally #(js/clearTimeout timer))))))))))
-                       (.catch (fn [e] (when-not (.-headersSent res)
-                                        (if (backend-busy-error? e)
-                                          (json! res 429 {:error "busy" :executed false})
-                                          (json! res 400 {:error "request_failed"})))))))
+                   (if (and ram-replay? (duplicate-raw-header? req protected-admit-header-names))
+                     (json! res 400 {:error "duplicate_header" :executed false})
+                     (let [req-bytes (atom nil)
+                           send-buf (atom nil)]
+                       (-> (read-body! req (:max-body-bytes config 2097152))
+                           (.then (fn [bytes]
+                                    (reset! req-bytes bytes)
+                                    (if ram-replay?
+                                      (let [ext-id (aget (.-headers req) "x-murakumo-job-id")
+                                            wall-now (js/Date.now)
+                                            m-now (mono-ms)
+                                            max-body (:max-body-bytes config 2097152)
+                                            exp-route (expected-lane-route (get @lanes lane-id))
+                                            _ (maybe-rotate-kagishi-replay! replay-ledger m-now state controllers)
+                                            v (validate-admit-request replay-ledger (.-headers req) lane-id exp-route ext-id wall-now m-now admit-keys bytes max-body)]
+                                        (cond
+                                          (not (:ok v))
+                                          (js/Promise.resolve {:early-reject v})
+                                          (replay-seen? replay-ledger (:replay-nonce v) m-now)
+                                          (js/Promise.resolve {:early-reject {:status 409 :error "already-seen" :executed "unknown" :retryable false}})
+                                          :else
+                                          (-> (check-shared-images! @lanes (get @lanes lane-id))
+                                              (.then (fn [_] {:bytes bytes :replay-nonce (:replay-nonce v)})))))
+                                      (if (get-in @state [:jobs (aget (.-headers req) "x-murakumo-job-id")])
+                                        {:bytes bytes}
+                                        (-> (check-shared-images! @lanes (get @lanes lane-id))
+                                            (.then (fn [_] {:bytes bytes})))))))
+                           (.then (fn [{:keys [bytes early-reject replay-nonce] :as ctx}]
+                                    (if early-reject
+                                      (js/Promise.resolve ctx)
+                                      (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                                            lane (get @lanes lane-id)]
+                                        (-> (if (and (not ram-replay?) (get-in @state [:jobs (aget (.-headers req) "x-murakumo-job-id")]))
+                                              (js/Promise.resolve {})
+                                              (input-tokens! lane body (.-length bytes)))
+                                            (.then (fn [estimate] {:bytes bytes :replay-nonce replay-nonce :input-tokens (:input-tokens estimate)})))))))
+                           (.then
+                            (fn [{:keys [bytes input-tokens early-reject]}]
+                              (if early-reject
+                                (when-not (.-destroyed res)
+                                  (json! res (:status early-reject)
+                                         (cond-> {:error (:error early-reject) :executed (:executed early-reject false)}
+                                           (contains? early-reject :retryable) (assoc :retryable (:retryable early-reject))
+                                           (and (not ram-replay?) (:job-id early-reject)) (assoc :job-id (:job-id early-reject)))))
+                                (let [raw-body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                                      body (if (and compatibility? (contains? #{"mishima" "murakumo/free"} (:model raw-body)))
+                                             (assoc raw-body :model "mishima") raw-body)
+                                      ;; In privacy mode, never accept/propagate external x-murakumo-job-id;
+                                      ;; use a fresh internal CSPRNG UUIDv4 for local slot/controller maps only.
+                                      ext-id (aget (.-headers req) "x-murakumo-job-id")
+                                      id (if ram-replay? (str "priv-" (.randomUUID crypto)) ext-id)
+                                      digest (when-not ram-replay? (.digest (.update (.createHash crypto "sha256") bytes) "hex"))
+                                      lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))
+                                      request {:model (:model body) :input-tokens input-tokens
+                                               :max-tokens (output-reservation lane (or (:max_tokens body) 1024))}]
+                                  (cond
+                                    (.-destroyed res) nil
+                                    (and (:drain-file config) (.existsSync fs (:drain-file config)))
+                                    (json! res 503 {:error "resident_draining" :executed false})
+                                    (and (= "text" (:kind lane)) (not (valid-output-budget? body)))
+                                    (json! res 400 {:error "invalid_output_budget"})
+                                    (and (not ram-replay?) (or (nil? id) (not (re-matches #"[A-Za-z0-9_-]{8,128}" id))))
+                                    (json! res 400 {:error "job_id_required"})
+                                    (nil? lane) (json! res 404 {:error "lane_unknown"})
+                                    (and (not ram-replay?) (get-in @state [:jobs id]))
+                                    (let [seen (admit @state lane id digest (js/Date.now) 0)]
+                                      (json! res (:status seen) {:error "already-seen" :job-id id :executed "unknown"}))
+                                    (not (topo/role-allowed? topology (:node config) lane))
+                                    (json! res 503 {:error "topology_role_unavailable" :executed false})
+                                    (and (= "text" (:kind lane)) (not (eligible? lane request)))
+                                    (json! res 422 {:error "model_or_context_mismatch"})
+                                    (and (= "image" (:kind lane)) (not= (:model lane) (:model body)))
+                                    (json! res 422 {:error "model_mismatch"})
+                                    :else
+                                    (let [ttl (if ram-replay?
+                                                (or (:job-timeout-ms lane) (:job-timeout-ms config) default-privacy-job-timeout-ms)
+                                                (:job-timeout-ms lane default-durable-job-timeout-ms))
+                                          admission
+                                          (if ram-replay?
+                                            (let [wall-now (js/Date.now)
+                                                  m-now (mono-ms)
+                                                  max-body (:max-body-bytes config 2097152)
+                                                  exp-route (expected-lane-route lane)
+                                                  _ (maybe-rotate-kagishi-replay! replay-ledger m-now state controllers)
+                                                  v (validate-admit-request replay-ledger (.-headers req) lane-id exp-route ext-id wall-now m-now admit-keys bytes max-body)]
+                                              (if-not (:ok v)
+                                                (cond-> {:status (:status v) :reason (keyword (:error v))
+                                                         :executed (:executed v false) :raw-error (:error v)}
+                                                  (contains? v :retryable) (assoc :retryable (:retryable v)))
+                                                (admit-ram-replay! state replay-ledger @lanes lane id (:replay-nonce v) m-now)))
+                                            (if (and (not (get-in @state [:jobs id])) (external-group-busy? @lanes lane))
+                                              {:status 429 :reason :busy :state @state}
+                                              (admit @state lane id digest (js/Date.now) ttl)))]
+                                      (if (not= 200 (:status admission))
+                                        (if ram-replay?
+                                          (json! res (:status admission)
+                                                 (cond-> {:error (or (:raw-error admission) (name (:reason admission)))
+                                                          :executed (:executed admission false)}
+                                                   (contains? admission :retryable) (assoc :retryable (:retryable admission))))
+                                          (json! res (:status admission)
+                                                 {:error (name (:reason admission))
+                                                  :job-id id
+                                                  :executed (if (= :already-seen (:reason admission)) "unknown" false)}))
+                                        (let [controller (js/AbortController.) settled (atom false)
+                                              settle! (fn [status]
+                                                        (when (compare-and-set! settled false true)
+                                                          (if ram-replay?
+                                                            (do (swap! state (fn [s]
+                                                                               (if (= id (get-in s [:groups (:group lane)]))
+                                                                                 (update s :groups dissoc (:group lane))
+                                                                                 s)))
+                                                                (swap! replay-ledger update :inflight dissoc id))
+                                                            (swap! state finish id status))
+                                                          (swap! controllers dissoc id)
+                                                          (save!)))
+                                              timer (js/setTimeout #(.abort controller) ttl)
+                                              upstream-body (if (= "text" (:kind lane))
+                                                              (let [sb (js/Buffer.from
+                                                                        (js/JSON.stringify
+                                                                         (clj->js (assoc body :max_tokens (if (= "llama-template" (:input-tokenizer lane))
+                                                                                                           (min (:max_tokens body 1024) (- (:context lane) input-tokens))
+                                                                                                           (:max_tokens body 1024)))))
+                                                                        "utf8")]
+                                                                (reset! send-buf sb)
+                                                                sb)
+                                                              bytes)]
+                                          (when-not ram-replay?
+                                            (reset! state (:state admission))
+                                            (save!))
+                                          (swap! controllers assoc id controller)
+                                          (.on res "close" #(when-not (.-writableEnded res) (.abort controller)))
+                                          (let [priv-stream-active? (atom false)]
+                                          (-> (ka/fetch (str (:backend lane) (:path lane))
+                                                        #js {:method "POST" :signal (.-signal controller)
+                                                             :headers #js {"content-type" "application/json"}
+                                                             :body upstream-body})
+                                              (.then (fn [r]
+                                                       ;; Request body has been transmitted; zeroize immediately.
+                                                       (zeroize-buffer! @send-buf)
+                                                       (zeroize-buffer! @req-bytes)
+                                                       (let [ct (or (.get (.-headers r) "content-type") "application/json")
+                                                             sse? (str/includes? ct "text/event-stream")
+                                                             priv-stream? (and ram-replay? (.-ok r) (= "text" (:kind lane)) sse?)
+                                                             priv-buffer? (and ram-replay? (not priv-stream?))
+                                                             resp-headers (if ram-replay?
+                                                                            #js {"content-type" (if priv-stream? "text/event-stream" "application/json")
+                                                                                 "cache-control" "no-store"}
+                                                                            #js {"content-type" ct "x-murakumo-job-id" id "x-murakumo-node" (:node config)})]
+                                                         (when-not priv-buffer?
+                                                           (when priv-stream? (reset! priv-stream-active? true))
+                                                           (.writeHead res (.-status r) resp-headers))
+                                                         (let [stop-heartbeat! (if (and (= "text" (:kind lane)) (true? (:stream body)) sse? (.-ok r))
+                                                                                 (prefill-heartbeat! res (:model body) (if ram-replay? private-completion-id id) (:heartbeat-ms config 15000))
+                                                                                 (fn [] nil))
+                                                               reader (.getReader (.-body r))
+                                                               seen (atom "")
+                                                               json-parts (atom [])
+                                                               sse-buf (atom "")
+                                                               record? (and poi-key (= "text" (:kind lane)))]
+                                                           (letfn [(pump []
+                                                                     (-> (.read reader)
+                                                                         (.then (fn [chunk]
+                                                                                  (stop-heartbeat!)
+                                                                                  (if (.-done chunk)
+                                                                                    (do
+                                                                                      (when ram-replay?
+                                                                                        (cond
+                                                                                          (and priv-stream? (pos? (count @sse-buf)))
+                                                                                          (when-let [ev (sanitize-private-sse-line @sse-buf)]
+                                                                                            (.write res ev))
+                                                                                          priv-buffer?
+                                                                                          (let [parts @json-parts]
+                                                                                            (if (.-ok r)
+                                                                                              (let [joined (.concat js/Buffer (clj->js parts))
+                                                                                                    raw-text (try (.toString joined "utf8")
+                                                                                                                  (finally
+                                                                                                                    (zeroize-buffer! joined)
+                                                                                                                    (doseq [p parts] (zeroize-buffer! p))
+                                                                                                                    (reset! json-parts [])))
+                                                                                                    sanitized (if (= "image" (:kind lane))
+                                                                                                                (sanitize-private-image-json raw-text)
+                                                                                                                (sanitize-private-json raw-text))]
+                                                                                                (if sanitized
+                                                                                                  (do (.writeHead res (.-status r) resp-headers)
+                                                                                                      (.write res sanitized))
+                                                                                                  (do (.writeHead res 502 resp-headers)
+                                                                                                      (.write res (js/JSON.stringify #js {:error "invalid_backend_response"})))))
+                                                                                              (do (doseq [p parts] (zeroize-buffer! p))
+                                                                                                  (reset! json-parts [])
+                                                                                                  (.writeHead res (.-status r) resp-headers)
+                                                                                                  (.write res (project-private-backend-error-json nil)))))))
+                                                                                      (settle! (if (.-ok r) :completed :failed))
+                                                                                      (.end res)
+                                                                                      (when (and record? (.-ok r))
+                                                                                        (when-let [u (poi-receipt/usage-of @seen)]
+                                                                                          (poi-receipt/append! poi-file poi-key
+                                                                                                               (poi-receipt/receipt {:node (:node config) :did (:did poi-key)
+                                                                                                                                     :job id :lane lane-id :model (:model body)
+                                                                                                                                     :at (js/Date.now)}
+                                                                                                                                    u)))))
+                                                                                    (let [b (.from js/Buffer (.-value chunk))]
+                                                                                      (when record? (swap! seen poi-receipt/tail (.toString b "utf8")))
+                                                                                      (cond
+                                                                                        priv-stream?
+                                                                                        (let [combined (str @sse-buf (.toString b "utf8"))
+                                                                                              lines (str/split combined #"\n" -1)
+                                                                                              complete (butlast lines)
+                                                                                              tail (last lines)
+                                                                                              out-events (keep sanitize-private-sse-line complete)]
+                                                                                          (zeroize-buffer! b)
+                                                                                          (reset! sse-buf (or tail ""))
+                                                                                          (when (seq out-events)
+                                                                                            (.write res (apply str out-events))))
+                                                                                        priv-buffer?
+                                                                                        (if (.-ok r)
+                                                                                          (swap! json-parts conj b)
+                                                                                          (zeroize-buffer! b))
+                                                                                        :else
+                                                                                        (.write res b))
+                                                                                      (pump)))))))]
+                                                             (pump))))))
+                                              (.catch (fn [_]
+                                                        (swap! lanes assoc-in [lane-id :ready] false)
+                                                        (settle! :unknown)
+                                                        (if-not (.-headersSent res)
+                                                          (json! res 502 (if ram-replay?
+                                                                           {:error "execution_unknown" :retryable false}
+                                                                           {:error "execution_unknown" :job-id id :retryable false}))
+                                                          (when (and @priv-stream-active? (not (.-destroyed res)) (not (.-writableEnded res)))
+                                                            (try (.write res private-backend-error-sse) (catch :default _ nil))))
+                                                        (when-not (.-writableEnded res) (.end res))))
+                                              (.finally #(js/clearTimeout timer))))))))))))
+                           (.catch (fn [e] (when-not (.-headersSent res)
+                                             (if (backend-busy-error? e)
+                                               (json! res 429 {:error "busy" :executed false})
+                                               (json! res 400 {:error "request_failed"})))))
+                           (.finally (fn []
+                                       (zeroize-buffer! @send-buf)
+                                       (zeroize-buffer! @req-bytes)))))))
         server (ka/keep-alive! (.createServer http
                               (fn [req res]
                                 (cond
@@ -519,22 +1630,65 @@
                                   (json! res 401 {:error "unauthorized"})
                                   :else
                                   (cond
+                                    (and (= "GET" (.-method req)) (str/starts-with? (.-url req) "/poi/receipts"))
+                                    (json! res 404 {:error "poi_receipts_disabled"})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/estimate/"))
                                     (let [lane-id (subs (.-url req) 10)
-                                          lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))]
-                                      (if-not (and lane (= "llama-template" (:input-tokenizer lane))
-                                                   (topo/role-allowed? topology (:node config) lane))
+                                          lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))
+                                          estimate-nonce (aget (.-headers req) "x-murakumo-estimate-nonce")
+                                          dup-headers (if ram-replay?
+                                                        (conj protected-admit-header-names "x-murakumo-estimate-nonce")
+                                                        #{"x-murakumo-estimate-nonce"})]
+                                      (cond
+                                        (duplicate-raw-header? req dup-headers)
+                                        (json! res 400 {:error "duplicate_header" :executed false})
+                                        (and ram-replay? (not (valid-estimate-nonce? estimate-nonce)))
+                                        (json! res 400 {:error "invalid_estimate_nonce" :executed false})
+                                        (and (not ram-replay?) (some? estimate-nonce) (not (valid-estimate-nonce? estimate-nonce)))
+                                        (json! res 400 {:error "invalid_estimate_nonce"})
+                                        (not (and lane (= "llama-template" (:input-tokenizer lane))
+                                                  (topo/role-allowed? topology (:node config) lane)))
                                         (json! res 404 {:error "tokenizer_not_available"})
-                                        (-> (read-body! req (:max-body-bytes config 2097152))
-                                            (.then (fn [bytes]
-                                                     (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)]
-                                                       (when-not (= (:model lane) (:model body))
-                                                         (throw (js/Error. "model mismatch")))
-                                                       (-> (input-tokens! lane body (.-length bytes))
-                                                           (.then (fn [estimate]
-                                                                    (json! res 200 (assoc estimate :model (:model lane)
-                                                                      :digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")))))))))
-                                            (.catch (fn [_] (json! res 400 {:error "invalid_tokenizer_request"}))))))
+                                        :else
+                                        (let [req-bytes (atom nil)]
+                                          (-> (read-body! req (:max-body-bytes config 2097152))
+                                              (.then (fn [bytes]
+                                                       (reset! req-bytes bytes)
+                                                       (if ram-replay?
+                                                         (let [wall-now (js/Date.now)
+                                                               m-now (mono-ms)
+                                                               max-body (:max-body-bytes config 2097152)
+                                                               exp-route (expected-lane-route lane)
+                                                               ext-id (aget (.-headers req) "x-murakumo-job-id")
+                                                               _ (maybe-rotate-kagishi-replay! replay-ledger m-now state controllers)
+                                                               v (validate-admit-request replay-ledger (.-headers req) lane-id exp-route ext-id wall-now m-now admit-keys bytes max-body)]
+                                                           (cond
+                                                             (not (:ok v))
+                                                             (json! res (:status v)
+                                                                    (cond-> {:error (:error v) :executed (:executed v false)}
+                                                                      (contains? v :retryable) (assoc :retryable (:retryable v))))
+                                                             (replay-seen? replay-ledger (:replay-nonce v) m-now)
+                                                             (json! res 409 {:error "already-seen" :executed "unknown" :retryable false})
+                                                             :else
+                                                             (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)]
+                                                               (when-not (= (:model lane) (:model body))
+                                                                 (throw (js/Error. "model mismatch")))
+                                                               (-> (input-tokens! lane body (.-length bytes))
+                                                                   (.then (fn [estimate]
+                                                                            (json! res 200
+                                                                                   (assoc estimate :model (:model lane) :estimate_nonce estimate-nonce))))))))
+                                                         (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)]
+                                                           (when-not (= (:model lane) (:model body))
+                                                             (throw (js/Error. "model mismatch")))
+                                                           (-> (input-tokens! lane body (.-length bytes))
+                                                               (.then (fn [estimate]
+                                                                        (json! res 200
+                                                                               (if estimate-nonce
+                                                                                 (assoc estimate :model (:model lane) :estimate_nonce estimate-nonce)
+                                                                                 (assoc estimate :model (:model lane)
+                                                                                        :digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")))))))))))
+                                              (.catch (fn [_] (when-not (.-headersSent res) (json! res 400 {:error "invalid_tokenizer_request"}))))
+                                              (.finally (fn [] (zeroize-buffer! @req-bytes)))))))
                                     (and job-service (str/starts-with? (.-url req) "/jobs/"))
                                     (let [[id op extra] (str/split (subs (.-url req) 6) #"/")]
                                       (if (or extra (not (jobs/valid-id? id)))
@@ -575,7 +1729,10 @@
                                                  (json! res 200 (topo/summary topology))))
                                         (.catch (fn [_] (json! res 400 {:error "invalid_topology"}))))
                                     (and (= "GET" (.-method req)) (= "/health" (.-url req)))
-                                    (json! res 200 {:node (:node config) :owner-id owner-id :topology (topo/summary topology)
+                                    (json! res 200 {:node (:node config) :owner-id owner-id
+                                                   :boot_id resident-boot-id
+                                                   :replay_mode replay-mode-label
+                                                   :topology (topo/summary topology)
                                                    :jobs (when job-service {:membership (:membership job-service) :active (count @(:active job-service))})
                                                    :lanes (into {} (for [[id l] @lanes]
                                                                     [id (select-keys (assoc (qualified-lane topology (:node config) l) :ready (and (:ready (qualified-lane topology (:node config) l)) (not (and (:drain-file config) (.existsSync fs (:drain-file config))))) :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
@@ -614,16 +1771,49 @@
     (when compatibility-server (.listen compatibility-server (:compat-port config) (:compat-bind config)))
     (tick!)
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))
-          stop-watchdog! (service-watchdog! config #(.-listening server))]
-      {:server server :state state :lanes lanes
-       :close (fn [] (stop-watchdog!) (when @converger ((:close @converger))) (when @roller ((:close @roller))) (when observations ((:close observations)))
-                (when job-service ((:close job-service))) (when topology ((:close topology))) (js/clearInterval timer)
-                (doseq [[_ c] @controllers] (.abort c)) (.close server)
-                (when compatibility-server (.close compatibility-server)))})))
+          rotation-timer (when ram-replay?
+                           (let [t (js/setInterval #(maybe-rotate-kagishi-replay! replay-ledger (mono-ms) state controllers)
+                                                   (:sweep-interval-ms @replay-ledger))]
+                             (when (.-unref t) (.unref t))
+                             t))
+          stop-watchdog! (service-watchdog! config #(.-listening server))
+          closed? (atom false)
+          on-signal (atom nil)
+          close! (fn []
+                   (when (compare-and-set! closed? false true)
+                     (when-let [h @on-signal]
+                       (.removeListener js/process "SIGINT" h)
+                       (.removeListener js/process "SIGTERM" h))
+                     (stop-watchdog!)
+                     (when @converger ((:close @converger)))
+                     (when @roller ((:close @roller)))
+                     (when observations ((:close observations)))
+                     (when job-service ((:close job-service)))
+                     (when topology ((:close topology)))
+                     (js/clearInterval timer)
+                     (when rotation-timer (js/clearInterval rotation-timer))
+                     (destroy-replay-ledger! replay-ledger)
+                     (zeroize-admit-keys! admit-keys)
+                     (doseq [[_ c] @controllers] (.abort c))
+                     (.close server)
+                     (when compatibility-server (.close compatibility-server))))]
+      (when ram-replay?
+        (let [h (fn []
+                  (destroy-replay-ledger! replay-ledger)
+                  (zeroize-admit-keys! admit-keys))]
+          (reset! on-signal h)
+          (.once js/process "SIGINT" h)
+          (.once js/process "SIGTERM" h)))
+      {:server server :state state :lanes lanes :boot-id resident-boot-id :replay-ledger replay-ledger
+       :close close!})))
 
 (defn run-command [command args]
   (case command
     "serve" (let [[flag file] args]
               (when-not (and (= flag "--config") file) (throw (js/Error. "resident serve --config FILE")))
-              (start! (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys true)))
+              (let [svc (start! (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys true))
+                    shutdown! (fn [] ((:close svc)) (.exit js/process 0))]
+                (.once js/process "SIGINT" shutdown!)
+                (.once js/process "SIGTERM" shutdown!)
+                svc))
     (println "murakumo resident serve --config FILE — node-owned admission, canary and local healing")))
