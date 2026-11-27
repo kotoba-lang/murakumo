@@ -13,14 +13,17 @@
 ;;              = $1.00/枚 = fal 原価 $0.03 の 33 倍
 ;;   video / audio / 3D は価格が無く job-cost が例外を投げていた。
 ;;
-;; 原価はすべて 2026-08-03 に fal の公開カタログ（1,404 endpoint）から再取得した実価格。
-;; 実契約では未確認。この再検証で 3 件を訂正した（各エントリの :note を参照）。
+;; 原価は 2026-08-03 に fal の公開カタログ（1,404 endpoint）から初取得（3 件訂正）し、
+;; 2026-11-27 に fal 公開カタログ（1,361 endpoint + llms.txt）および OpenRouter /
+;; DeepInfra 公開 API で全行を再検証した（2 件の外部原価を更新: seedance-2.0-ref
+;; 0.1814 → 0.1864、elevenlabs-music 0.80 → 0.60。掲示クレジット価格は据え置き）。
+;; 実契約・請求書では未確認。
 ;; :verified-at が :staleness-days を超えたら見積もりを拒否する（ADR-2608026000）。
 
 {:peg          {:credits-per-usd 100 :adr "2607030030"}
- :verified-at  "2026-08-03"
+ :verified-at  "2026-11-27"
  :staleness-days 90
- :source       "fal 公開価格 / OpenRouter・DeepInfra 公開価格。実契約未確認。"
+ :source       "fal 公開カタログ・llms.txt / OpenRouter・DeepInfra 公開 API（2026-11-27 再検証）。実契約未確認。"
 
  ;; ---- text（price-taker。実勢 $0.12 in / $0.50 out の 17-20% 下）-------------
  ;; 課金単位は :mtokens（100万トークン）。:tokens は使わない —— 整数で表現できず、
@@ -108,16 +111,18 @@
                        :note "self-host。minimax-h3 と同じ H3 base の 8-step 蒸留版なので掲示は h3 と同額。原価は gad 実測 135.2s / 39f(512×512/8steps) を fps24 で 83.2 GPU秒/出力秒 と換算し、h3 と同じ $/GPU秒 を当てた。h3 の測定は 640×640 なので同解像度なら上がる"}
 
   ;; Seedance 2.0（ADR-2607170500 で結線済みの唯一の hosted engine。
-  ;; reference-to-video は動画入力があると fal 側が ×0.6 する）
-  "seedance-2.0-ref"      {:credit/per-video-second 37  :cost/usd-per-second 0.1814
+  ;; 2026-11-27 再検証: reference-to-video は動画入力ありで $0.0086016/1K tok vs
+  ;; $0.014（×0.6144、旧 ×0.6）。また入力動画+出力動画の合計尺に課金される点に注意）
+  "seedance-2.0-ref"      {:credit/per-video-second 37  :cost/usd-per-second 0.1864
                            :tier :video/frontier :engine :seedance
-                           :note "reference-to-video + 動画入力 720p（fal が ×0.6 を適用）"}
+                           :note "2026-11-27 再検証で原価を 0.1814 → 0.1864 に更新（bytedance/seedance-2.0/reference-to-video の動画入力あり単価 $0.0086016/1K tok = ×0.6144、/us/ 版は $0.1857/秒。掲示 37cr は据え置きで倍率 1.985x / 寄与率 47.3%）。動画参照時は入力+出力尺が課金対象"}
   "seedance-2.0-fast"     {:credit/per-video-second 49  :cost/usd-per-second 0.2419
                            :tier :video/frontier :engine :seedance}
   "seedance-2.0"          {:credit/per-video-second 61  :cost/usd-per-second 0.3034
                            :tier :video/frontier :engine :seedance :note "標準 720p"}
   "seedance-2.0-1080p"    {:credit/per-video-second 137 :cost/usd-per-second 0.682
-                           :tier :video/frontier :engine :seedance}
+                           :tier :video/frontier :engine :seedance
+                           :note "標準 1080p（非 US 版 $0.682/秒。/us/ 版は $0.7484/秒だが 137cr でも倍率 1.83x / 寄与率 42.9%）"}
 
   ;; Veo 3.1 系（ADR-2608026200 §3-2）
   "veo-3.1-fast"      {:credit/per-video-second 35  :cost/usd-per-second 0.10
@@ -167,10 +172,15 @@
                         :note "自前 TRELLIS。原価は fal の同等品を代理値として使用 —— 実測したら差し替える"}}
 
  ;; ---- voice / music ---------------------------------------------------------
+ ;; ⚠ :engine :tts は自前ホスト想定の代理原価 $0.01/1K文字。
+ ;;   2026-11-27 再検証: DeepInfra hexgrad/Kokoro-82M は $0.00099/1K文字だが、
+ ;;   fal-ai/kokoro/* は $0.02/1K文字（掲示 2cr = $0.02 に対し赤字）なので、
+ ;;   価格改定なしで fal へフォールバックしないこと。
  :voice
  {"cosyvoice2" {:credit/per-ktext 2 :cost/usd-per-ktext 0.01 :engine :tts
-                :note "1,000 文字あたり"}
-  "kokoro"     {:credit/per-ktext 2 :cost/usd-per-ktext 0.01 :engine :tts}}
+                :note "1,000 文字あたり（自前ホスト想定・実原価未実測）"}
+  "kokoro"     {:credit/per-ktext 2 :cost/usd-per-ktext 0.01 :engine :tts
+                :note "1,000 文字あたり（自前ホスト想定・実原価未実測。fal-ai/kokoro は $0.02/1K文字のため無改定フォールバック禁止）"}}
 
  :music
  {"ace-step"          {:credit/per-audio-second 0.1 :cost/usd-per-second 0.0002
@@ -200,6 +210,6 @@
   ;; **赤字**。floor テストは『宣言された原価』しか見ないので、この次元不一致は
   ;; 素通りした。**ベンダが課金する次元と同じ次元で値付けする** ことが唯一の
   ;; 再発防止で、秒割りに戻さないこと。
-  "elevenlabs-music"  {:credit/per-audio-minute 160 :cost/usd-per-minute 0.80
+  "elevenlabs-music"  {:credit/per-audio-minute 160 :cost/usd-per-minute 0.60
                        :cost/billing-granularity-seconds 60 :engine :fal
-                       :note "分単位・切り上げ課金。秒割りにしない"}}}
+                       :note "分単位・切り上げ課金。秒割りにしない。2026-11-27 再検証で fal-ai/elevenlabs/music 原価が $0.80 → $0.60/分へ値下げされたことを確認（掲示 160cr は据え置き、寄与率 47.7% → 60.8%）"}}}

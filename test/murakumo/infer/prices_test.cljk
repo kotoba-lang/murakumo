@@ -51,11 +51,12 @@
 
 (deftest stale-registry-refuses-to-quote
   (testing "原価が古いレジストリでは見積もらない（ADR-2608026000）"
-    (is (false? (p/stale? reg "2026-08-02")))
-    (is (false? (p/stale? reg "2026-10-30")) "90 日以内は fresh")
-    (is (true?  (p/stale? reg "2026-12-01")) "90 日超は stale")
+    ;; :verified-at "2026-11-27" + :staleness-days 90 → 2027-02-25 まで fresh、2027-02-26 から stale
+    (is (false? (p/stale? reg "2026-11-27")))
+    (is (false? (p/stale? reg "2027-02-25")) "90 日以内は fresh")
+    (is (true?  (p/stale? reg "2027-02-26")) "90 日超は stale")
     (is (thrown-with-msg? Exception #"stale"
-                          (p/price-for reg :video "seedance-2.0" "2026-12-01")))))
+                          (p/price-for reg :video "seedance-2.0" "2027-02-26")))))
 
 (deftest the-two-broken-prices-cannot-come-back
   (testing "text: 1 credit/token（= $10,000/Mtok、実勢の 20,000 倍）は二度と価格にならない"
@@ -202,16 +203,24 @@
           "30 秒の出力も 1 分として課金する（fal がそう課金するから）"))))
 
 (deftest measured-costs-match-the-vendor
-  (testing "2026-08-03 に fal カタログから再取得した実価格と一致する"
+  (testing "2026-11-27 に fal カタログ・llms.txt から再検証した実価格と一致する"
     (is (== 0.10 (:cost/usd-per-second (p/price-for reg :video "veo-3.1-fast")))
         "fal-ai/veo3.1/fast は音声なしで $0.10/秒。旧宣言 $0.18 は過大だった")
     (is (== 0.40 (:cost/usd-per-second (p/price-for reg :video "veo-3.1")))
         "fal-ai/veo3.1 は音声ありで $0.40/秒")
+    (is (== 0.1864 (:cost/usd-per-second (p/price-for reg :video "seedance-2.0-ref")))
+        "bytedance/seedance-2.0/reference-to-video は動画入力あり $0.0086016/1K tok（×0.6144）")
     (is (== 0.2419 (:cost/usd-per-second (p/price-for reg :video "seedance-2.0-fast"))))
     (is (== 0.0675 (:cost/usd-per-image (p/price-for reg :image "seedream-v5-pro")))
-        "現行は v5 pro。v4 は fal のカタログに存在しない"))
+        "現行は v5 pro。v4 は fal のカタログに存在しない")
+    (is (== 0.60 (:cost/usd-per-minute (p/price-for reg :music "elevenlabs-music")))
+        "fal-ai/elevenlabs/music は 2026-11-27 時点で $0.60/分（切り上げ）"))
   (testing "原価が下がっても掲示価格は据え置き、粗利として受け取る"
     (let [m (p/price-for reg :video "veo-3.1-fast")]
       (is (= 35 (:credit/per-video-second m)))
       (is (> (p/contribution-rate reg 35 (:cost/usd-per-second m)) 0.65)
-          "原価訂正で寄与率は 49% → 70% 台へ"))))
+          "原価訂正で寄与率は 49% → 70% 台へ"))
+    (let [m (p/price-for reg :music "elevenlabs-music")]
+      (is (= 160 (:credit/per-audio-minute m)))
+      (is (> (p/contribution-rate reg 160 (:cost/usd-per-minute m)) 0.60)
+          "原価値下げ（$0.80 → $0.60）で寄与率は 47.7% → 60.8% へ"))))
