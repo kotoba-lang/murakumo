@@ -1398,17 +1398,15 @@ test('TEST-INFER-PRIV-09: strict allowlist reconstruction of success JSON, SSE c
   assert.equal(nonEmptyLines.at(-1),'data: [DONE]');
 
   if(via==='gateway')await waitGwFree();
-  // 3) Error JSON: only allowlisted error.{message,type,code,param} survive
+  // 3) Error JSON: backend-originated error.* fields NEVER pass through -> fixed static {error:"backend_error"}
   const errJsonBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'ERR_JSON'}]});
   const errJsonRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(token,{owner:'priv09-node',lane:'text',boot:bootId,body:errJsonBody,privateKey:kp.privateKey}).headers,body:errJsonBody});
   assert.equal(errJsonRes.status,400,`${via} error JSON status`);
   const errJsonRaw=await errJsonRes.text();
-  for(const forbidden of ['LEAK_','backend_sig','signature','x-murakumo-','unknown_meta']){
+  for(const forbidden of ['LEAK_','backend_sig','signature','x-murakumo-','unknown_meta','bad prompt','invalid_request_error','bad_req']){
    assert.ok(!errJsonRaw.includes(forbidden),`${via} error JSON must strip ${forbidden}; got: ${errJsonRaw}`);
   }
-  assert.deepEqual(JSON.parse(errJsonRaw),{
-   error:{message:'bad prompt',type:'invalid_request_error',code:'bad_req',param:null}
-  });
+  assert.deepEqual(JSON.parse(errJsonRaw),{error:'backend_error'});
 
   if(via==='gateway')await waitGwFree();
   // 4) Non-JSON plain error: never passed through raw -> reconstructed to {error:"backend_error"}
@@ -1586,4 +1584,401 @@ test('TEST-INFER-PRIV-10: buffer zeroization unit & live HTTP behavior (read-bod
  await writeFile(join(cljDir,'nbb.edn'),'{:paths []}\n');
  const {stdout:cljOut}=await execFileAsync('kbb',['--backend','sci','--classpath',join(root,'src'),'-e',verifyZeroClj],{cwd:cljDir,encoding:'utf8'});
  assert.match(cljOut,/PRIV10_ZEROIZE_OK/);
+});
+
+test('TEST-INFER-PRIV-11: privacy-mode backend error projection onto fixed static constants across resident & fleet_gateway (JSON + SSE + rogue peer) while preserving Node protocol error codes and executed',async t=>{
+ // Part A: Direct unit tests of resident backend error projector, inter-node error sanitizer, and SSE error projector
+ const unitClj=`
+ (require '[murakumo.infer.resident :as r])
+ (let [tok "CORR_UNIT_TOKEN_987654"
+       ;; 1) project-private-backend-error-json ALWAYS returns fixed {"error":"backend_error"}
+       _ (doseq [raw [(js/JSON.stringify #js {:error tok})
+                      (js/JSON.stringify #js {:error #js {:message tok :type (str "t-" tok) :code (str "c-" tok) :param (str "p-" tok)}})
+                      (js/JSON.stringify #js {:error "already-seen" :executed "unknown" :retryable false})
+                      (str "plain " tok)]]
+           (let [out (r/project-private-backend-error-json raw)]
+             (when (or (not= out "{\\"error\\":\\"backend_error\\"}") (.includes out tok))
+               (throw (js/Error. (str "backend projector leaked: " out))))))
+       ;; 2) sanitize-private-error-json (gateway inter-node layer) projects arbitrary strings & nested error.* to {"error":"backend_error"}
+       _ (doseq [raw [(js/JSON.stringify #js {:error tok :executed false :retryable true})
+                      (js/JSON.stringify #js {:error #js {:message tok :type "invalid_request_error" :code tok :param tok}})
+                      (js/JSON.stringify #js {:error #js {:message "already-seen"}})
+                      (js/JSON.stringify #js {:error "backend_error" :executed false :retryable true :extra tok})
+                      (str "non-json " tok)]]
+           (let [out (r/sanitize-private-error-json raw)]
+             (when (or (not= out "{\\"error\\":\\"backend_error\\"}") (.includes out tok))
+               (throw (js/Error. (str "gateway error sanitizer leaked: " out))))))
+       ;; 3) sanitize-private-error-json preserves known static Node protocol codes + executed/retryable, stripping extra/forged fields
+       p1 (js/JSON.parse (r/sanitize-private-error-json (js/JSON.stringify #js {:error "already-seen" :executed "unknown" :retryable false :backend_sig tok})))
+       _ (when-not (and (= "already-seen" (.-error p1)) (= "unknown" (.-executed p1)) (false? (.-retryable p1)) (nil? (aget p1 "backend_sig")))
+           (throw (js/Error. (str "failed to preserve already-seen: " (js/JSON.stringify p1)))))
+       p2 (js/JSON.parse (r/sanitize-private-error-json (js/JSON.stringify #js {:error "boot_id_mismatch" :executed "unknown" :retryable false :extra tok})))
+       _ (when-not (and (= "boot_id_mismatch" (.-error p2)) (= "unknown" (.-executed p2)) (false? (.-retryable p2)) (nil? (aget p2 "extra")))
+           (throw (js/Error. (str "failed to preserve boot_id_mismatch: " (js/JSON.stringify p2)))))
+       p3 (js/JSON.parse (r/sanitize-private-error-json (js/JSON.stringify #js {:error "upstream_error" :executed tok})))
+       _ (when-not (and (= "upstream_error" (.-error p3)) (nil? (.-executed p3)))
+           (throw (js/Error. (str "failed to sanitize forged executed: " (js/JSON.stringify p3)))))
+       ;; 4) sanitize-private-sse-line projects SSE error frames onto fixed static data: {"error":"backend_error"}
+       _ (doseq [line [(str "data: " (js/JSON.stringify #js {:error #js {:message tok :type tok :code tok :param tok}}))
+                       (str "data: " (js/JSON.stringify #js {:error tok}))
+                       (str "data: " (js/JSON.stringify #js {:error #js {:message tok} :choices #js [#js {:index 0 :delta #js {:content tok}}]}))]]
+           (let [out (r/sanitize-private-sse-line line)]
+             (when (or (not= out "data: {\\"error\\":\\"backend_error\\"}\\n\\n") (.includes out tok))
+               (throw (js/Error. (str "sse error projector leaked: " out))))))
+       ;; 5) sanitize-private-json rejects 200 JSON containing an error field
+       _ (when-not (nil? (r/sanitize-private-json (js/JSON.stringify #js {:error #js {:message tok}})))
+           (throw (js/Error. "200 JSON with error field was not rejected")))]
+   (println "PRIV11_UNIT_OK"))
+ `;
+ const cljDir=await mkdtemp(join(tmpdir(),'murakumo-priv11-clj-'));
+ t.after(()=>rm(cljDir,{recursive:true,force:true}));
+ await writeFile(join(cljDir,'nbb.edn'),'{:paths []}\n');
+ const {stdout:unitOut}=await execFileAsync('kbb',['--backend','sci','--classpath',join(root,'src'),'-e',unitClj],{cwd:cljDir,encoding:'utf8'});
+ assert.match(unitOut,/PRIV11_UNIT_OK/);
+
+ // Part B: Live loopback HTTP tests across BOTH resident directly AND fleet_gateway -> resident
+ const dir=await mkdtemp(join(tmpdir(),'murakumo-priv11-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const fleetToken=randomBytes(32).toString('hex');
+ const inboundToken=randomBytes(32).toString('hex');
+ const fleetTokenFile=join(dir,'fleet.token');
+ const inboundTokenFile=join(dir,'inbound.token');
+ await writeFile(fleetTokenFile,fleetToken,{mode:0o600});
+ await writeFile(inboundTokenFile,inboundToken,{mode:0o600});
+ const kp=makeEd25519Keypair();
+ const fleetAuth={authorization:`Bearer ${fleetToken}`};
+ const inboundAuth={authorization:`Bearer ${inboundToken}`};
+
+ const CORR_TOKENS=[
+  'CORR_TOP_STR_A1B2C3',
+  'CORR_OBJ_MSG_D4E5F6',
+  'CORR_OBJ_TYPE_G7H8I9',
+  'CORR_OBJ_CODE_J0K1L2',
+  'CORR_OBJ_PARAM_M3N4O5',
+  'CORR_200_ERR_P6Q7R8',
+  'CORR_SSE_OBJ_MSG_S9T0U1',
+  'CORR_SSE_OBJ_TYPE_V2W3X4',
+  'CORR_SSE_OBJ_CODE_Y5Z6A7',
+  'CORR_SSE_TOP_STR_B8C9D0',
+  'CORR_SSE_HYBRID_E1F2G3',
+  'CORR_SSE_503_H4I5J6',
+  'CORR_GW_ROGUE_JSON_K7L8M9',
+  'CORR_GW_ROGUE_STR_N0O1P2',
+  'CORR_GW_ROGUE_SSE_Q3R4S5',
+  'CORR_GW_ROGUE_EST_T6U7V8'
+ ];
+ function assertZeroCorrTokens(rawText,label){
+  for(const tok of CORR_TOKENS){
+   assert.ok(!rawText.includes(tok),`${label} MUST NOT contain correlation token ${tok}; got: ${rawText}`);
+  }
+ }
+
+ const advBackend=createServer((req,res)=>{
+  if(req.url==='/slots')return res.end(JSON.stringify([{is_processing:false}]));
+  let data='';
+  req.on('data',b=>data+=b);
+  req.on('end',()=>{
+   const body=JSON.parse(data);
+   const content=body.messages?.[0]?.content??'';
+   if(content.startsWith('2+3'))return res.end(JSON.stringify({choices:[{message:{content:'5'}}]}));
+   if(content==='BACKEND_ERR_TOP_STR'){
+    res.writeHead(502,{'content-type':'application/json'});
+    return res.end(JSON.stringify({error:'CORR_TOP_STR_A1B2C3',executed:false,retryable:true}));
+   }
+   if(content==='BACKEND_ERR_OBJ'){
+    res.writeHead(400,{'content-type':'application/json'});
+    return res.end(JSON.stringify({
+     error:{
+      message:'upstream failed: CORR_OBJ_MSG_D4E5F6',
+      type:'CORR_OBJ_TYPE_G7H8I9',
+      code:'CORR_OBJ_CODE_J0K1L2',
+      param:'CORR_OBJ_PARAM_M3N4O5'
+     }
+    }));
+   }
+   if(content==='BACKEND_ERR_504_FORGE'){
+    // Backend tries to spoof a known Murakumo protocol code + executed field
+    res.writeHead(504,{'content-type':'application/json'});
+    return res.end(JSON.stringify({error:'already-seen',executed:false,retryable:true,detail:'CORR_TOP_STR_A1B2C3'}));
+   }
+   if(content==='BACKEND_ERR_200_JSON'){
+    res.writeHead(200,{'content-type':'application/json'});
+    return res.end(JSON.stringify({error:{message:'CORR_200_ERR_P6Q7R8',type:'server_error',code:'CORR_OBJ_CODE_J0K1L2'}}));
+   }
+   if(content==='BACKEND_SSE_ERR_FRAME'){
+    res.writeHead(200,{'content-type':'text/event-stream'});
+    res.write('data: '+JSON.stringify({id:'b-sse-1',object:'chat.completion.chunk',created:1764240000,model:'mishima',choices:[{index:0,delta:{role:'assistant',content:'PARTIAL_OK'},finish_reason:null}]})+'\n\n');
+    res.write('event: error\n');
+    res.write('data: '+JSON.stringify({error:{message:'CORR_SSE_OBJ_MSG_S9T0U1',type:'CORR_SSE_OBJ_TYPE_V2W3X4',code:'CORR_SSE_OBJ_CODE_Y5Z6A7',param:'p'}})+'\n\n');
+    res.write('data: '+JSON.stringify({error:'CORR_SSE_TOP_STR_B8C9D0'})+'\n\n');
+    res.write('data: '+JSON.stringify({error:{message:'CORR_SSE_HYBRID_E1F2G3'},choices:[{index:0,delta:{content:'CORR_SSE_HYBRID_E1F2G3'}}]})+'\n\n');
+    res.write('data: [DONE]\n\n');
+    return res.end();
+   }
+   if(content==='BACKEND_SSE_503'){
+    res.writeHead(503,{'content-type':'text/event-stream'});
+    return res.end('data: '+JSON.stringify({error:{message:'CORR_SSE_503_H4I5J6'}})+'\n\n');
+   }
+   if(content==='BACKEND_SSE_MID_ABORT'){
+    res.writeHead(200,{'content-type':'text/event-stream'});
+    res.flushHeaders();
+    res.write('data: '+JSON.stringify({id:'b-sse-2',object:'chat.completion.chunk',created:1764240000,model:'mishima',choices:[{index:0,delta:{role:'assistant',content:'BEFORE_ABORT'},finish_reason:null}]})+'\n\n');
+    return setTimeout(()=>res.destroy(),30);
+   }
+   if(content==='BACKEND_DISCONNECT_502'){
+    return setTimeout(()=>res.destroy(),20);
+   }
+   res.writeHead(200,{'content-type':'application/json'});
+   res.end(JSON.stringify({id:'b-ok',object:'chat.completion',choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}]}));
+  });
+ });
+ advBackend.listen(0,'127.0.0.1');
+ await once(advBackend,'listening');
+ t.after(()=>{advBackend.closeAllConnections();advBackend.close();});
+
+ const rp=await port(),gp=await port();
+ const rUrl=`http://127.0.0.1:${rp}`,gUrl=`http://127.0.0.1:${gp}`;
+ const rCfg={
+  node:'priv11-node',bind:'127.0.0.1',port:rp,
+  'token-file':fleetTokenFile,'state-file':join(dir,'receipts.json'),
+  'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),
+  'observations?':false,'probe-interval-ms':200,'replay-max-entries':100,
+  lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',
+    backend:`http://127.0.0.1:${advBackend.address().port}`,path:'/v1/chat/completions'}}
+ };
+ const gCfg={
+  node:'priv11-gw',bind:'127.0.0.1',port:gp,
+  'token-file':fleetTokenFile,'inbound-token-file':inboundTokenFile,
+  'inbound-allowed-routes':['GET /health','POST /v1/chat/completions'],
+  'replay-ledger-mode':'kagishi-ram','probe-interval-ms':40,
+  peers:[{node:'priv11-node',url:rUrl}]
+ };
+ const rPath=join(dir,'r.json'),gPath=join(dir,'g.json');
+ await writeFile(rPath,JSON.stringify(rCfg));await writeFile(gPath,JSON.stringify(gCfg));
+ const rProc=spawn(process.execPath,[cli,'resident','serve','--config',rPath],{cwd:dir,stdio:'ignore'});
+ const gProc=spawn(process.execPath,[cli,'gateway','serve','--config',gPath],{cwd:dir,stdio:'ignore'});
+ t.after(()=>{rProc.kill('SIGTERM');gProc.kill('SIGTERM');});
+
+ const waitReady=()=>wait(async()=>{
+  const rh=await(await fetch(rUrl+'/health',{headers:fleetAuth})).json();
+  const gh=await(await fetch(gUrl+'/health',{headers:inboundAuth})).json();
+  return rh.lanes?.text?.ready&&rh.lanes?.text?.busy===false
+   &&gh.peers?.['priv11-node']?.lanes?.text?.ready&&gh.peers?.['priv11-node']?.lanes?.text?.busy===false;
+ });
+ await waitReady();
+ const {boot_id:bootId}=await(await fetch(rUrl+'/health',{headers:fleetAuth})).json();
+
+ for(const [via,endpoint,tok] of [['resident',rUrl+'/execute/text',fleetToken],['gateway',gUrl+'/v1/chat/completions',inboundToken]]){
+  // 1) Top-level backend error string (502) -> fixed {error:"backend_error"}
+  await waitReady();
+  const topBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'BACKEND_ERR_TOP_STR'}]});
+  const topRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:topBody,privateKey:kp.privateKey}).headers,body:topBody});
+  assert.equal(topRes.status,502,`${via} top-str status`);
+  const topRaw=await topRes.text();
+  assertZeroCorrTokens(topRaw,`${via} top-str`);
+  assert.deepEqual(JSON.parse(topRaw),{error:'backend_error'});
+
+  // 2) Nested backend error.{message,type,code,param} (400) -> fixed {error:"backend_error"}
+  await waitReady();
+  const objBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'BACKEND_ERR_OBJ'}]});
+  const objRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:objBody,privateKey:kp.privateKey}).headers,body:objBody});
+  assert.equal(objRes.status,400,`${via} nested-obj status`);
+  const objRaw=await objRes.text();
+  assertZeroCorrTokens(objRaw,`${via} nested-obj`);
+  assert.deepEqual(JSON.parse(objRaw),{error:'backend_error'});
+
+  // 3) Backend attempting to spoof Node protocol code + executed on 504 -> fixed {error:"backend_error"}
+  await waitReady();
+  const forgeBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'BACKEND_ERR_504_FORGE'}]});
+  const forgeRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:forgeBody,privateKey:kp.privateKey}).headers,body:forgeBody});
+  assert.equal(forgeRes.status,504,`${via} forge-504 status`);
+  const forgeRaw=await forgeRes.text();
+  assertZeroCorrTokens(forgeRaw,`${via} forge-504`);
+  assert.deepEqual(JSON.parse(forgeRaw),{error:'backend_error'});
+
+  // 4) Backend returning HTTP 200 JSON with error object -> fails closed 502 {error:"invalid_backend_response"}
+  await waitReady();
+  const err200Body=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'BACKEND_ERR_200_JSON'}]});
+  const err200Res=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:err200Body,privateKey:kp.privateKey}).headers,body:err200Body});
+  assert.equal(err200Res.status,502,`${via} 200-err-json status`);
+  const err200Raw=await err200Res.text();
+  assertZeroCorrTokens(err200Raw,`${via} 200-err-json`);
+  assert.deepEqual(JSON.parse(err200Raw),{error:'invalid_backend_response'});
+
+  // 5) Backend SSE stream error frames (nested obj, top string, hybrid with delta) -> fixed data: {"error":"backend_error"}
+  await waitReady();
+  const sseErrBody=JSON.stringify({model:'mishima',max_tokens:16,stream:true,messages:[{role:'user',content:'BACKEND_SSE_ERR_FRAME'}]});
+  const sseErrRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:sseErrBody,privateKey:kp.privateKey}).headers,body:sseErrBody});
+  assert.equal(sseErrRes.status,200,`${via} sse-err-frame status`);
+  const sseErrRaw=await sseErrRes.text();
+  assertZeroCorrTokens(sseErrRaw,`${via} sse-err-frame`);
+  const sseErrLines=sseErrRaw.split('\n').filter(Boolean);
+  assert.ok(sseErrLines.every(l=>l.startsWith('data: ')),`${via} sse-err-frame only data: lines`);
+  const sseErrEvents=sseErrLines.filter(l=>l!=='data: [DONE]').map(l=>JSON.parse(l.slice(6)));
+  assert.deepEqual(sseErrEvents,[
+   {id:'chatcmpl-private',object:'chat.completion.chunk',created:1764240000,model:'mishima',choices:[{index:0,delta:{role:'assistant',content:'PARTIAL_OK'},finish_reason:null}]},
+   {error:'backend_error'},
+   {error:'backend_error'},
+   {error:'backend_error'}
+  ]);
+  assert.equal(sseErrLines.at(-1),'data: [DONE]');
+
+  // 6) Backend non-2xx text/event-stream (503) -> fixed 503 JSON {error:"backend_error"}
+  await waitReady();
+  const sse503Body=JSON.stringify({model:'mishima',max_tokens:16,stream:true,messages:[{role:'user',content:'BACKEND_SSE_503'}]});
+  const sse503Res=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:sse503Body,privateKey:kp.privateKey}).headers,body:sse503Body});
+  assert.equal(sse503Res.status,503,`${via} sse-503 status`);
+  const sse503Raw=await sse503Res.text();
+  assertZeroCorrTokens(sse503Raw,`${via} sse-503`);
+  assert.deepEqual(JSON.parse(sse503Raw),{error:'backend_error'});
+
+  // 7) Mid-stream SSE backend disconnect -> fixed data: {"error":"backend_error"} frame
+  await waitReady();
+  const sseAbortBody=JSON.stringify({model:'mishima',max_tokens:16,stream:true,messages:[{role:'user',content:'BACKEND_SSE_MID_ABORT'}]});
+  const sseAbortRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:sseAbortBody,privateKey:kp.privateKey}).headers,body:sseAbortBody});
+  assert.equal(sseAbortRes.status,200,`${via} sse-mid-abort status`);
+  const sseAbortRaw=await sseAbortRes.text();
+  assertZeroCorrTokens(sseAbortRaw,`${via} sse-mid-abort`);
+  const sseAbortEvents=sseAbortRaw.split('\n').filter(l=>l.startsWith('data: ')&&l!=='data: [DONE]').map(l=>JSON.parse(l.slice(6)));
+  assert.ok(sseAbortEvents.some(e=>e.choices?.[0]?.delta?.content==='BEFORE_ABORT'),`${via} mid-abort keeps initial chunk`);
+  assert.deepEqual(sseAbortEvents.at(-1),{error:'backend_error'},`${via} mid-abort emits fixed static SSE error`);
+
+  // 8) Verify Node's own known protocol error codes and executed/retryable remain intact!
+  await waitReady();
+  // 8a. 409 duplicate replay nonce -> {error:"already-seen", executed:"unknown", retryable:false}
+  const dupNonce=randomBytes(16).toString('hex');
+  const dupBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:`dup-${via}`}]});
+  const dupHdrs=wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:dupBody,nonce:dupNonce,privateKey:kp.privateKey}).headers;
+  assert.equal((await fetch(endpoint,{method:'POST',headers:dupHdrs,body:dupBody})).status,200);
+  await waitReady();
+  const dupRes=await fetch(endpoint,{method:'POST',headers:dupHdrs,body:dupBody});
+  assert.equal(dupRes.status,409,`${via} duplicate must preserve 409`);
+  assert.deepEqual(await dupRes.json(),{error:'already-seen',executed:'unknown',retryable:false});
+
+  // 8b. 410 stale boot_id -> {error:"boot_id_mismatch", executed:"unknown", retryable:false}
+  const staleRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:'f'.repeat(32),body:dupBody,privateKey:kp.privateKey}).headers,body:dupBody});
+  assert.equal(staleRes.status,410,`${via} stale boot must preserve 410`);
+  assert.deepEqual(await staleRes.json(),{error:'boot_id_mismatch',executed:'unknown',retryable:false});
+
+  // 8c. 403 invalid Wire v1 sig -> {error:"invalid_admit_sig", executed:false}
+  const badSigRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:dupBody+' ',privateKey:kp.privateKey}).headers,body:dupBody});
+  assert.equal(badSigRes.status,403,`${via} bad sig must preserve 403`);
+  assert.deepEqual(await badSigRes.json(),{error:'invalid_admit_sig',executed:false});
+
+  // 8d. 502 backend disconnect before headers -> {error:"execution_unknown", retryable:false}
+  await waitReady();
+  const discBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'BACKEND_DISCONNECT_502'}]});
+  const discRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(tok,{owner:'priv11-node',lane:'text',boot:bootId,body:discBody,privateKey:kp.privateKey}).headers,body:discBody});
+  assert.equal(discRes.status,502,`${via} disconnect must preserve 502`);
+  assert.deepEqual(await discRes.json(),{error:'execution_unknown',retryable:false});
+ }
+
+ // 8e. Gateway-originated 401 unauthorized and 403 route_not_allowed remain intact
+ assert.deepEqual(await(await fetch(gUrl+'/v1/chat/completions',{method:'POST',body:sampleBody})).json(),{error:'unauthorized'});
+ const disRoute=await fetch(gUrl+'/v1/images/generations',{method:'POST',headers:inboundAuth,body:'{}'});
+ assert.equal(disRoute.status,403);
+ assert.deepEqual(await disRoute.json(),{error:'route_not_allowed'});
+
+ // Part C: Defense-in-depth — fleet_gateway DIRECTLY against a rogue resident that leaks raw backend errors on JSON, SSE, and /estimate
+ const rogueBoot=randomBytes(16).toString('hex');
+ const rogueResident=createServer((req,res)=>{
+  if(req.url==='/health'){
+   return res.end(JSON.stringify({
+    node:'rogue-priv',boot_id:rogueBoot,replay_mode:'kagishi-ram',
+    lanes:{text:{kind:'text',model:'mishima',context:32768,'input-tokenizer':'llama-template',ready:true,busy:false}}
+   }));
+  }
+  let data='';
+  req.on('data',b=>data+=b);
+  req.on('end',()=>{
+   const body=JSON.parse(data);
+   const content=body.messages?.[0]?.content??'';
+   if(req.url==='/estimate/text'){
+    if(content==='ROGUE_EST_ERR'){
+     res.writeHead(400,{'content-type':'application/json'});
+     return res.end(JSON.stringify({error:{message:'CORR_GW_ROGUE_EST_T6U7V8',code:'CORR_GW_ROGUE_EST_T6U7V8'}}));
+    }
+    const estNonce=req.headers['x-murakumo-estimate-nonce'];
+    res.writeHead(200,{'content-type':'application/json'});
+    return res.end(JSON.stringify({model:'mishima','input-tokens':32,source:'backend-tokenizer',estimate_nonce:estNonce}));
+   }
+   if(content==='ROGUE_JSON_OBJ'){
+    res.writeHead(400,{'content-type':'application/json'});
+    return res.end(JSON.stringify({error:{message:'CORR_GW_ROGUE_JSON_K7L8M9',type:'CORR_GW_ROGUE_JSON_K7L8M9',code:'CORR_GW_ROGUE_JSON_K7L8M9'}}));
+   }
+   if(content==='ROGUE_JSON_STR'){
+    res.writeHead(500,{'content-type':'application/json'});
+    return res.end(JSON.stringify({error:'CORR_GW_ROGUE_STR_N0O1P2',executed:false}));
+   }
+   if(content==='ROGUE_SSE_ERR'){
+    res.writeHead(200,{'content-type':'text/event-stream'});
+    res.write('data: '+JSON.stringify({error:{message:'CORR_GW_ROGUE_SSE_Q3R4S5',type:'CORR_GW_ROGUE_SSE_Q3R4S5',code:'CORR_GW_ROGUE_SSE_Q3R4S5'}})+'\n\n');
+    res.write('data: '+JSON.stringify({error:'CORR_GW_ROGUE_SSE_Q3R4S5'})+'\n\n');
+    res.write('data: [DONE]\n\n');
+    return res.end();
+   }
+   if(content==='ROGUE_PROTO_409'){
+    res.writeHead(409,{'content-type':'application/json'});
+    return res.end(JSON.stringify({error:'already-seen',executed:'unknown',retryable:false,extra_leak:'CORR_GW_ROGUE_JSON_K7L8M9'}));
+   }
+   res.writeHead(200,{'content-type':'application/json'});
+   res.end(JSON.stringify({id:'rogue-ok',object:'chat.completion',choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}]}));
+  });
+ });
+ rogueResident.listen(0,'127.0.0.1');
+ await once(rogueResident,'listening');
+ t.after(()=>{rogueResident.closeAllConnections();rogueResident.close();});
+
+ const rgp=await port();
+ const rgUrl=`http://127.0.0.1:${rgp}`;
+ const rgPath=join(dir,'rg.json');
+ await writeFile(rgPath,JSON.stringify({
+  node:'priv11-rogue-gw',bind:'127.0.0.1',port:rgp,
+  'token-file':fleetTokenFile,'replay-ledger-mode':'kagishi-ram','probe-interval-ms':40,
+  peers:[{node:'rogue-priv',url:`http://127.0.0.1:${rogueResident.address().port}`}]
+ }));
+ const rgProc=spawn(process.execPath,[cli,'gateway','serve','--config',rgPath],{cwd:dir,stdio:'ignore'});
+ t.after(()=>rgProc.kill('SIGTERM'));
+ await wait(async()=>(await(await fetch(rgUrl+'/health',{headers:fleetAuth})).json()).peers?.['rogue-priv']?.lanes?.text?.ready);
+
+ // Rogue /estimate 400 error -> gateway projects to fixed {error:"backend_error"}
+ const rEstBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'ROGUE_EST_ERR'}]});
+ const rEstRes=await fetch(rgUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(fleetToken,{owner:'rogue-priv',lane:'text',boot:rogueBoot,body:rEstBody,privateKey:kp.privateKey}).headers,body:rEstBody});
+ assert.equal(rEstRes.status,400);
+ const rEstRaw=await rEstRes.text();
+ assertZeroCorrTokens(rEstRaw,'gateway rogue /estimate');
+ assert.deepEqual(JSON.parse(rEstRaw),{error:'backend_error'});
+
+ // Rogue /execute 400 nested error.* -> gateway projects to fixed {error:"backend_error"}
+ const rObjBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'ROGUE_JSON_OBJ'}]});
+ const rObjRes=await fetch(rgUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(fleetToken,{owner:'rogue-priv',lane:'text',boot:rogueBoot,body:rObjBody,privateKey:kp.privateKey}).headers,body:rObjBody});
+ assert.equal(rObjRes.status,400);
+ const rObjRaw=await rObjRes.text();
+ assertZeroCorrTokens(rObjRaw,'gateway rogue JSON obj');
+ assert.deepEqual(JSON.parse(rObjRaw),{error:'backend_error'});
+
+ // Rogue /execute 500 arbitrary string error -> gateway projects to fixed {error:"backend_error"}
+ const rStrBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'ROGUE_JSON_STR'}]});
+ const rStrRes=await fetch(rgUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(fleetToken,{owner:'rogue-priv',lane:'text',boot:rogueBoot,body:rStrBody,privateKey:kp.privateKey}).headers,body:rStrBody});
+ assert.equal(rStrRes.status,500);
+ const rStrRaw=await rStrRes.text();
+ assertZeroCorrTokens(rStrRaw,'gateway rogue JSON str');
+ assert.deepEqual(JSON.parse(rStrRaw),{error:'backend_error'});
+
+ // Rogue /execute 200 SSE error frames -> gateway projects to fixed data: {"error":"backend_error"}
+ const rSseBody=JSON.stringify({model:'mishima',max_tokens:16,stream:true,messages:[{role:'user',content:'ROGUE_SSE_ERR'}]});
+ const rSseRes=await fetch(rgUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(fleetToken,{owner:'rogue-priv',lane:'text',boot:rogueBoot,body:rSseBody,privateKey:kp.privateKey}).headers,body:rSseBody});
+ assert.equal(rSseRes.status,200);
+ const rSseRaw=await rSseRes.text();
+ assertZeroCorrTokens(rSseRaw,'gateway rogue SSE');
+ const rSseEvents=rSseRaw.split('\n').filter(l=>l.startsWith('data: ')&&l!=='data: [DONE]').map(l=>JSON.parse(l.slice(6)));
+ assert.deepEqual(rSseEvents,[{error:'backend_error'},{error:'backend_error'}]);
+
+ // Rogue /execute 409 known protocol code with extra leaked key -> gateway preserves protocol code + executed + retryable, strips extra_leak
+ const rProtoBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'ROGUE_PROTO_409'}]});
+ const rProtoRes=await fetch(rgUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(fleetToken,{owner:'rogue-priv',lane:'text',boot:rogueBoot,body:rProtoBody,privateKey:kp.privateKey}).headers,body:rProtoBody});
+ assert.equal(rProtoRes.status,409);
+ const rProtoRaw=await rProtoRes.text();
+ assertZeroCorrTokens(rProtoRaw,'gateway rogue proto 409');
+ assert.deepEqual(JSON.parse(rProtoRaw),{error:'already-seen',executed:'unknown',retryable:false});
 });

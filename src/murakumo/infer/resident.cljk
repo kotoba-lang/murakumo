@@ -874,30 +874,33 @@
       out)))
 
 (defn- reconstruct-private-completion [obj delta?]
-  (when (js-plain-object? obj)
-    (let [out #js {:id private-completion-id}
-          obj-type (aget obj "object")
-          created (aget obj "created")
-          model (aget obj "model")
-          choices (aget obj "choices")
-          usage (aget obj "usage")]
-      (when (and (own-prop? obj "object")
-                 (if delta? (= "chat.completion.chunk" obj-type) (= "chat.completion" obj-type)))
-        (aset out "object" obj-type))
-      (when (and (own-prop? obj "created") (finite-int? created))
-        (aset out "created" created))
-      (when (and (own-prop? obj "model") (string? model))
-        (aset out "model" model))
-      (when (and (own-prop? obj "choices") (js/Array.isArray choices))
-        (let [arr #js []]
-          (doseq [ch (js/Array.from choices)]
-            (when-let [clean-ch (sanitize-private-choice ch delta?)]
-              (.push arr clean-ch)))
-          (aset out "choices" arr)))
-      (when (own-prop? obj "usage")
-        (when-let [clean-u (sanitize-private-usage usage)]
-          (aset out "usage" clean-u)))
-      (js/JSON.stringify out))))
+  (when (and (js-plain-object? obj) (not (own-prop? obj "error")))
+    (let [choices (aget obj "choices")
+          usage (aget obj "usage")
+          has-choices? (and (own-prop? obj "choices") (js/Array.isArray choices))
+          has-usage? (and (own-prop? obj "usage") (js-plain-object? usage))]
+      (when (or has-choices? (and delta? has-usage?))
+        (let [out #js {:id private-completion-id}
+              obj-type (aget obj "object")
+              created (aget obj "created")
+              model (aget obj "model")]
+          (when (and (own-prop? obj "object")
+                     (if delta? (= "chat.completion.chunk" obj-type) (= "chat.completion" obj-type)))
+            (aset out "object" obj-type))
+          (when (and (own-prop? obj "created") (finite-int? created))
+            (aset out "created" created))
+          (when (and (own-prop? obj "model") (string? model))
+            (aset out "model" model))
+          (when has-choices?
+            (let [arr #js []]
+              (doseq [ch (js/Array.from choices)]
+                (when-let [clean-ch (sanitize-private-choice ch delta?)]
+                  (.push arr clean-ch)))
+              (aset out "choices" arr)))
+          (when has-usage?
+            (when-let [clean-u (sanitize-private-usage usage)]
+              (aset out "usage" clean-u)))
+          (js/JSON.stringify out))))))
 
 (defn sanitize-private-json [text]
   (try
@@ -907,35 +910,121 @@
 (defn sanitize-private-image-json [text]
   (try
     (let [obj (js/JSON.parse text)]
-      (when (js-plain-object? obj)
+      (when (and (js-plain-object? obj)
+                 (not (own-prop? obj "error"))
+                 (own-prop? obj "data")
+                 (js/Array.isArray (aget obj "data")))
         (let [out #js {}
               created (aget obj "created")
               data (aget obj "data")]
           (when (and (own-prop? obj "created") (finite-int? created))
             (aset out "created" created))
-          (when (and (own-prop? obj "data") (js/Array.isArray data))
-            (let [arr #js []]
-              (doseq [item (js/Array.from data)]
-                (when (js-plain-object? item)
-                  (let [clean #js {}]
-                    (when (and (own-prop? item "b64_json") (string? (aget item "b64_json")))
-                      (aset clean "b64_json" (aget item "b64_json")))
-                    (when (and (own-prop? item "url") (string? (aget item "url")))
-                      (aset clean "url" (aget item "url")))
-                    (when (and (own-prop? item "revised_prompt") (string? (aget item "revised_prompt")))
-                      (aset clean "revised_prompt" (aget item "revised_prompt")))
-                    (.push arr clean))))
-              (aset out "data" arr)))
+          (let [arr #js []]
+            (doseq [item (js/Array.from data)]
+              (when (js-plain-object? item)
+                (let [clean #js {}]
+                  (when (and (own-prop? item "b64_json") (string? (aget item "b64_json")))
+                    (aset clean "b64_json" (aget item "b64_json")))
+                  (when (and (own-prop? item "url") (string? (aget item "url")))
+                    (aset clean "url" (aget item "url")))
+                  (when (and (own-prop? item "revised_prompt") (string? (aget item "revised_prompt")))
+                    (aset clean "revised_prompt" (aget item "revised_prompt")))
+                  (.push arr clean))))
+            (aset out "data" arr))
           (js/JSON.stringify out))))
     (catch :default _ nil)))
 
+(def private-backend-error-json
+  (js/JSON.stringify #js {:error "backend_error"}))
+
+(def private-backend-error-sse
+  (str "data: " private-backend-error-json "\n\n"))
+
+(def known-protocol-error-codes
+  #{"admit_envelope_required"
+    "invalid_admit_envelope"
+    "admit_envelope_too_large"
+    "invalid_admit_envelope_json"
+    "forbidden_admit_field_op"
+    "unknown_admit_envelope_field"
+    "admit_sig_required"
+    "invalid_admit_sig_padding"
+    "invalid_admit_sig_format"
+    "body_too_large"
+    "admit_kid_mismatch"
+    "unknown_admit_kid"
+    "revoked_admit_kid"
+    "invalid_admit_sig"
+    "invalid_admit_version"
+    "unsupported_admit_alg"
+    "invalid_admit_kid"
+    "invalid_admit_route"
+    "invalid_admit_owner"
+    "invalid_admit_lane"
+    "invalid_replay_nonce"
+    "replay_nonce_not_independent"
+    "invalid_issued_at"
+    "envelope_header_mismatch"
+    "route_mismatch"
+    "owner_mismatch"
+    "lane_mismatch"
+    "boot_id_mismatch"
+    "boot_id_required"
+    "provisional_pre_boot_window"
+    "replay_issued_at_expired"
+    "replay_issued_at_future"
+    "duplicate_header"
+    "already-seen"
+    "already_seen"
+    "not-ready"
+    "not_ready"
+    "replay_capacity"
+    "receipt-capacity"
+    "busy"
+    "resident_draining"
+    "invalid_output_budget"
+    "job_id_required"
+    "lane_unknown"
+    "topology_role_unavailable"
+    "topology_gateway_unavailable"
+    "model_or_context_mismatch"
+    "model_mismatch"
+    "no_privacy_peer_available"
+    "no_ready_capacity"
+    "unknown_job_owner"
+    "unauthorized"
+    "route_not_allowed"
+    "not_found"
+    "invalid_request"
+    "request_failed"
+    "invalid_estimate_nonce"
+    "tokenizer_not_available"
+    "invalid_tokenizer_request"
+    "poi_receipts_disabled"
+    "execution_unknown"
+    "invalid_backend_response"
+    "upstream_error"})
+
+(defn known-protocol-error-code [err-val fallback]
+  (if (and (string? err-val) (contains? known-protocol-error-codes err-val))
+    err-val
+    fallback))
+
+(defn project-private-backend-error-json [_text]
+  ;; Backend-originated errors are always projected onto a fixed static constant;
+  ;; never reflect arbitrary backend strings, nested error.* fields, or metadata.
+  private-backend-error-json)
+
 (defn sanitize-private-error-json [text]
+  ;; Inter-node / gateway privacy error projector: preserves ONLY known static
+  ;; Murakumo protocol error codes (and boolean/"unknown" executed + boolean
+  ;; retryable fields). Any unknown string, nested error.* object, or non-JSON
+  ;; body is projected onto the fixed static {"error":"backend_error"} constant.
   (try
     (let [obj (js/JSON.parse text)]
       (if (and (js-plain-object? obj) (own-prop? obj "error"))
         (let [err-val (aget obj "error")]
-          (cond
-            (string? err-val)
+          (if (and (string? err-val) (contains? known-protocol-error-codes err-val))
             (let [out #js {:error err-val}]
               (when (and (own-prop? obj "executed")
                          (or (boolean? (aget obj "executed")) (= "unknown" (aget obj "executed"))))
@@ -943,26 +1032,10 @@
               (when (and (own-prop? obj "retryable") (boolean? (aget obj "retryable")))
                 (aset out "retryable" (aget obj "retryable")))
               (js/JSON.stringify out))
-            (js-plain-object? err-val)
-            (let [inner #js {}]
-              (when (and (own-prop? err-val "message") (string? (aget err-val "message")))
-                (aset inner "message" (aget err-val "message")))
-              (when (and (own-prop? err-val "type") (string? (aget err-val "type")))
-                (aset inner "type" (aget err-val "type")))
-              (when (and (own-prop? err-val "code")
-                         (or (string? (aget err-val "code")) (finite-int? (aget err-val "code"))))
-                (aset inner "code" (aget err-val "code")))
-              (when (and (own-prop? err-val "param")
-                         (or (string? (aget err-val "param")) (nil? (aget err-val "param"))))
-                (aset inner "param" (aget err-val "param")))
-              (when (zero? (.-length (js/Object.keys inner)))
-                (aset inner "message" "backend_error"))
-              (js/JSON.stringify #js {:error inner}))
-            :else
-            (js/JSON.stringify #js {:error "backend_error"})))
-        (js/JSON.stringify #js {:error "backend_error"})))
+            private-backend-error-json))
+        private-backend-error-json))
     (catch :default _
-      (js/JSON.stringify #js {:error "backend_error"}))))
+      private-backend-error-json)))
 
 (defn sanitize-private-sse-line [line]
   (when (string? line)
@@ -972,8 +1045,11 @@
         "data: [DONE]\n\n"
         (str/starts-with? clean "data:")
         (try
-          (when-let [reconstructed (reconstruct-private-completion (js/JSON.parse (str/trim (subs clean 5))) true)]
-            (str "data: " reconstructed "\n\n"))
+          (let [parsed (js/JSON.parse (str/trim (subs clean 5)))]
+            (if (and (js-plain-object? parsed) (own-prop? parsed "error"))
+              private-backend-error-sse
+              (when-let [reconstructed (reconstruct-private-completion parsed true)]
+                (str "data: " reconstructed "\n\n"))))
           (catch :default _ nil))
         :else nil))))
 
@@ -1417,6 +1493,7 @@
                                             (save!))
                                           (swap! controllers assoc id controller)
                                           (.on res "close" #(when-not (.-writableEnded res) (.abort controller)))
+                                          (let [priv-stream-active? (atom false)]
                                           (-> (ka/fetch (str (:backend lane) (:path lane))
                                                         #js {:method "POST" :signal (.-signal controller)
                                                              :headers #js {"content-type" "application/json"}
@@ -1434,6 +1511,7 @@
                                                                                  "cache-control" "no-store"}
                                                                             #js {"content-type" ct "x-murakumo-job-id" id "x-murakumo-node" (:node config)})]
                                                          (when-not priv-buffer?
+                                                           (when priv-stream? (reset! priv-stream-active? true))
                                                            (.writeHead res (.-status r) resp-headers))
                                                          (let [stop-heartbeat! (if (and (= "text" (:kind lane)) (true? (:stream body)) sse? (.-ok r))
                                                                                  (prefill-heartbeat! res (:model body) (if ram-replay? private-completion-id id) (:heartbeat-ms config 15000))
@@ -1455,15 +1533,15 @@
                                                                                           (when-let [ev (sanitize-private-sse-line @sse-buf)]
                                                                                             (.write res ev))
                                                                                           priv-buffer?
-                                                                                          (let [parts @json-parts
-                                                                                                joined (.concat js/Buffer (clj->js parts))
-                                                                                                raw-text (try (.toString joined "utf8")
-                                                                                                              (finally
-                                                                                                                (zeroize-buffer! joined)
-                                                                                                                (doseq [p parts] (zeroize-buffer! p))
-                                                                                                                (reset! json-parts [])))]
+                                                                                          (let [parts @json-parts]
                                                                                             (if (.-ok r)
-                                                                                              (let [sanitized (if (= "image" (:kind lane))
+                                                                                              (let [joined (.concat js/Buffer (clj->js parts))
+                                                                                                    raw-text (try (.toString joined "utf8")
+                                                                                                                  (finally
+                                                                                                                    (zeroize-buffer! joined)
+                                                                                                                    (doseq [p parts] (zeroize-buffer! p))
+                                                                                                                    (reset! json-parts [])))
+                                                                                                    sanitized (if (= "image" (:kind lane))
                                                                                                                 (sanitize-private-image-json raw-text)
                                                                                                                 (sanitize-private-json raw-text))]
                                                                                                 (if sanitized
@@ -1471,8 +1549,10 @@
                                                                                                       (.write res sanitized))
                                                                                                   (do (.writeHead res 502 resp-headers)
                                                                                                       (.write res (js/JSON.stringify #js {:error "invalid_backend_response"})))))
-                                                                                              (do (.writeHead res (.-status r) resp-headers)
-                                                                                                  (.write res (sanitize-private-error-json raw-text)))))))
+                                                                                              (do (doseq [p parts] (zeroize-buffer! p))
+                                                                                                  (reset! json-parts [])
+                                                                                                  (.writeHead res (.-status r) resp-headers)
+                                                                                                  (.write res (project-private-backend-error-json nil)))))))
                                                                                       (settle! (if (.-ok r) :completed :failed))
                                                                                       (.end res)
                                                                                       (when (and record? (.-ok r))
@@ -1496,7 +1576,9 @@
                                                                                           (when (seq out-events)
                                                                                             (.write res (apply str out-events))))
                                                                                         priv-buffer?
-                                                                                        (swap! json-parts conj b)
+                                                                                        (if (.-ok r)
+                                                                                          (swap! json-parts conj b)
+                                                                                          (zeroize-buffer! b))
                                                                                         :else
                                                                                         (.write res b))
                                                                                       (pump)))))))]
@@ -1504,12 +1586,14 @@
                                               (.catch (fn [_]
                                                         (swap! lanes assoc-in [lane-id :ready] false)
                                                         (settle! :unknown)
-                                                        (when-not (.-headersSent res)
+                                                        (if-not (.-headersSent res)
                                                           (json! res 502 (if ram-replay?
                                                                            {:error "execution_unknown" :retryable false}
-                                                                           {:error "execution_unknown" :job-id id :retryable false})))
+                                                                           {:error "execution_unknown" :job-id id :retryable false}))
+                                                          (when (and @priv-stream-active? (not (.-destroyed res)) (not (.-writableEnded res)))
+                                                            (try (.write res private-backend-error-sse) (catch :default _ nil))))
                                                         (when-not (.-writableEnded res) (.end res))))
-                                              (.finally #(js/clearTimeout timer)))))))))))
+                                              (.finally #(js/clearTimeout timer))))))))))))
                            (.catch (fn [e] (when-not (.-headersSent res)
                                              (if (backend-busy-error? e)
                                                (json! res 429 {:error "busy" :executed false})

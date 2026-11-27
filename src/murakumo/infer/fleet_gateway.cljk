@@ -372,6 +372,7 @@
                                                                (when caller-issued (aset h "x-murakumo-issued-at" caller-issued))
                                                                (when caller-boot (aset h "x-murakumo-boot-id" caller-boot))
                                                                h)]
+                                                       (let [priv-stream-active? (atom false)]
                                                        (-> (js/fetch (str (.-origin (js/URL. (:url p))) "/execute/" lane)
                                                                      #js {:method "POST" :signal (.-signal controller)
                                                                           :headers exec-headers
@@ -385,7 +386,9 @@
                                                                           (.then (fn [refusal]
                                                                                    (if (false? (.-executed refusal))
                                                                                      (attempt (rest remaining) {:status (.-status resp)
-                                                                                                                :error (or (.-error refusal) "no_ready_capacity")})
+                                                                                                                :error (if peer-privacy?
+                                                                                                                         (r/known-protocol-error-code (.-error refusal) "no_ready_capacity")
+                                                                                                                         (or (.-error refusal) "no_ready_capacity"))})
                                                                                      (r/json! res 502
                                                                                               (if peer-privacy?
                                                                                                 {:error "execution_unknown" :retryable false}
@@ -401,6 +404,7 @@
                                                                                                   "cache-control" "no-store"}
                                                                                              #js {"content-type" ct "x-murakumo-job-id" id "x-murakumo-node" node})]
                                                                           (when-not priv-buffer?
+                                                                            (when priv-stream? (reset! priv-stream-active? true))
                                                                             (.writeHead res (.-status resp) resp-headers))
                                                                           (let [reader (.getReader (.-body resp))
                                                                                 json-parts (atom [])
@@ -454,12 +458,14 @@
                                                                                                        (pump)))))))]
                                                                               (pump))))))))
                                                            (.catch (fn [_]
-                                                                     (when-not (.-headersSent res)
+                                                                     (if-not (.-headersSent res)
                                                                        (r/json! res 502
                                                                                 (if peer-privacy?
                                                                                   {:error "execution_unknown" :retryable false}
-                                                                                  {:error "execution_unknown" :job-id id :retryable false})))
-                                                                     (when-not (.-writableEnded res) (.end res)))))))
+                                                                                  {:error "execution_unknown" :job-id id :retryable false}))
+                                                                       (when (and @priv-stream-active? (not (.-destroyed res)) (not (.-writableEnded res)))
+                                                                         (try (.write res r/private-backend-error-sse) (catch :default _ nil))))
+                                                                     (when-not (.-writableEnded res) (.end res))))))))
                                                      (r/json! res 400 {:error "unknown_job_owner"}))
                                                    (if last-refusal
                                                      (r/json! res (:status last-refusal) {:error (:error last-refusal) :executed false})
