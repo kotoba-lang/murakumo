@@ -22,7 +22,7 @@ for file in node.mjs package.json package-lock.json nixos-node.nix; do
 done
 node - "$staging" <<'JS'
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
-const hashes={"node.mjs":"8015ae24307af718f9866e43b2acf5308dd2c616da8e20e7fd351d6b14ad10f5","package.json":"95fed67104441aee31cc77f93f90e5dd412171a21288b3bb4fe9fdc5b1c1f3db","package-lock.json":"705a22363fb593f18bb8c98943b7e8acb1cefa68a50c527247ebcfe30d296644","nixos-node.nix":"1517cc283dd55f415ee942d63d72c3188abfc109d07807a09d58e8a64efca03e"};
+const hashes={"node.mjs":"4ffb2d5aa7d62e91b19b51576c31c3e0b15d3d360114b0a37221ee33b55d5613","package.json":"95fed67104441aee31cc77f93f90e5dd412171a21288b3bb4fe9fdc5b1c1f3db","package-lock.json":"705a22363fb593f18bb8c98943b7e8acb1cefa68a50c527247ebcfe30d296644","nixos-node.nix":"1517cc283dd55f415ee942d63d72c3188abfc109d07807a09d58e8a64efca03e"};
 for(const [file,want] of Object.entries(hashes)){
  const got=crypto.createHash('sha256').update(fs.readFileSync(path.join(process.argv[2],file))).digest('hex');
  if(got!==want){console.error('Release checksum mismatch for '+file+'. Retry with the latest installer.');process.exit(1);}
@@ -41,7 +41,7 @@ exec node "$(cd "$(dirname "$self")" && pwd)/node.mjs" "$@"
 LAUNCHER
 chmod +x "$staging/murakumo"
 "$staging/murakumo" node --help >/dev/null
-release_dir="$install_dir/release-867d0a7725508633"
+release_dir="$install_dir/release-b8015baf9e3a0ca8"
 if [ ! -d "$release_dir" ]; then mv "$staging" "$release_dir"; fi
 # Update only the installer's own links; never replace an existing directory.
 [ ! -e "$install_dir/current" ] || [ -L "$install_dir/current" ] || { echo 'Refusing to replace current directory.' >&2; exit 1; }

@@ -2,7 +2,9 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {connect as netConnect} from 'node:net';
-import {spawn,execFileSync} from 'node:child_process';
+import {spawn,execFile,execFileSync} from 'node:child_process';
+import {promisify} from 'node:util';
+const execFileAsync=promisify(execFile);
 import {once} from 'node:events';
 import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,stat,symlink} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
@@ -42,6 +44,13 @@ function makeEd25519Keypair(){
   publicKeyEncoding:{type:'spki',format:'pem'},
   privateKeyEncoding:{type:'pkcs8',format:'pem'}
  });
+}
+
+function makeDualAdmitKeys(activeKp,stagedKp=makeEd25519Keypair()){
+ return {
+  'k-active':{'public-key':activeKp.publicKey,state:'active'},
+  'k-staged':{'public-key':stagedKp.publicKey,state:'staged'}
+ };
 }
 
 function admitSigMessage(envelopeRaw,body){
@@ -203,7 +212,7 @@ test('TEST-INFER-PRIV-01: fail-closed startup scan (receipts/tmp/bak/lock/symlin
   node:'priv01',bind:'127.0.0.1',port:await port(),
   'token-file':tokenFile,'state-file':stateFile,
   'replay-ledger-mode':'kagishi-ram','observations?':false,
-  'admit-public-keys':{'k-active':kp.publicKey},
+  'admit-public-keys':makeDualAdmitKeys(kp),
   'job-timeout-ms':2000,'replay-window-ms':5000,'replay-clock-skew-ms':500,'replay-rotation-ms':6000,
   'replay-max-entries':2,'probe-interval-ms':30000,
   lanes:{text:{kind:'text',model:'mishima',context:32768,'input-tokenizer':'llama-template',group:'gpu',
@@ -265,6 +274,15 @@ test('TEST-INFER-PRIV-01: fail-closed startup scan (receipts/tmp/bak/lock/symlin
   assert.notEqual((await once((await launch(symKeys,'sym-admit-keys')).p,'close'))[0],0,'symmetric admit key must fail closed in v1.0.3');
   const allRevoked={...baseConfig,port:await port(),'admit-public-keys':{'k1':{'public-key':kp.publicKey,state:'revoked'}}};
   assert.notEqual((await once((await launch(allRevoked,'revoked-only')).p,'close'))[0],0,'all-revoked admit-public-keys must fail closed');
+  // Strict mode requires BOTH active AND staged pinned public keys at startup
+  const activeOnly={...baseConfig,port:await port(),'admit-public-keys':{'k-active':{'public-key':kp.publicKey,state:'active'}}};
+  assert.notEqual((await once((await launch(activeOnly,'active-only')).p,'close'))[0],0,'active-only admit-public-keys (missing staged) must fail closed at startup');
+  const stagedOnly={...baseConfig,port:await port(),'admit-public-keys':{'k-staged':{'public-key':kp.publicKey,state:'staged'}}};
+  assert.notEqual((await once((await launch(stagedOnly,'staged-only')).p,'close'))[0],0,'staged-only admit-public-keys (missing active) must fail closed at startup');
+  const revokedStaged={...baseConfig,port:await port(),'revoked-admit-kids':['k-staged']};
+  assert.notEqual((await once((await launch(revokedStaged,'revoked-staged')).p,'close'))[0],0,'revoking only staged key must fail closed at startup');
+  const revokedActive={...baseConfig,port:await port(),'revoked-admit-kids':['k-active']};
+  assert.notEqual((await once((await launch(revokedActive,'revoked-active')).p,'close'))[0],0,'revoking only active key must fail closed at startup');
  }
 
  // 1e. Fresh stateDir: 0 files written on startup, success, failure (502), and overload (503 replay_capacity)
@@ -446,7 +464,7 @@ test('TEST-INFER-PRIV-02: v1.0.1 unified defaults (T_tick=10000<=30000), monoton
  }
 
  const lane={kind:'text',model:'mishima',context:32768,group:'gpu',backend:`http://127.0.0.1:${backend.server.address().port}`,path:'/v1/chat/completions'};
- const invBase={node:'inv0',bind:'127.0.0.1','token-file':tokenFile,'state-file':join(dir,'r.json'),'replay-ledger-mode':'kagishi-ram','admit-public-keys':{'k-active':kp.publicKey},'observations?':false,'probe-interval-ms':30000,lanes:{text:lane}};
+ const invBase={node:'inv0',bind:'127.0.0.1','token-file':tokenFile,'state-file':join(dir,'r.json'),'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),'observations?':false,'probe-interval-ms':30000,lanes:{text:lane}};
 
  assert.notEqual((await launchFail({...invBase,port:await port(),'replay-window-ms':60000,'replay-clock-skew-ms':1000,'replay-rotation-ms':70000},'w-lt-default-jt')).code,0);
  assert.notEqual((await launchFail({...invBase,port:await port(),'replay-window-ms':10000,'replay-clock-skew-ms':1000,'replay-rotation-ms':12000,lanes:{text:{...lane,'job-timeout-ms':15000}}},'w-lt-lane-jt')).code,0);
@@ -516,7 +534,7 @@ test('TEST-INFER-PRIV-02: v1.0.1 unified defaults (T_tick=10000<=30000), monoton
   const pf=join(dir,`cf-${idx}.json`);
   await writeFile(pf,JSON.stringify({
    node:n,bind:'127.0.0.1',port:fp,'token-file':tokenFile,'state-file':join(pDir,'receipts.json'),
-   'replay-ledger-mode':'kagishi-ram','admit-public-keys':{'k-active':kp.publicKey},'observations?':false,
+   'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),'observations?':false,
    'replay-max-entries':1,'probe-interval-ms':30000,
    lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:`http://127.0.0.1:${bPort}`,path:'/v1/chat/completions'}}
   }));
@@ -531,6 +549,7 @@ test('TEST-INFER-PRIV-02: v1.0.1 unified defaults (T_tick=10000<=30000), monoton
 
  const rO1=await fetch(fgUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(token,{owner:'owner1',lane:'text',boot:o1Boot,body:sampleBody,privateKey:kp.privateKey}).headers,body:sampleBody});
  assert.equal(rO1.status,200);await rO1.json();
+ await wait(async()=>(await(await fetch(fgUrl+'/health',{headers:auth})).json()).peers?.owner1?.lanes?.text?.busy===false);
  const rO1Full=await fetch(fgUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(token,{owner:'owner1',lane:'text',boot:o1Boot,body:sampleBody,privateKey:kp.privateKey}).headers,body:sampleBody});
  assert.equal(rO1Full.status,503);
  assert.deepEqual(await rO1Full.json(),{error:'replay_capacity',executed:false});
@@ -559,19 +578,24 @@ test('TEST-INFER-PRIV-03: 0 unsalted SHA-256(body) anywhere; POST /estimate/:lan
  const rCfg={
   node:'est0',bind:'127.0.0.1',port:rp,
   'token-file':tokenFile,'state-file':join(dir,'receipts.json'),
-  'replay-ledger-mode':'kagishi-ram','admit-public-keys':{'k-active':kp.publicKey},
+  'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),
   'observations?':false,'probe-interval-ms':30000,
   lanes:{text:{kind:'text',model:'mishima',context:32768,'input-tokenizer':'llama-template',group:'gpu',
     backend:`http://127.0.0.1:${backend.server.address().port}`,path:'/v1/chat/completions'}}
  };
  const gCfg={node:'gw-est0',bind:'127.0.0.1',port:gp,'token-file':tokenFile,'replay-ledger-mode':'kagishi-ram','probe-interval-ms':50,peers:[{node:'est0',url:rUrl}]};
- const rPath=join(dir,'r.json'),gPath=join(dir,'g.json');
- await writeFile(rPath,JSON.stringify(rCfg));await writeFile(gPath,JSON.stringify(gCfg));
+ const gPinPort=await port();
+ const gPinUrl=`http://127.0.0.1:${gPinPort}`;
+ const gPinCfg={node:'gw-est0-pin',bind:'127.0.0.1',port:gPinPort,'token-file':tokenFile,'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),'probe-interval-ms':50,peers:[{node:'est0',url:rUrl}]};
+ const rPath=join(dir,'r.json'),gPath=join(dir,'g.json'),gPinPath=join(dir,'g-pin.json');
+ await writeFile(rPath,JSON.stringify(rCfg));await writeFile(gPath,JSON.stringify(gCfg));await writeFile(gPinPath,JSON.stringify(gPinCfg));
  const rProc=spawn(process.execPath,[cli,'resident','serve','--config',rPath],{cwd:dir,stdio:'ignore'});
  const gProc=spawn(process.execPath,[cli,'gateway','serve','--config',gPath],{cwd:dir,stdio:'ignore'});
- t.after(()=>{rProc.kill('SIGTERM');gProc.kill('SIGTERM');});
+ const gPinProc=spawn(process.execPath,[cli,'gateway','serve','--config',gPinPath],{cwd:dir,stdio:'ignore'});
+ t.after(()=>{rProc.kill('SIGTERM');gProc.kill('SIGTERM');gPinProc.kill('SIGTERM');});
 
  await wait(async()=>(await(await fetch(gUrl+'/health',{headers:auth})).json()).peers?.est0?.lanes?.text?.ready);
+ await wait(async()=>(await(await fetch(gPinUrl+'/health',{headers:auth})).json()).peers?.est0?.lanes?.text?.ready);
  const {boot_id:bootId}=await(await fetch(rUrl+'/health',{headers:auth})).json();
 
  const largeBody=JSON.stringify({model:'mishima',max_tokens:32,messages:[{role:'user',content:'Private prompt text. '.repeat(2000)}]});
@@ -594,8 +618,46 @@ test('TEST-INFER-PRIV-03: 0 unsalted SHA-256(body) anywhere; POST /estimate/:lan
  assert.equal(dupEst.status,400);
  assert.equal(backend.state.tokenizes,tokBefore);
 
+ // Negative tests (Fix 1): unsigned / mismatched x-murakumo-admit-sig / invalid envelope MUST result in 0 tokenizer calls AND 0 model calls!
  const estNonce=randomBytes(16).toString('hex');
- const estOk=await fetch(rUrl+'/estimate/text',{method:'POST',headers:{...auth,'x-murakumo-estimate-nonce':estNonce},body:largeBody});
+ const estUnsigned=await fetch(rUrl+'/estimate/text',{method:'POST',headers:{...auth,'x-murakumo-estimate-nonce':estNonce},body:largeBody});
+ assert.equal(estUnsigned.status,401);
+ assert.equal((await estUnsigned.json()).error,'admit_envelope_required');
+ assert.equal(backend.state.tokenizes,tokBefore,'unsigned /estimate must produce 0 tokenizer calls');
+ assert.equal(backend.state.calls,0);
+
+ const validEstWire=wireV1Headers(token,{owner:'est0',lane:'text',boot:bootId,body:largeBody,privateKey:kp.privateKey});
+ const tamperedLargeBody=largeBody.replace('Private prompt text.','TAMPERED prompt text!');
+ // 1) Direct resident /estimate with body mismatching x-murakumo-admit-sig -> 403, 0 tokenizer calls
+ const estBadSig=await fetch(rUrl+'/estimate/text',{method:'POST',headers:{...validEstWire.headers,'x-murakumo-estimate-nonce':estNonce},body:tamperedLargeBody});
+ assert.equal(estBadSig.status,403);
+ assert.equal((await estBadSig.json()).error,'invalid_admit_sig');
+ assert.equal(backend.state.tokenizes,tokBefore,'mismatched sig on /estimate must produce 0 tokenizer calls');
+ assert.equal(backend.state.calls,0);
+
+ // 2) Direct resident /execute with body mismatching x-murakumo-admit-sig -> 403, 0 tokenizer calls, 0 model calls
+ const execBadSig=await fetch(rUrl+'/execute/text',{method:'POST',headers:validEstWire.headers,body:tamperedLargeBody});
+ assert.equal(execBadSig.status,403);
+ assert.equal((await execBadSig.json()).error,'invalid_admit_sig');
+ assert.equal(backend.state.tokenizes,tokBefore,'mismatched sig on /execute must produce 0 tokenizer calls');
+ assert.equal(backend.state.calls,0);
+
+ // 3) Gateway (both unpinned-keys and gateway-pinned-keys) with body mismatching x-murakumo-admit-sig -> 403, 0 tokenizer calls, 0 model calls
+ for(const [label,targetGw] of [['gateway',gUrl],['pinned-gateway',gPinUrl]]){
+  const gwBadSig=await fetch(targetGw+'/v1/chat/completions',{method:'POST',headers:validEstWire.headers,body:tamperedLargeBody});
+  assert.equal(gwBadSig.status,403,`${label} mismatched sig must return 403`);
+  assert.equal((await gwBadSig.json()).error,'invalid_admit_sig');
+  assert.equal(backend.state.tokenizes,tokBefore,`${label} mismatched sig must produce 0 tokenizer calls`);
+  assert.equal(backend.state.calls,0,`${label} mismatched sig must produce 0 model calls`);
+
+  const gwBadEnv=await fetch(targetGw+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(token,{owner:'est0',lane:'text',boot:bootId,body:largeBody,privateKey:kp.privateKey,extraFields:{bad_extra:1}}).headers,body:largeBody});
+  assert.equal(gwBadEnv.status,400,`${label} invalid envelope must return 400`);
+  assert.equal(backend.state.tokenizes,tokBefore,`${label} invalid envelope must produce 0 tokenizer calls`);
+  assert.equal(backend.state.calls,0,`${label} invalid envelope must produce 0 model calls`);
+ }
+
+ // Positive: valid Wire v1 envelope + body signature + x-murakumo-estimate-nonce succeeds and echoes estimate_nonce
+ const estOk=await fetch(rUrl+'/estimate/text',{method:'POST',headers:{...validEstWire.headers,'x-murakumo-estimate-nonce':estNonce},body:largeBody});
  assert.equal(estOk.status,200);
  const estJson=await estOk.json();
  assert.equal(estJson.estimate_nonce,estNonce);
@@ -603,6 +665,7 @@ test('TEST-INFER-PRIV-03: 0 unsalted SHA-256(body) anywhere; POST /estimate/:lan
  assert.equal(estJson['input-tokens'],132);
  assert.equal('digest' in estJson,false);
  assert.ok(!JSON.stringify(estJson).includes(unsaltedSha));
+ assert.ok(backend.state.tokenizes>tokBefore,'valid signed /estimate invokes tokenizer');
 
  const gwOk=await fetch(gUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(token,{owner:'est0',lane:'text',boot:bootId,body:largeBody,privateKey:kp.privateKey}).headers,body:largeBody});
  assert.equal(gwOk.status,200);
@@ -651,8 +714,8 @@ test('TEST-INFER-PRIV-04: 4-layer job-id suppression, chatcmpl-private JSON & SS
  const rCfg={
   node:'priv04-node',bind:'127.0.0.1',port:rp,
   'token-file':tokenFile,'state-file':join(dir,'receipts.json'),
-  'replay-ledger-mode':'kagishi-ram','admit-public-keys':{'k-active':kp.publicKey},
-  'observations?':false,'heartbeat-ms':50,'replay-max-entries':3,'probe-interval-ms':50,
+  'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),
+  'observations?':false,'heartbeat-ms':50,'replay-max-entries':3,'probe-interval-ms':400,
   lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',
     backend:`http://127.0.0.1:${backend.server.address().port}`,path:'/v1/chat/completions'}}
  };
@@ -770,7 +833,7 @@ test('TEST-INFER-PRIV-05: combines PR #715 inbound-token-file + inbound-allowed-
  const rCfg={
   node:'priv05-node',bind:'127.0.0.1',port:rp,
   'token-file':fleetTokenFile,'state-file':join(stateDir,'receipts.json'),
-  'replay-ledger-mode':'kagishi-ram','admit-public-keys':{'k-active':kp.publicKey},
+  'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),
   'observations?':false,'probe-interval-ms':30000,
   lanes:{text:{kind:'text',model:'mishima',context:32768,'input-tokenizer':'llama-template',group:'gpu',
     backend:`http://127.0.0.1:${backend.server.address().port}`,path:'/v1/chat/completions'}}
@@ -839,7 +902,7 @@ test('TEST-INFER-PRIV-06: B1 disconnect (502 execution_unknown) -> restart B2 ->
  const rCfg={
   node:'priv06-node',bind:'127.0.0.1',port:rp,
   'token-file':tokenFile,'state-file':join(dir,'receipts.json'),
-  'replay-ledger-mode':'kagishi-ram','admit-public-keys':{'k-active':kp.publicKey},
+  'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),
   'observations?':false,'probe-interval-ms':30000,
   lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',
     backend:`http://127.0.0.1:${backend.server.address().port}`,path:'/v1/chat/completions'}}
@@ -894,7 +957,7 @@ test('TEST-INFER-PRIV-06: B1 disconnect (502 execution_unknown) -> restart B2 ->
  const provCfg={
   node:'priv06-prov',bind:'127.0.0.1',port:pp,
   'token-file':tokenFile,'state-file':join(dir,'prov-receipts.json'),
-  'replay-ledger-mode':'kagishi-ram','admit-public-keys':{'k-active':kp.publicKey},
+  'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),
   'observations?':false,'allow-provisional-no-boot-id?':true,
   'job-timeout-ms':1000,'replay-window-ms':2000,'replay-clock-skew-ms':500,'replay-rotation-ms':3000,
   'probe-interval-ms':30000,lanes:rCfg.lanes
@@ -1075,6 +1138,7 @@ test('TEST-INFER-PRIV-07: AWAI-4154 v1.0.3 PureEdDSA Wire v1 strict parsing (pad
  assert.equal(activeOk.status,200);await activeOk.json();
  assert.equal(backend.state.calls,1);
 
+ await wait(async()=>(await(await fetch(gUrl+'/health',{headers:auth})).json()).peers?.['priv07-node']?.lanes?.text?.busy===false);
  const stagedOk=await fetch(gUrl+'/v1/chat/completions',{method:'POST',headers:wireV1Headers(fleetToken,{owner:'priv07-node',lane:'text',boot:bootId,body:sampleBody,kid:'k-staged',privateKey:kpStaged.privateKey,bareSig:true}).headers,body:sampleBody});
  assert.equal(stagedOk.status,200);await stagedOk.json();
  assert.equal(backend.state.calls,2);
@@ -1151,8 +1215,8 @@ test('TEST-INFER-PRIV-08: privacy-lane gateway forbids fallback to durable peers
  const privPath=join(dir,'priv.json');
  await writeFile(privPath,JSON.stringify({
   node:'priv0',bind:'127.0.0.1',port:privPort,'token-file':tokenFile,'state-file':join(privStateDir,'receipts.json'),
-  'replay-ledger-mode':'kagishi-ram','admit-public-keys':{'k-active':kp.publicKey},
-  'observations?':false,'probe-interval-ms':100,
+  'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),
+  'observations?':false,'probe-interval-ms':400,
   lanes:{text:{kind:'text',model:'mishima',context:32768,'input-tokenizer':'llama-template',group:'gpu',
     backend:`http://127.0.0.1:${privBackend.server.address().port}`,path:'/v1/chat/completions'}}
  }));
@@ -1174,4 +1238,352 @@ test('TEST-INFER-PRIV-08: privacy-lane gateway forbids fallback to durable peers
  assert.equal(privBackend.state.calls,1);
  assert.equal(durBackend.state.calls,0);
  assert.deepEqual(await readdir(privStateDir),[]);
+});
+
+test('TEST-INFER-PRIV-09: strict allowlist reconstruction of success JSON, SSE chunks, and error JSON strips unknown/signature-shaped backend metadata and drops unparsed SSE lines',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'murakumo-priv09-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const token=randomBytes(32).toString('hex');
+ const tokenFile=join(dir,'token');
+ await writeFile(tokenFile,token,{mode:0o600});
+ const kp=makeEd25519Keypair();
+ const auth={authorization:`Bearer ${token}`};
+
+ // Adversarial backend injecting synthetic signature-shaped metadata & unparsed SSE lines across success, SSE, and error paths
+ const leakyBackend=createServer((req,res)=>{
+  if(req.url==='/slots')return res.end(JSON.stringify([{is_processing:false}]));
+  let data='';
+  req.on('data',b=>data+=b);
+  req.on('end',()=>{
+   const body=JSON.parse(data);
+   const content=body.messages?.[0]?.content??'';
+   if(content.startsWith('2+3'))return res.end(JSON.stringify({choices:[{message:{content:'5'}}]}));
+   if(content==='ERR_JSON'){
+    res.writeHead(400,{'content-type':'application/json','x-murakumo-node':'leak-hdr-node'});
+    return res.end(JSON.stringify({
+     error:{message:'bad prompt',type:'invalid_request_error',code:'bad_req',param:null,backend_sig:'LEAK_ERR_INNER_SIG',signature:'LEAK_ERR_INNER_SIG2'},
+     backend_sig:'LEAK_ERR_TOP_SIG',
+     signature:'LEAK_ERR_TOP_SIG2',
+     'x-murakumo-job-id':'LEAK_ERR_JOB',
+     'x-murakumo-node':'LEAK_ERR_NODE',
+     unknown_meta:{trace:'LEAK_ERR_TRACE'}
+    }));
+   }
+   if(content==='ERR_PLAIN'){
+    res.writeHead(500,{'content-type':'text/plain'});
+    return res.end('backend_sig=LEAK_PLAIN_ERROR_SIG internal_host=secret-box-01');
+   }
+   if(content==='BAD_200_JSON'){
+    res.writeHead(200,{'content-type':'application/json'});
+    return res.end('not-valid-json backend_sig=LEAK_BAD_200');
+   }
+   if(body.stream){
+    res.writeHead(200,{'content-type':'text/event-stream','x-murakumo-node':'leak-sse-hdr'});
+    res.write(': comment backend_sig=LEAK_SSE_COMMENT\n');
+    res.write('id: LEAK_SSE_EVENT_ID\n');
+    res.write('event: x-murakumo-meta\n');
+    res.write('retry: 9999\n');
+    res.write('unparsed_raw_line: backend_sig=LEAK_UNPARSED_LINE\n');
+    res.write('data: not-valid-json-backend_sig=LEAK_BAD_DATA_LINE\n\n');
+    res.write('data: ["array-not-object","LEAK_ARRAY_DATA"]\n\n');
+    res.write('data: '+JSON.stringify({
+     id:'backend-sse-leak-id',
+     object:'chat.completion.chunk',
+     created:1764240000,
+     model:'mishima',
+     backend_sig:'LEAK_SSE_TOP_SIG',
+     signature:'LEAK_SSE_TOP_SIG2',
+     'x-murakumo-node':'LEAK_SSE_NODE',
+     'x-murakumo-job-id':'LEAK_SSE_JOB',
+     system_fingerprint:'LEAK_FP',
+     timings:{predicted_ms:42},
+     choices:[{
+      index:0,
+      finish_reason:null,
+      backend_sig:'LEAK_SSE_CHOICE_SIG',
+      delta:{role:'assistant',content:'CLEAN_SSE',backend_sig:'LEAK_SSE_DELTA_SIG',unknown_delta:'NOPE'}
+     }],
+     usage:{prompt_tokens:7,completion_tokens:3,total_tokens:10,backend_sig:'LEAK_SSE_USAGE_SIG'}
+    })+'\n\n');
+    res.write('data: [DONE]\n\n');
+    return res.end();
+   }
+   res.writeHead(200,{'content-type':'application/json','x-murakumo-node':'leak-json-hdr'});
+   res.end(JSON.stringify({
+    id:'backend-json-leak-id',
+    object:'chat.completion',
+    created:1764240001,
+    model:'mishima',
+    backend_sig:'LEAK_JSON_TOP_SIG',
+    signature:'LEAK_JSON_TOP_SIG2',
+    'x-murakumo-node':'LEAK_JSON_NODE',
+    'x-murakumo-job-id':'LEAK_JSON_JOB',
+    system_fingerprint:'LEAK_JSON_FP',
+    timings:{prompt_ms:12},
+    slot_id:0,
+    choices:[{
+     index:0,
+     finish_reason:'stop',
+     backend_sig:'LEAK_JSON_CHOICE_SIG',
+     message:{role:'assistant',content:'CLEAN_JSON',backend_sig:'LEAK_JSON_MSG_SIG',signature:'LEAK_JSON_MSG_SIG2'}
+    }],
+    usage:{prompt_tokens:5,completion_tokens:2,total_tokens:7,backend_sig:'LEAK_JSON_USAGE_SIG'}
+   }));
+  });
+ });
+ leakyBackend.listen(0,'127.0.0.1');
+ await once(leakyBackend,'listening');
+ t.after(()=>{leakyBackend.closeAllConnections();leakyBackend.close();});
+
+ const rp=await port(),gp=await port();
+ const rUrl=`http://127.0.0.1:${rp}`,gUrl=`http://127.0.0.1:${gp}`;
+ const rCfg={
+  node:'priv09-node',bind:'127.0.0.1',port:rp,
+  'token-file':tokenFile,'state-file':join(dir,'receipts.json'),
+  'replay-ledger-mode':'kagishi-ram','admit-public-keys':makeDualAdmitKeys(kp),
+  'observations?':false,'probe-interval-ms':30000,
+  lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',
+    backend:`http://127.0.0.1:${leakyBackend.address().port}`,path:'/v1/chat/completions'}}
+ };
+ const gCfg={node:'priv09-gw',bind:'127.0.0.1',port:gp,'token-file':tokenFile,'replay-ledger-mode':'kagishi-ram','probe-interval-ms':40,peers:[{node:'priv09-node',url:rUrl}]};
+ const rPath=join(dir,'r.json'),gPath=join(dir,'g.json');
+ await writeFile(rPath,JSON.stringify(rCfg));await writeFile(gPath,JSON.stringify(gCfg));
+ const rProc=spawn(process.execPath,[cli,'resident','serve','--config',rPath],{cwd:dir,stdio:'ignore'});
+ const gProc=spawn(process.execPath,[cli,'gateway','serve','--config',gPath],{cwd:dir,stdio:'ignore'});
+ t.after(()=>{rProc.kill('SIGTERM');gProc.kill('SIGTERM');});
+
+ await wait(async()=>(await(await fetch(gUrl+'/health',{headers:auth})).json()).peers?.['priv09-node']?.lanes?.text?.ready);
+ const {boot_id:bootId}=await(await fetch(rUrl+'/health',{headers:auth})).json();
+
+ const waitGwFree=()=>wait(async()=>{const h=await(await fetch(gUrl+'/health',{headers:auth})).json();return h.peers?.['priv09-node']?.lanes?.text?.ready&&h.peers?.['priv09-node']?.lanes?.text?.busy===false;});
+ for(const [via,endpoint] of [['resident',rUrl+'/execute/text'],['gateway',gUrl+'/v1/chat/completions']]){
+  if(via==='gateway')await waitGwFree();
+  // 1) Success JSON: only allowlisted fields survive, zero LEAK_* / backend_sig / signature / x-murakumo-*
+  const okBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:`ok-${via}`}]});
+  const okRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(token,{owner:'priv09-node',lane:'text',boot:bootId,body:okBody,privateKey:kp.privateKey}).headers,body:okBody});
+  assert.equal(okRes.status,200,`${via} success JSON status`);
+  const okRaw=await okRes.text();
+  for(const forbidden of ['LEAK_','backend_sig','signature','x-murakumo-','system_fingerprint','timings','slot_id','backend-json-leak-id']){
+   assert.ok(!okRaw.includes(forbidden),`${via} success JSON must strip ${forbidden}; got: ${okRaw}`);
+  }
+  assert.deepEqual(JSON.parse(okRaw),{
+   id:'chatcmpl-private',
+   object:'chat.completion',
+   created:1764240001,
+   model:'mishima',
+   choices:[{index:0,message:{role:'assistant',content:'CLEAN_JSON'},finish_reason:'stop'}],
+   usage:{prompt_tokens:5,completion_tokens:2,total_tokens:7}
+  });
+
+  if(via==='gateway')await waitGwFree();
+  // 2) Streaming SSE: unparsed lines dropped, unknown/signature metadata stripped
+  const sseBody=JSON.stringify({model:'mishima',max_tokens:16,stream:true,messages:[{role:'user',content:`sse-${via}`}]});
+  const sseRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(token,{owner:'priv09-node',lane:'text',boot:bootId,body:sseBody,privateKey:kp.privateKey}).headers,body:sseBody});
+  assert.equal(sseRes.status,200,`${via} SSE status`);
+  const sseRaw=await sseRes.text();
+  for(const forbidden of ['LEAK_','backend_sig','signature','x-murakumo-','system_fingerprint','timings','backend-sse-leak-id','event:','retry:','unparsed_raw_line','unknown_delta']){
+   assert.ok(!sseRaw.includes(forbidden),`${via} SSE must strip/drop ${forbidden}; got: ${sseRaw}`);
+  }
+  const nonEmptyLines=sseRaw.split('\n').filter(Boolean);
+  assert.ok(nonEmptyLines.every(l=>l.startsWith('data: ')),`${via} SSE must emit ONLY parsed data: lines; got: ${JSON.stringify(nonEmptyLines)}`);
+  const parsedEvents=nonEmptyLines.filter(l=>l!=='data: [DONE]').map(l=>JSON.parse(l.slice(6)));
+  assert.deepEqual(parsedEvents,[{
+   id:'chatcmpl-private',
+   object:'chat.completion.chunk',
+   created:1764240000,
+   model:'mishima',
+   choices:[{index:0,delta:{role:'assistant',content:'CLEAN_SSE'},finish_reason:null}],
+   usage:{prompt_tokens:7,completion_tokens:3,total_tokens:10}
+  }]);
+  assert.equal(nonEmptyLines.at(-1),'data: [DONE]');
+
+  if(via==='gateway')await waitGwFree();
+  // 3) Error JSON: only allowlisted error.{message,type,code,param} survive
+  const errJsonBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'ERR_JSON'}]});
+  const errJsonRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(token,{owner:'priv09-node',lane:'text',boot:bootId,body:errJsonBody,privateKey:kp.privateKey}).headers,body:errJsonBody});
+  assert.equal(errJsonRes.status,400,`${via} error JSON status`);
+  const errJsonRaw=await errJsonRes.text();
+  for(const forbidden of ['LEAK_','backend_sig','signature','x-murakumo-','unknown_meta']){
+   assert.ok(!errJsonRaw.includes(forbidden),`${via} error JSON must strip ${forbidden}; got: ${errJsonRaw}`);
+  }
+  assert.deepEqual(JSON.parse(errJsonRaw),{
+   error:{message:'bad prompt',type:'invalid_request_error',code:'bad_req',param:null}
+  });
+
+  if(via==='gateway')await waitGwFree();
+  // 4) Non-JSON plain error: never passed through raw -> reconstructed to {error:"backend_error"}
+  const errPlainBody=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'ERR_PLAIN'}]});
+  const errPlainRes=await fetch(endpoint,{method:'POST',headers:wireV1Headers(token,{owner:'priv09-node',lane:'text',boot:bootId,body:errPlainBody,privateKey:kp.privateKey}).headers,body:errPlainBody});
+  assert.equal(errPlainRes.status,500,`${via} plain error status`);
+  const errPlainRaw=await errPlainRes.text();
+  assert.ok(!errPlainRaw.includes('LEAK_')&&!errPlainRaw.includes('secret-box-01'));
+  assert.deepEqual(JSON.parse(errPlainRaw),{error:'backend_error'});
+
+  if(via==='gateway')await waitGwFree();
+  // 5) Unparseable 200 JSON from backend: fails closed 502 {error:"invalid_backend_response"} without leaking raw text
+  const bad200Body=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'BAD_200_JSON'}]});
+  const bad200Res=await fetch(endpoint,{method:'POST',headers:wireV1Headers(token,{owner:'priv09-node',lane:'text',boot:bootId,body:bad200Body,privateKey:kp.privateKey}).headers,body:bad200Body});
+  assert.equal(bad200Res.status,502,`${via} unparseable 200 JSON must fail closed 502`);
+  const bad200Raw=await bad200Res.text();
+  assert.ok(!bad200Raw.includes('LEAK_'));
+  assert.deepEqual(JSON.parse(bad200Raw),{error:'invalid_backend_response'});
+ }
+});
+
+test('TEST-INFER-PRIV-10: buffer zeroization unit & live HTTP behavior (read-body! chunks, signing msg/env-raw, and resident/gateway request body buffers filled with 0 in finally)',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'murakumo-priv10-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const token=randomBytes(32).toString('hex');
+ const tokenFile=join(dir,'token');
+ await writeFile(tokenFile,token,{mode:0o600});
+
+ const backend=makeBackend();
+ backend.server.listen(0,'127.0.0.1');
+ await once(backend.server,'listening');
+ t.after(()=>{backend.server.closeAllConnections();backend.server.close();});
+
+ const rp=await port(),gp=await port();
+ const verifyZeroClj=`
+ (require '[murakumo.infer.resident :as r]
+          '[murakumo.infer.fleet-gateway :as gw]
+          '["node:crypto" :as crypto]
+          '["node:events" :as events])
+ (let [all-zero? (fn [b] (and (js/Buffer.isBuffer b) (pos? (.-length b)) (.every b #(= 0 %))))
+       kp1 (.generateKeyPairSync crypto "ed25519" #js {:publicKeyEncoding #js {:type "spki" :format "pem"} :privateKeyEncoding #js {:type "pkcs8" :format "pem"}})
+       kp2 (.generateKeyPairSync crypto "ed25519" #js {:publicKeyEncoding #js {:type "spki" :format "pem"} :privateKeyEncoding #js {:type "pkcs8" :format "pem"}})
+       admit-cfg {"k-active" {:public-key (.-publicKey kp1) :state "active"}
+                  "k-staged" {:public-key (.-publicKey kp2) :state "staged"}}
+       ;; 1) Unit test: read-body! zeroizes raw socket chunks on end AND on body-too-large
+       ee1 (events/EventEmitter.)
+       c1 (js/Buffer.from "secret-chunk-1-" "utf8")
+       c2 (js/Buffer.from "secret-chunk-2" "utf8")
+       p1 (r/read-body! ee1 1024)
+       _ (.emit ee1 "data" c1)
+       _ (.emit ee1 "data" c2)
+       _ (.emit ee1 "end")
+       ee2 (events/EventEmitter.)
+       _ (set! (.-destroy ee2) (fn [] nil))
+       c3 (js/Buffer.from "0123456789ABCDEF" "utf8")
+       p2 (.catch (r/read-body! ee2 8) (fn [_] :rejected))
+       _ (.emit ee2 "data" c3)
+       ;; 2) Unit test: verify-admit-sig zeroizes msg buffer AND validate-admit-request zeroizes env-raw buffer
+       captured-msgs (atom [])
+       captured-envs (atom [])
+       orig-msg r/admit-sig-message
+       orig-parse r/parse-admit-envelope
+       boot-id "00112233445566778899aabbccddeeff"
+       ledger (r/make-replay-ledger {:node "znode"} boot-id (js/Date.now) (r/mono-ms))
+       admit-keys (r/load-admit-keys! {:admit-public-keys admit-cfg})
+       body-str (js/JSON.stringify #js {:model "mishima" :max_tokens 16 :messages #js [#js {:role "user" :content "secret zeroize prompt"}]})
+       body-buf (js/Buffer.from body-str "utf8")
+       make-wire (fn [b-str bad-sig?]
+                   (let [env-raw (js/Buffer.from (js/JSON.stringify #js {:v 1 :alg "ed25519" :kid "k-active" :route "POST /v1/chat/completions" :owner "znode" :lane "text" :boot boot-id :iat (js/Date.now) :nonce (.toString (.randomBytes crypto 16) "hex")}) "utf8")
+                         sig-input (orig-msg env-raw (js/Buffer.from (if bad-sig? (str b-str "X") b-str) "utf8"))
+                         sig (.toString (.sign crypto nil sig-input (.-privateKey kp1)) "base64url")]
+                     #js {"authorization" (str "Bearer " ${JSON.stringify(token)})
+                          "content-type" "application/json"
+                          "x-murakumo-admit-envelope" (.toString env-raw "base64url")
+                          "x-murakumo-admit-sig" (str "k-active." sig)}))]
+   (with-redefs [r/admit-sig-message (fn [e b] (let [m (orig-msg e b)] (swap! captured-msgs conj m) m))
+                 r/parse-admit-envelope (fn [s] (let [res (orig-parse s)] (when (:envelope-raw res) (swap! captured-envs conj (:envelope-raw res))) res))]
+     (let [v-ok (r/validate-admit-request ledger (make-wire body-str false) "text" "POST /v1/chat/completions" nil (js/Date.now) (r/mono-ms) admit-keys body-buf 2097152)
+           v-bad (r/validate-admit-request ledger (make-wire body-str true) "text" "POST /v1/chat/completions" nil (js/Date.now) (r/mono-ms) admit-keys body-buf 2097152)]
+       (when-not (and (:ok v-ok) (false? (:ok v-bad)))
+         (throw (js/Error. "unexpected validate-admit-request outcomes")))
+       (when-not (and (= 2 (count @captured-msgs)) (every? all-zero? @captured-msgs))
+         (throw (js/Error. "verify-admit-sig did not zeroize msg buffers in finally")))
+       (when-not (and (= 2 (count @captured-envs)) (every? all-zero? @captured-envs))
+         (throw (js/Error. "validate-admit-request did not zeroize env-raw buffers in finally")))))
+   (r/destroy-replay-ledger! ledger)
+   ;; 3) Live HTTP behavior test: capture exact read-body! Buffer for resident /estimate, /execute, and gateway /v1/chat/completions
+   (let [captured-bodies (atom [])
+         orig-read-body r/read-body!]
+     (alter-var-root #'r/read-body!
+                     (constantly (fn [req lim]
+                                   (.then (orig-read-body req lim)
+                                          (fn [b] (swap! captured-bodies conj b) b)))))
+     (let [res-svc (r/start! {:node "znode" :bind "127.0.0.1" :port ${rp}
+                                :token-file ${JSON.stringify(tokenFile)}
+                                :state-file ${JSON.stringify(join(dir,'receipts.json'))}
+                                :replay-ledger-mode "kagishi-ram"
+                                :admit-public-keys admit-cfg
+                                :observations? false :probe-interval-ms 30000
+                                :lanes {:text {:kind "text" :model "mishima" :context 32768
+                                               :input-tokenizer "llama-template" :group "gpu"
+                                               :backend ${JSON.stringify(`http://127.0.0.1:${backend.server.address().port}`)}
+                                               :path "/v1/chat/completions"}}})
+             gw-svc (gw/start! {:node "zgw" :bind "127.0.0.1" :port ${gp}
+                                :token-file ${JSON.stringify(tokenFile)}
+                                :replay-ledger-mode "kagishi-ram"
+                                :admit-public-keys admit-cfg
+                                :probe-interval-ms 40
+                                :peers [{:node "znode" :url ${JSON.stringify(`http://127.0.0.1:${rp}`)}}]})
+             live-boot (:boot-id res-svc)
+             make-live-wire (fn [b-str bad-sig?]
+                              (let [env-raw (js/Buffer.from (js/JSON.stringify #js {:v 1 :alg "ed25519" :kid "k-active" :route "POST /v1/chat/completions" :owner "znode" :lane "text" :boot live-boot :iat (js/Date.now) :nonce (.toString (.randomBytes crypto 16) "hex")}) "utf8")
+                                    sig-input (orig-msg env-raw (js/Buffer.from (if bad-sig? (str b-str "X") b-str) "utf8"))
+                                    sig (.toString (.sign crypto nil sig-input (.-privateKey kp1)) "base64url")]
+                                #js {"authorization" (str "Bearer " ${JSON.stringify(token)})
+                                     "content-type" "application/json"
+                                     "x-murakumo-admit-envelope" (.toString env-raw "base64url")
+                                     "x-murakumo-admit-sig" (str "k-active." sig)}))
+             wait-ready (fn wait-ready [tries]
+                          (-> (js/fetch ${JSON.stringify(`http://127.0.0.1:${gp}/health`)}
+                                        #js {:headers #js {"authorization" (str "Bearer " ${JSON.stringify(token)})}})
+                              (.then #(.json %))
+                              (.then (fn [h]
+                                       (if (some-> h .-peers .-znode .-lanes .-text .-ready)
+                                         true
+                                         (if (pos? tries)
+                                           (js/Promise. (fn [r _] (js/setTimeout #(r (wait-ready (dec tries))) 50)))
+                                           (throw (js/Error. "timeout waiting for ready"))))))))]
+         (-> (js/Promise.all #js [p1 p2 (wait-ready 100)])
+             (.then (fn [arr]
+                      (let [joined (aget arr 0) r2 (aget arr 1)]
+                        (when-not (and (= "secret-chunk-1-secret-chunk-2" (.toString joined "utf8"))
+                                       (all-zero? c1) (all-zero? c2) (= :rejected r2) (all-zero? c3))
+                          (throw (js/Error. "read-body! chunk zeroization failed"))))
+                      ;; a) Resident /estimate with bad sig (403)
+                      (let [h (make-live-wire body-str true)]
+                        (aset h "x-murakumo-estimate-nonce" (.toString (.randomBytes crypto 16) "hex"))
+                        (js/fetch ${JSON.stringify(`http://127.0.0.1:${rp}/estimate/text`)} #js {:method "POST" :headers h :body body-str}))))
+             (.then (fn [r] (when-not (= 403 (.-status r)) (throw (js/Error. "expected 403 on bad /estimate"))) (.text r)))
+             ;; b) Resident /estimate with valid sig (200)
+             (.then (fn [_]
+                      (let [h (make-live-wire body-str false)]
+                        (aset h "x-murakumo-estimate-nonce" (.toString (.randomBytes crypto 16) "hex"))
+                        (js/fetch ${JSON.stringify(`http://127.0.0.1:${rp}/estimate/text`)} #js {:method "POST" :headers h :body body-str}))))
+             (.then (fn [r] (when-not (= 200 (.-status r)) (throw (js/Error. "expected 200 on valid /estimate"))) (.text r)))
+             ;; c) Resident /execute with bad sig (403)
+             (.then (fn [_]
+                      (js/fetch ${JSON.stringify(`http://127.0.0.1:${rp}/execute/text`)} #js {:method "POST" :headers (make-live-wire body-str true) :body body-str})))
+             (.then (fn [r] (when-not (= 403 (.-status r)) (throw (js/Error. "expected 403 on bad /execute"))) (.text r)))
+             ;; d) Resident /execute with valid sig (200)
+             (.then (fn [_]
+                      (js/fetch ${JSON.stringify(`http://127.0.0.1:${rp}/execute/text`)} #js {:method "POST" :headers (make-live-wire body-str false) :body body-str})))
+             (.then (fn [r] (when-not (= 200 (.-status r)) (throw (js/Error. "expected 200 on valid /execute"))) (.text r)))
+             ;; e) Gateway /v1/chat/completions with bad sig (403)
+             (.then (fn [_]
+                      (js/fetch ${JSON.stringify(`http://127.0.0.1:${gp}/v1/chat/completions`)} #js {:method "POST" :headers (make-live-wire body-str true) :body body-str})))
+             (.then (fn [r] (when-not (= 403 (.-status r)) (throw (js/Error. "expected 403 on bad gateway"))) (.text r)))
+             ;; f) Gateway /v1/chat/completions with valid sig (200)
+             (.then (fn [_]
+                      (js/fetch ${JSON.stringify(`http://127.0.0.1:${gp}/v1/chat/completions`)} #js {:method "POST" :headers (make-live-wire body-str false) :body body-str})))
+             (.then (fn [r] (when-not (= 200 (.-status r)) (throw (js/Error. "expected 200 on valid gateway"))) (.text r)))
+             (.then (fn [_] (js/Promise. (fn [r _] (js/setTimeout #(r true) 50)))))
+             (.then (fn [_]
+                      (when-not (and (>= (count @captured-bodies) 7) (every? all-zero? @captured-bodies))
+                        (throw (js/Error. (str "captured HTTP request body buffers not all zeroized! count=" (count @captured-bodies)
+                                               " nonzero=" (count (remove all-zero? @captured-bodies))))))
+                      (println (str "PRIV10_ZEROIZE_OK buffers=" (count @captured-bodies)))))
+             (.finally (fn []
+                         (alter-var-root #'r/read-body! (constantly orig-read-body))
+                         ((:close gw-svc))
+                         ((:close res-svc))))))))
+ `;
+ const cljDir=await mkdtemp(join(tmpdir(),'murakumo-priv10-clj-'));
+ t.after(()=>rm(cljDir,{recursive:true,force:true}));
+ await writeFile(join(cljDir,'nbb.edn'),'{:paths []}\n');
+ const {stdout:cljOut}=await execFileAsync('kbb',['--backend','sci','--classpath',join(root,'src'),'-e',verifyZeroClj],{cwd:cljDir,encoding:'utf8'});
+ assert.match(cljOut,/PRIV10_ZEROIZE_OK/);
 });
