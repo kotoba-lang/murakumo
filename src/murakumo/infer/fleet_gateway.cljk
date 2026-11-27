@@ -173,11 +173,30 @@
                                                             (re-matches #"[A-Za-z0-9-]+" lane)
                                                             (or (nil? incoming-id) (re-matches #"[a-f0-9]{32}" (or suffix ""))))
                                                (throw (js/Error. "invalid job id")))
+                                             (let [exec-headers
+                                                   (let [h #js {"authorization" (str "Bearer " token)
+                                                                "content-type" "application/json"
+                                                                "x-murakumo-job-id" id}
+                                                         caller-nonce (aget (.-headers req) "x-murakumo-replay-nonce")
+                                                         caller-issued (aget (.-headers req) "x-murakumo-issued-at")
+                                                         caller-boot (aget (.-headers req) "x-murakumo-boot-id")
+                                                         peer-report (get @reports node)]
+                                                     (cond
+                                                       (or caller-nonce caller-issued caller-boot)
+                                                       (do (when caller-nonce (aset h "x-murakumo-replay-nonce" caller-nonce))
+                                                           (when caller-issued (aset h "x-murakumo-issued-at" caller-issued))
+                                                           (when caller-boot (aset h "x-murakumo-boot-id" caller-boot)))
+                                                       (and (true? (:mint-replay-headers? config))
+                                                            (nil? incoming-id)
+                                                            (= "kagishi-ram" (:replay_mode peer-report))
+                                                            (:boot_id peer-report))
+                                                       (do (aset h "x-murakumo-replay-nonce" (.toString (.randomBytes crypto 16) "hex"))
+                                                           (aset h "x-murakumo-issued-at" (str (js/Date.now)))
+                                                           (aset h "x-murakumo-boot-id" (:boot_id peer-report))))
+                                                     h)]
                                              (-> (js/fetch (str (.-origin (js/URL. (:url p))) "/execute/" lane)
                                                            #js {:method "POST" :signal (.-signal controller)
-                                                                :headers #js {"authorization" (str "Bearer " token)
-                                                                              "content-type" "application/json"
-                                                                              "x-murakumo-job-id" id}
+                                                                :headers exec-headers
                                                                 :body bytes})
                                                  (.then (fn [resp]
                                                           ;; Retry only an explicit pre-admission refusal.
@@ -202,7 +221,7 @@
                                                  (.catch (fn [_]
                                                            (when-not (.-headersSent res)
                                                              (r/json! res 502 {:error "execution_unknown" :job-id id :retryable false}))
-                                                           (when-not (.-writableEnded res) (.end res))))))
+                                                           (when-not (.-writableEnded res) (.end res)))))))
                                            (r/json! res 400 {:error "unknown_job_owner"}))
                                          (r/json! res 429 {:error "no_ready_capacity" :executed false})))]
                                (-> (js/Promise.resolve (attempt choices))
