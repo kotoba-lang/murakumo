@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { chmod, mkdir, mkdtemp, readdir, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { createServer, request } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -54,9 +54,10 @@ async function launch(t, dir, command, config, { clock = false, socketOnly } = {
   const file = join(dir, `${command}.json`);
   await writeFile(file, JSON.stringify(config), { mode: 0o600 });
   const args = [...(source
-    ? ['--backend', 'sci', '--classpath', join(root, 'src'), join(root, 'scripts/resident.cljk')]
+    ? ['--backend', 'sci', '--classpath', join(root, 'src'), join(root, 'scripts/node-cli.cljc'), 'resident']
     : [join(root, 'release/node.mjs'), 'resident']), command, '--config', file];
   const env = { ...process.env };
+  if (source) env.NODE_PATH = [join(root, 'release/node_modules'), env.NODE_PATH].filter(Boolean).join(delimiter);
   if (clock) {
     const mock = join(dir, 'fixture-clock.mjs');
     await writeFile(mock, `
@@ -192,20 +193,48 @@ test('dedicated resident isolates auth and state, forwards tools, schema and liv
     await expectError(await send(port, token, chat, '/execute/text'), 404, 'not_found');
     await expectError(await fetch(origin(port) + '/health'), 404, 'not_found');
     await expectError(await send(port, token, { ...chat, model: 'other-model' }), 422, 'qa_model_mismatch');
-    await expectError(await send(port, token, { ...chat, messages: [{ role: 'user', content: [
-      { type: 'image_url', image_url: { url: 'https://example.invalid/synthetic.png' } },
-    ] }] }), 400, 'qa_text_messages_required');
     assert.equal(seen.length, 0, 'negative ingress requests did not dispatch');
 
+    const invalidMessages = [
+      ['non-object', [false]],
+      ['empty array', []],
+      ['unknown role', [{ role: 'function', content: 'legacy' }]],
+      ['user without text', [{ role: 'user' }]],
+      ['null developer text', [{ role: 'developer', content: null }]],
+      ['nontext part', [{ role: 'user', content: [{ type: 'image_url', image_url: {} }] }]],
+      ['malformed text part', [{ role: 'system', content: [{ type: 'text', text: 17 }] }]],
+      ['empty parts', [{ role: 'user', content: [] }]],
+      ['invalid name', [{ role: 'user', content: 'hello', name: 17 }]],
+      ['tool calls on user', [{ role: 'user', content: 'hello', tool_calls: [toolCall] }]],
+      ['assistant without content or calls', [{ role: 'assistant' }]],
+      ['assistant null content without calls', [{ role: 'assistant', content: null }]],
+      ['assistant empty text without calls', [{ role: 'assistant', content: '' }]],
+      ['assistant blank parts without calls', [{ role: 'assistant', content: [{ type: 'text', text: ' ' }] }]],
+      ['assistant empty calls', [{ role: 'assistant', content: null, tool_calls: [] }]],
+      ['assistant call without id', [{ role: 'assistant', tool_calls: [{ ...toolCall, id: '' }] }]],
+      ['assistant call with nonstring arguments', [{ role: 'assistant', content: 'hello',
+        tool_calls: [{ ...toolCall, function: { name: 'lookup', arguments: {} } }] }]],
+      ['tool result without a call id', [{ role: 'tool', content: 'result' }]],
+      ['tool result without text', [{ role: 'tool', tool_call_id: toolCall.id, content: null }]],
+    ];
+    for (const [label, messages] of invalidMessages) {
+      await expectError(await send(port, token, { ...chat, messages }), 400, 'qa_text_messages_required');
+      assert.equal(seen.length, 0, `${label} must not dispatch`);
+    }
+
     const tools = [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }];
-    const toolRequest = { ...chat, tools };
+    const toolRequest = { ...chat, tools, messages: [
+      { role: 'system', content: 'Synthetic instructions' },
+      { role: 'developer', content: [{ type: 'text', text: 'Use the fixture tool' }] },
+      ...chat.messages,
+    ] };
     const first = (await (await send(port, token, toolRequest)).json()).choices[0].message;
     assert.deepEqual(first.tool_calls, [toolCall]);
     const response_format = { type: 'json_schema', json_schema: {
       name: 'fixture', schema: { type: 'object', properties: { answer: { type: 'string' } } },
     } };
     const toolResult = { ...toolRequest, response_format,
-      messages: [...chat.messages, first, { role: 'tool', tool_call_id: first.tool_calls[0].id, content: 'ok' }] };
+      messages: [...toolRequest.messages, first, { role: 'tool', tool_call_id: first.tool_calls[0].id, content: 'ok' }] };
     const result = await (await send(port, token, toolResult)).json();
     assert.deepEqual(JSON.parse(result.choices[0].message.content), { answer: 'ok' });
     assert.equal(result.usage.total_tokens, 5);

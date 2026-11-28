@@ -123,14 +123,56 @@
                            (.push chunks chunk))))
        (.on req "end" #(resolve (.concat js/Buffer chunks)))))))
 
+(defn- object-with-fields? [value fields]
+  (and (some? value) (= (.-prototype js/Object) (js/Object.getPrototypeOf value))
+       (every? fields (array-seq (js/Object.keys value)))))
+
+(defn- nonblank-text? [value]
+  (and (string? value) (not (str/blank? value))))
+
+(defn- nonempty-array-of? [predicate values]
+  (and (js/Array.isArray values) (pos? (.-length values))
+       (every? predicate (array-seq values))))
+
+(defn- text-part? [part]
+  (and (object-with-fields? part #{"type" "text"})
+       (= "text" (aget part "type")) (string? (aget part "text"))))
+
+(defn- text-content? [content]
+  (or (string? content) (nonempty-array-of? text-part? content)))
+
+(defn- assistant-text? [content]
+  (or (nonblank-text? content)
+      (and (nonempty-array-of? text-part? content)
+           (some #(nonblank-text? (aget % "text")) (array-seq content)))))
+
+(defn- function-call? [call]
+  (when (and (object-with-fields? call #{"id" "type" "function"})
+             (nonblank-text? (aget call "id")) (= "function" (aget call "type")))
+    (let [function (aget call "function")]
+      (and (object-with-fields? function #{"name" "arguments"})
+           (nonblank-text? (aget function "name")) (string? (aget function "arguments"))))))
+
 (defn- text-message? [message]
-  (when (and message (string? (aget message "role")))
-    (let [content (aget message "content")]
-      (or (string? content)
-          (and (= "assistant" (aget message "role")) (nil? content))
-          (and (js/Array.isArray content)
-               (every? #(and % (= "text" (aget % "type")) (string? (aget % "text")))
-                       (array-seq content)))))))
+  (when (some? message)
+    (let [role (aget message "role")
+          content (aget message "content")]
+      (case role
+        ("system" "developer" "user")
+        (and (object-with-fields? message #{"role" "content" "name"})
+             (text-content? content)
+             (or (not (js/Object.hasOwn message "name")) (nonblank-text? (aget message "name"))))
+        "assistant"
+        (and (object-with-fields? message #{"role" "content" "name" "tool_calls"})
+             (or (not (js/Object.hasOwn message "name")) (nonblank-text? (aget message "name")))
+             (if (js/Object.hasOwn message "tool_calls")
+               (and (nonempty-array-of? function-call? (aget message "tool_calls"))
+                    (or (nil? content) (text-content? content)))
+               (assistant-text? content)))
+        "tool"
+        (and (object-with-fields? message #{"role" "content" "tool_call_id"})
+             (text-content? content) (nonblank-text? (aget message "tool_call_id")))
+        false))))
 
 (defn- post! [{:keys [options socket uid]} body signal]
   (js/Promise.
@@ -182,8 +224,7 @@
                      (cond
                        (.-destroyed res) nil
                        (not (live-credential? auth)) (error! res 401 "unauthorized")
-                       (not (and (js/Array.isArray messages) (pos? (.-length messages))
-                                 (every? text-message? (array-seq messages))))
+                       (not (nonempty-array-of? text-message? messages))
                        (error! res 400 "qa_text_messages_required")
                        (not= model (aget body "model")) (error! res 422 "qa_model_mismatch")
                        :else (forward! res backend body controller))))))

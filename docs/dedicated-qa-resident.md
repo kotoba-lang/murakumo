@@ -10,7 +10,8 @@ The `resident serve` and `up` commands retain their fleet behavior.
 ## Synthetic launch and verification
 
 Run the fixture from the repository root with the existing `kbb --backend sci`
-tooling and resolved repository dependencies. The fixture starts a stub backend,
+tooling, resolved repository dependencies, and the pinned dependencies from
+`npm ci --prefix release`. It starts a stub backend,
 chooses a free loopback port, provisions synthetic authentication in a temporary
 directory, and launches the same `resident serve-qa --config FILE` entry point.
 The Unix socket fixture requires a non-root POSIX user whose home directory has
@@ -37,8 +38,9 @@ node "$repo/release/node.mjs" resident serve-qa --config "$PWD/qa.json"
 ```
 
 ```sh
-kbb --backend sci --classpath "$repo/src" "$repo/scripts/resident.cljk" \
-  serve-qa --config "$PWD/qa.json"
+NODE_PATH="$repo/release/node_modules" \
+  kbb --backend sci --classpath "$repo/src" "$repo/scripts/node-cli.cljc" \
+  resident serve-qa --config "$PWD/qa.json"
 ```
 
 The dedicated JSON config accepts exactly the fields below. The example uses
@@ -72,9 +74,17 @@ address after startup. Missing, invalid, or unexpected settings produce a
 
 Send `POST /v1/chat/completions` to the dedicated listener, with the exact
 configured `model` and a nonempty `messages` array. The corresponding OpenAI
-client base URL is `http://127.0.0.1:PORT/v1`. The endpoint accepts text messages,
-text content parts, and assistant tool call messages with null content. It
-forwards the parsed chat JSON, including tools, tool results, `response_format`,
+client base URL is `http://127.0.0.1:PORT/v1`. Supported message shapes are
+
+- `system`, `developer`, or `user` with text content and an optional name.
+- `assistant` with text content, an optional name, and optional function tool
+  calls. Blank, null, or omitted content requires a nonempty array of valid tool calls.
+  Each call requires an ID, type `function`, a function name, and string arguments.
+- `tool` with text content and a `tool_call_id`.
+
+Text content is a string or a nonempty array of `{ "type": "text", "text": "..." }`
+parts. Any unsupported role or shape fails before the backend is called. The
+resident forwards the parsed chat JSON, including tools, tool results, `response_format`,
 `stream`, and `stream_options`, to the fixed backend chat path without caller
 headers. JSON and SSE bodies are streamed back unchanged. Usage is included
 when the backend provides it, including in an SSE usage event. Backend

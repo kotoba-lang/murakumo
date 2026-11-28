@@ -3,7 +3,6 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [murakumo.infer.jobs :as jobs]
-            [murakumo.infer.qa-resident :as qa]
             [murakumo.infer.replicated-topology :as topo]
             [murakumo.infer.keepalive :as ka]
             [murakumo.infer.observation :as observation]
@@ -624,8 +623,7 @@
 
 (defn run-command [command args]
   (case command
-    "serve-qa" (qa/run-command args)
     "serve" (let [[flag file] args]
               (when-not (and (= flag "--config") file) (throw (js/Error. "resident serve --config FILE")))
               (start! (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys true)))
-    (println "murakumo resident serve --config FILE — node-owned admission, canary and local healing\n murakumo resident serve-qa --config FILE — dedicated loopback QA inference")))
+    (println "murakumo resident serve --config FILE — node-owned admission, canary and local healing")))

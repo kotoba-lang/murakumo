@@ -1,10 +1,11 @@
 #!/bin/sh
-# Temporary extension adapters for the existing nbb runtime; canonical source stays .cljk.
+# Temporary extension adapters for the legacy .cljk dependencies of the Node CLI.
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p .node-build/src/murakumo/infer release
 trap 'rm -rf .node-build' EXIT HUP INT TERM
-for name in poll_worker image_job backoff keepalive replicated_topology jobs jobs_cli resident qa_resident fleet_gateway observation poi_receipt converge lease rollout; do
+cp src/murakumo/infer/qa_resident.cljc .node-build/src/murakumo/infer/qa_resident.cljc
+for name in poll_worker image_job backoff keepalive replicated_topology jobs jobs_cli resident fleet_gateway observation poi_receipt converge lease rollout; do
   cp "src/murakumo/infer/$name.cljk" ".node-build/src/murakumo/infer/$name.cljs"
 done
 mkdir -p .node-build/src/murakumo
@@ -29,7 +30,7 @@ done
 mkdir -p .node-build/src/grant
 cp .node-build/.nbb/.cache/*/nbb-deps/grant/device_attest.cljk .node-build/src/grant/device_attest.cljs
 cp .node-build/.nbb/.cache/*/nbb-deps/grant/acoustic_onboard.cljk .node-build/src/grant/acoustic_onboard.cljs
-(cd .node-build && kbb --backend sci --classpath src bundle ../scripts/node-cli.cljk -o ../release/node.mjs)
+(cd .node-build && kbb --backend sci --classpath src bundle ../scripts/node-cli.cljc -o ../release/node.mjs)
 cp nixos/node.nix release/nixos-node.nix
 # The bundler may return zero after an EDN read error and leave a broken bundle.
 node release/node.mjs node --help >/dev/null

@@ -7,6 +7,7 @@
             [murakumo.fleet.spec-cli :as spec-cli]
             [murakumo.fleet.ctl :as ctl]
             [murakumo.health :as health]
+            [murakumo.infer.qa-resident :as qa]
             [murakumo.infer.resident :as resident]
             [murakumo.infer.jobs-cli :as jobs-cli]
             [murakumo.infer.jobs :as jobs]
@@ -635,6 +636,7 @@
       (= prefix "health")
       (let [code (health/run-command command args)]
         (when (and (number? code) (not= 0 code)) (set! (.-exitCode js/process) code)))
+      (and (= prefix "resident") (= command "serve-qa")) (qa/run-command args)
       (= prefix "resident") (resident/run-command command args)
       (= prefix "gateway") (gateway/run-command command args)
       (= prefix "topology") (topology/run-command command args)
