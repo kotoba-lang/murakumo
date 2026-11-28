@@ -2,7 +2,7 @@
 
 Run the platform adapter and inference on macOS. No Linux VM or container is
 in the GPU path. The shared device/claim/Community flow is the existing frozen
-Kotoba Node CLI (`scripts/node-cli.cljk` → `release/node.mjs`), delegated by
+Kotoba Node CLI (`scripts/node-cli.cljc` → `release/node.mjs`), delegated by
 `murakumo-native node ...`; this adapter does not create a parallel account system.
 
 - `client.mjs`: authenticated loopback OpenAI adapter, single bounded inference
