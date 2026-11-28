@@ -1,0 +1,170 @@
+(ns murakumo.infer.qa-resident
+  "Dedicated, single-slot OpenAI-compatible ingress for isolated QA."
+  (:require [clojure.string :as str]
+            [murakumo.infer.keepalive :as ka]
+            ["node:crypto" :as crypto]
+            ["node:fs" :as fs]
+            ["node:http" :as http]
+            ["node:stream" :as stream]
+            ["node:stream/promises" :as streams]))
+
+(def ^:private chat-path "/v1/chat/completions")
+(def ^:private max-request-bytes 2097152)
+(def ^:private max-ttl-ms 3600000)
+
+(defn- config-error! [message]
+  (throw (js/Error. (str "QA config: " message))))
+
+(defn- port? [port]
+  (and (js/Number.isSafeInteger port) (<= 1 port 65535)))
+
+(defn- load-config! [file]
+  (let [raw (try (.readFileSync fs file "utf8")
+                 (catch :default _ (config-error! "cannot read dedicated config file")))
+        config (try (js->clj (js/JSON.parse raw) :keywordize-keys true)
+                    (catch :default _ (config-error! "expected valid JSON")))
+        {:keys [bind port backend model auth]} config
+        backend-port (when (string? backend)
+                       (some-> (re-matches #"http://127\.0\.0\.1:([1-9][0-9]{0,4})" backend)
+                               second js/Number))]
+    (when-not (map? config) (config-error! "expected a JSON object"))
+    (when (some #(not (contains? #{:bind :port :backend :model :auth} %)) (keys config))
+      (config-error! "unexpected field in dedicated config"))
+    (when-not (= "127.0.0.1" bind) (config-error! "bind must be explicitly 127.0.0.1"))
+    (when-not (port? port) (config-error! "port must be an integer from 1 to 65535"))
+    (when-not (port? backend-port)
+      (config-error! "backend must be http://127.0.0.1:PORT with an explicit port"))
+    (when (= port backend-port) (config-error! "backend and listener ports must differ"))
+    (when-not (and (string? model) (not (str/blank? model)) (= model (str/trim model)))
+      (config-error! "model must be an explicit nonempty ID"))
+    (when-not (and (map? auth) (= #{:token-sha256 :expires-at-ms} (set (keys auth))))
+      (config-error! "auth must contain token-sha256 and expires-at-ms"))
+    (let [{:keys [token-sha256 expires-at-ms]} auth
+          started (.now js/performance)
+          now (js/Date.now)]
+      (when-not (and (string? token-sha256) (re-matches #"[a-f0-9]{64}" token-sha256))
+        (config-error! "auth.token-sha256 must be a 64-character lowercase hexadecimal SHA-256 digest"))
+      (when-not (and (js/Number.isSafeInteger expires-at-ms) (< now expires-at-ms)
+                     (<= expires-at-ms (+ now max-ttl-ms)))
+        (config-error! "auth.expires-at-ms must be a future Unix timestamp in milliseconds within one hour"))
+      (assoc config :auth {:digest (js/Buffer.from token-sha256 "hex")
+                           :expires-at-ms expires-at-ms
+                           :monotonic-deadline (+ started (- expires-at-ms now))}))))
+
+(defn- live-credential? [{:keys [expires-at-ms monotonic-deadline]}]
+  (and (< (js/Date.now) expires-at-ms) (< (.now js/performance) monotonic-deadline)))
+
+(defn- authorized? [req {:keys [digest] :as auth}]
+  (let [values (aget (.-headersDistinct req) "authorization")]
+    (and (live-credential? auth)
+         values (= 1 (.-length values))
+         (when-let [[_ scheme token] (re-matches #"([A-Za-z]+) ([a-f0-9]{64})" (aget values 0))]
+           (and (= "bearer" (str/lower-case scheme))
+                (.timingSafeEqual crypto digest
+                                  (.digest (.update (.createHash crypto "sha256") token "ascii"))))))))
+
+(defn- error! [res status code]
+  (when-not (or (.-destroyed res) (.-writableEnded res))
+    (when (= status 401) (.setHeader res "www-authenticate" "Bearer"))
+    (.writeHead res status #js {"content-type" "application/json" "cache-control" "no-store"
+                               "connection" "close"})
+    (.end res (js/JSON.stringify #js {:error code}))))
+
+(defn- request-body! [req]
+  (js/Promise.
+   (fn [resolve reject]
+     (let [chunks #js []
+           bytes (atom 0)]
+       (.on req "error" reject)
+       (.once req "close" #(when-not (.-complete req) (reject (js/Error. "incomplete body"))))
+       (.on req "data" (fn [chunk]
+                         (if (> (swap! bytes + (.-length chunk)) max-request-bytes)
+                           (do (.pause req) (resolve nil))
+                           (.push chunks chunk))))
+       (.on req "end" #(resolve (.concat js/Buffer chunks)))))))
+
+(defn- text-message? [message]
+  (when (and message (string? (aget message "role")))
+    (let [content (aget message "content")]
+      (or (string? content)
+          (and (= "assistant" (aget message "role")) (nil? content))
+          (and (js/Array.isArray content)
+               (every? #(and % (= "text" (aget % "type")) (string? (aget % "text")))
+                       (array-seq content)))))))
+
+(defn- forward! [res backend body controller]
+  (let [timeout (.timeout js/AbortSignal 480000)
+        signal (.any js/AbortSignal #js [(.-signal controller) timeout])]
+    (-> (ka/fetch (str backend chat-path)
+                  #js {:method "POST" :signal signal :body (js/JSON.stringify body)
+                       :headers #js {"content-type" "application/json"}} false)
+        (.then (fn [upstream]
+                 (let [headers (.-headers upstream)
+                       content-type (some-> (.get headers "content-type") (str/split #";" 2)
+                                            first str/trim str/lower-case)
+                       encoding (.get headers "content-encoding")]
+                   (if (and (.-ok upstream) (.-body upstream)
+                            (contains? #{"application/json" "text/event-stream"} content-type)
+                            (or (nil? encoding) (= "identity" encoding)))
+                     (do (.writeHead res (.-status upstream)
+                                     #js {"content-type" content-type "cache-control" "no-store"})
+                         (.flushHeaders res)
+                         (streams/pipeline (.fromWeb (.-Readable stream) (.-body upstream)) res
+                                           #js {:signal signal}))
+                     (do (.abort controller)
+                         (error! res 502 "qa_backend_response"))))))
+        (.catch (fn [_]
+                  (cond
+                    (.-headersSent res) (.destroy res)
+                    (.-aborted timeout) (error! res 504 "qa_backend_timeout")
+                    :else (error! res 502 "qa_backend_unavailable")))))))
+
+(defn- run-request! [req res {:keys [auth backend model]} busy? expect-continue?]
+  (let [controller (js/AbortController.)]
+    (.once res "close" #(when-not (.-writableFinished res) (.abort controller)))
+    (when expect-continue? (.writeContinue res))
+    (-> (request-body! req)
+        (.then (fn [bytes]
+                 (if-not bytes
+                   (error! res 413 "qa_body_too_large")
+                   (let [body (try (js/JSON.parse (.toString bytes "utf8")) (catch :default _ nil))
+                         messages (when body (aget body "messages"))]
+                     (cond
+                       (.-destroyed res) nil
+                       (not (live-credential? auth)) (error! res 401 "unauthorized")
+                       (not (and (js/Array.isArray messages) (pos? (.-length messages))
+                                 (every? text-message? (array-seq messages))))
+                       (error! res 400 "qa_text_messages_required")
+                       (not= model (aget body "model")) (error! res 422 "qa_model_mismatch")
+                       :else (forward! res backend body controller))))))
+        (.catch (fn [_] (error! res 400 "qa_invalid_request")))
+        (.finally #(reset! busy? false)))))
+
+(defn run-command [args]
+  (let [[flag file & extra] args]
+    (when-not (and (= "--config" flag) (seq file) (empty? extra))
+      (throw (js/Error. "resident serve-qa --config FILE")))
+    (let [{:keys [bind port auth] :as config} (load-config! file)
+          busy? (atom false)
+          handle! (fn [req res expect-continue?]
+                    (cond
+                      (not (and (= "POST" (.-method req)) (= chat-path (.-url req))))
+                      (error! res 404 "not_found")
+                      (not (authorized? req auth)) (error! res 401 "unauthorized")
+                      (not (compare-and-set! busy? false true)) (error! res 429 "qa_busy")
+                      :else (run-request! req res config busy? expect-continue?)))
+          server (.createServer http #js {:headersTimeout 10000 :requestTimeout 30000
+                                         :connectionsCheckingInterval 1000 :maxHeaderSize 16384}
+                                (fn [req res] (handle! req res false)))]
+      ;; Retain every header within maxHeaderSize so a duplicate cannot be truncated.
+      (set! (.-maxHeadersCount server) 0)
+      (.on server "checkContinue" (fn [req res] (handle! req res true)))
+      (.once server "error" (fn [error]
+                              (.error js/console (case (.-code error)
+                                                   "EADDRINUSE" "QA listener port is in use"
+                                                   "EACCES" "QA listener port permission denied"
+                                                   "QA listener could not start"))
+                              (set! (.-exitCode js/process) 1)))
+      (.listen server port bind
+               #(.log js/console (js/JSON.stringify #js {:mode "serve-qa"
+                                                         :listeners #js [#js {:bind bind :port port}]}))))))
