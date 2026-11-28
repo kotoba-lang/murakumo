@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { createServer, request } from 'node:http';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -44,13 +44,13 @@ async function freePort() {
   return port;
 }
 
-async function fixture(t) {
-  const dir = await mkdtemp(join(tmpdir(), 'murakumo-qa-'));
+async function fixture(t, parent = tmpdir()) {
+  const dir = await mkdtemp(join(parent, 'murakumo-qa-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
 
-async function launch(t, dir, command, config, { clock = false } = {}) {
+async function launch(t, dir, command, config, { clock = false, socketOnly } = {}) {
   const file = join(dir, `${command}.json`);
   await writeFile(file, JSON.stringify(config), { mode: 0o600 });
   const args = [...(source
@@ -66,6 +66,22 @@ async function launch(t, dir, command, config, { clock = false } = {}) {
       process.on('message', ms => { offset = ms; process.send('clock-set'); });
     `);
     env.NODE_OPTIONS = `--import="${mock}"`;
+  }
+  if (socketOnly) {
+    const probe = join(dir, 'fixture-socket-probe.mjs');
+    await writeFile(probe, `
+      import { Socket } from 'node:net';
+      const connect = Socket.prototype.connect;
+      Socket.prototype.connect = function (...args) {
+        const options = Array.isArray(args[0]) ? args[0][0] : args[0];
+        if (options?.path !== ${JSON.stringify(socketOnly)}) {
+          process.stderr.write('fixture refused non-pinned outbound dial\\n');
+          throw new Error('fixture refused non-pinned outbound dial');
+        }
+        return connect.apply(this, args);
+      };
+    `);
+    env.NODE_OPTIONS = `--import="${probe}"`;
   }
   const child = spawn(source ? 'kbb' : process.execPath, args, {
     cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe', ...(clock ? ['ipc'] : [])],
@@ -326,5 +342,77 @@ test('invalid QA configuration exits with a diagnostic before listening', { time
     assert.ok(!running.output().includes('"listeners"'), 'invalid fixture reported a listener');
     assert.ok(!running.output().includes('fixture-invalid-digest'), 'startup logged verifier input');
     assert.ok(!running.output().includes('fixture-fleet-path'), 'startup logged unexpected config input');
+  }
+});
+
+test('a protected Unix socket forwards chat and fails closed when unavailable', {
+  timeout: 30_000, skip: !process.getuid?.(),
+}, async t => {
+  // The system temp directory can have a symlink or a writable ancestor.
+  const dir = await fixture(t, await realpath(homedir()));
+  const socket = join(dir, 'backend.sock');
+  const token = bearer();
+  let calls = 0;
+  const backend = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    assert.equal(req.method, 'POST');
+    assert.equal(req.url, path);
+    assert.ok(!('authorization' in req.headers), 'Unix backend received caller authorization');
+    assert.deepEqual(JSON.parse(Buffer.concat(chunks)), chat);
+    calls++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"choices":[{"message":{"content":"ok"}}]}');
+  }).listen(socket);
+  await once(backend, 'listening');
+  t.after(() => close(backend));
+  const port = await freePort();
+  const config = { bind: host, port, model, 'backend-socket': socket, auth: verifier(token) };
+  const qa = await startQa(t, dir, config, { socketOnly: socket });
+  assert.equal(calls, 0, 'Unix transport did not probe the backend');
+  await expectError(await send(port), 401, 'unauthorized');
+  assert.equal(calls, 0, 'Unix transport did not dispatch an auth negative');
+  const response = await send(port, token);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).choices[0].message.content, 'ok');
+  assert.equal(calls, 1);
+  // Keep the closed socket's directory entry to exercise a failed connect.
+  const stale = join(dir, 'stale.sock');
+  await rename(socket, stale);
+  await close(backend);
+  await rename(stale, socket);
+  await expectError(await send(port, token), 502, 'qa_backend_unavailable');
+  await unlink(socket);
+  await expectError(await send(port, token), 502, 'qa_backend_unavailable');
+  assert.equal(calls, 1);
+  await qa.stop();
+  assert.ok(!qa.output().includes('fixture refused non-pinned outbound dial'), 'QA dialed outside the pinned socket');
+
+  const unsafe = join(dir, 'unsafe');
+  const nested = join(unsafe, 'child');
+  await mkdir(unsafe);
+  await chmod(unsafe, 0o770);
+  await mkdir(nested, { mode: 0o700 });
+  const alias = join(dir, 'alias');
+  await symlink(unsafe, alias);
+  const ordinaryFile = join(dir, 'regular.sock');
+  await writeFile(ordinaryFile, 'fixture');
+  for (const [patch, diagnostic] of [
+    [{ backend: origin(await freePort()) }, /configure exactly one/],
+    [{ 'backend-socket': 'relative.sock' }, /normalized absolute/],
+    [{ 'backend-socket': `${dir}/../not-normalized.sock` }, /normalized absolute/],
+    [{ 'backend-socket': `${dir}/${'x'.repeat(104)}.sock` }, /at most 103 UTF-8 bytes/],
+    [{ 'backend-socket': join(unsafe, 'backend.sock') }, /parent.*mode 0700/],
+    [{ 'backend-socket': join(nested, 'backend.sock') }, /ancestors must be trusted/],
+    [{ 'backend-socket': join(alias, 'child', 'backend.sock') }, /ancestors must be trusted/],
+    [{ 'backend-socket': ordinaryFile }, /must already be a Unix socket/],
+    [{}, /must already be a Unix socket/],
+  ]) {
+    const running = await launch(t, dir, 'serve-qa', { ...config, ...patch }, { socketOnly: socket });
+    const [code] = await running.done;
+    assert.equal(code, 1);
+    assert.ok(diagnostic.test(running.output()), `expected diagnostic ${diagnostic}`);
+    assert.ok(!running.output().includes('"listeners"'), 'invalid socket configuration opened a listener');
+    assert.ok(!running.output().includes('fixture refused non-pinned outbound dial'), 'rejected config dialed an upstream');
   }
 });

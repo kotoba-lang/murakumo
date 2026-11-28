@@ -1,11 +1,10 @@
 (ns murakumo.infer.qa-resident
   "Dedicated, single-slot OpenAI-compatible ingress for isolated QA."
   (:require [clojure.string :as str]
-            [murakumo.infer.keepalive :as ka]
             ["node:crypto" :as crypto]
             ["node:fs" :as fs]
             ["node:http" :as http]
-            ["node:stream" :as stream]
+            ["node:path" :as path]
             ["node:stream/promises" :as streams]))
 
 (def ^:private chat-path "/v1/chat/completions")
@@ -18,23 +17,63 @@
 (defn- port? [port]
   (and (js/Number.isSafeInteger port) (<= 1 port 65535)))
 
+(defn- lstat [pathname]
+  (try (.lstatSync fs pathname) (catch :default _ nil)))
+
+(defn- owned-socket? [pathname uid]
+  (let [entry (lstat pathname)]
+    (and entry (.isSocket entry) (= uid (.-uid entry)))))
+
+(defn- unix-backend! [socket]
+  (let [posix (.-posix path)
+        uid (when (.-getuid js/process) (.getuid js/process))]
+    (when-not (and (string? socket) (.isAbsolute posix socket) (= socket (.normalize posix socket))
+                   (str/ends-with? socket ".sock") (not (str/includes? socket "\u0000"))
+                   (<= (.byteLength js/Buffer socket "utf8") 103))
+      (config-error! "backend-socket must be a normalized absolute .sock pathname of at most 103 UTF-8 bytes"))
+    (when-not (and (number? uid) (pos? uid) (= uid (.geteuid js/process)))
+      (config-error! "backend-socket requires a non-root POSIX service UID"))
+    (let [parent (.dirname posix socket)
+          entry (lstat parent)]
+      (when-not (and entry (.isDirectory entry) (= uid (.-uid entry))
+                     (= 448 (bit-and (.-mode entry) 4095)))
+        (config-error! "backend-socket parent must be a directory owned by the service UID with mode 0700"))
+      (loop [ancestor (.dirname posix parent)]
+        (let [entry (lstat ancestor)]
+          ;; POSIX mode check. Deployment preflight also checks inherited ACLs.
+          (when-not (and entry (.isDirectory entry) (contains? #{0 uid} (.-uid entry))
+                         (zero? (bit-and (.-mode entry) 18)))
+            (config-error! "backend-socket ancestors must be trusted directories with no group or other write access")))
+        (let [next (.dirname posix ancestor)]
+          (when-not (= next ancestor) (recur next)))))
+    (when-not (owned-socket? socket uid)
+      (config-error! "backend-socket must already be a Unix socket owned by the service UID"))
+    {:options #js {:socketPath socket} :socket socket :uid uid}))
+
+(defn- backend! [{:keys [backend backend-socket port] :as config}]
+  (if (contains? config :backend-socket)
+    (do (when (contains? config :backend)
+          (config-error! "configure exactly one of backend-socket and backend"))
+        (unix-backend! backend-socket))
+    (let [backend-port (when (string? backend)
+                         (some-> (re-matches #"http://127\.0\.0\.1:([1-9][0-9]{0,4})" backend)
+                                 second js/Number))]
+      (when-not (port? backend-port)
+        (config-error! "backend must be http://127.0.0.1:PORT with an explicit port, or set backend-socket"))
+      (when (= port backend-port) (config-error! "backend and listener ports must differ"))
+      {:options #js {:hostname "127.0.0.1" :port backend-port}})))
+
 (defn- load-config! [file]
   (let [raw (try (.readFileSync fs file "utf8")
                  (catch :default _ (config-error! "cannot read dedicated config file")))
         config (try (js->clj (js/JSON.parse raw) :keywordize-keys true)
                     (catch :default _ (config-error! "expected valid JSON")))
-        {:keys [bind port backend model auth]} config
-        backend-port (when (string? backend)
-                       (some-> (re-matches #"http://127\.0\.0\.1:([1-9][0-9]{0,4})" backend)
-                               second js/Number))]
+        {:keys [bind port model auth]} config]
     (when-not (map? config) (config-error! "expected a JSON object"))
-    (when (some #(not (contains? #{:bind :port :backend :model :auth} %)) (keys config))
+    (when (some #(not (contains? #{:bind :port :backend :backend-socket :model :auth} %)) (keys config))
       (config-error! "unexpected field in dedicated config"))
     (when-not (= "127.0.0.1" bind) (config-error! "bind must be explicitly 127.0.0.1"))
     (when-not (port? port) (config-error! "port must be an integer from 1 to 65535"))
-    (when-not (port? backend-port)
-      (config-error! "backend must be http://127.0.0.1:PORT with an explicit port"))
-    (when (= port backend-port) (config-error! "backend and listener ports must differ"))
     (when-not (and (string? model) (not (str/blank? model)) (= model (str/trim model)))
       (config-error! "model must be an explicit nonempty ID"))
     (when-not (and (map? auth) (= #{:token-sha256 :expires-at-ms} (set (keys auth))))
@@ -47,9 +86,10 @@
       (when-not (and (js/Number.isSafeInteger expires-at-ms) (< now expires-at-ms)
                      (<= expires-at-ms (+ now max-ttl-ms)))
         (config-error! "auth.expires-at-ms must be a future Unix timestamp in milliseconds within one hour"))
-      (assoc config :auth {:digest (js/Buffer.from token-sha256 "hex")
-                           :expires-at-ms expires-at-ms
-                           :monotonic-deadline (+ started (- expires-at-ms now))}))))
+      {:bind bind :port port :model model :backend (backend! config)
+       :auth {:digest (js/Buffer.from token-sha256 "hex")
+              :expires-at-ms expires-at-ms
+              :monotonic-deadline (+ started (- expires-at-ms now))}})))
 
 (defn- live-credential? [{:keys [expires-at-ms monotonic-deadline]}]
   (and (< (js/Date.now) expires-at-ms) (< (.now js/performance) monotonic-deadline)))
@@ -92,26 +132,36 @@
                (every? #(and % (= "text" (aget % "type")) (string? (aget % "text")))
                        (array-seq content)))))))
 
+(defn- post! [{:keys [options socket uid]} body signal]
+  (js/Promise.
+   (fn [resolve reject]
+     (when (and socket (not (owned-socket? socket uid)))
+       (throw (js/Error. "backend socket unavailable")))
+     (let [request-options (js/Object.assign
+                            #js {:method "POST" :path chat-path :signal signal :agent false
+                                 :headers #js {"content-type" "application/json"}} options)
+           req (.request http request-options resolve)]
+       (.once req "error" reject)
+       (.end req (js/JSON.stringify body))))))
+
 (defn- forward! [res backend body controller]
   (let [timeout (.timeout js/AbortSignal 480000)
         signal (.any js/AbortSignal #js [(.-signal controller) timeout])]
-    (-> (ka/fetch (str backend chat-path)
-                  #js {:method "POST" :signal signal :body (js/JSON.stringify body)
-                       :headers #js {"content-type" "application/json"}} false)
+    (-> (post! backend body signal)
         (.then (fn [upstream]
-                 (let [headers (.-headers upstream)
-                       content-type (some-> (.get headers "content-type") (str/split #";" 2)
+                 (let [status (.-statusCode upstream)
+                       headers (.-headers upstream)
+                       content-type (some-> (aget headers "content-type") (str/split #";" 2)
                                             first str/trim str/lower-case)
-                       encoding (.get headers "content-encoding")]
-                   (if (and (.-ok upstream) (.-body upstream)
+                       encoding (aget headers "content-encoding")]
+                   (if (and (<= 200 status 299) (not (contains? #{204 205} status))
                             (contains? #{"application/json" "text/event-stream"} content-type)
                             (or (nil? encoding) (= "identity" encoding)))
-                     (do (.writeHead res (.-status upstream)
+                     (do (.writeHead res status
                                      #js {"content-type" content-type "cache-control" "no-store"})
                          (.flushHeaders res)
-                         (streams/pipeline (.fromWeb (.-Readable stream) (.-body upstream)) res
-                                           #js {:signal signal}))
-                     (do (.abort controller)
+                         (streams/pipeline upstream res #js {:signal signal}))
+                     (do (.destroy upstream)
                          (error! res 502 "qa_backend_response"))))))
         (.catch (fn [_]
                   (cond
